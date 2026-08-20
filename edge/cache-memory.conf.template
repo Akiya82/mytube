@@ -1,0 +1,19 @@
+# edge/cache-memory.conf.template — included from location ~ ^/blob/ in
+# nginx.conf.template when MYTUBE_CACHE_MODE=memory (DELIV-08). Also an
+# envsubst template (mounted at templates/snippets/cache.conf.template) so
+# that ${MYTUBE_CACHE_LOCK_TIMEOUT} gets substituted the same way as the
+# main config.
+proxy_cache vid;
+# Deliberately diverges from docs/designs/mytube-delivery-pipeline.md, which
+# specifies $uri$is_args$args$slice_range as the cache key. Each viewer gets
+# their own $arg_sig/$arg_exp, so including query args here would fragment
+# the cache per signature: three friends watching in sync would each cause
+# an independent origin fetch per chunk instead of sharing one, and the
+# whole point of this cache (criterion 3) becomes physically unreachable,
+# not just numerically low. The key is deliberately just path + chunk range.
+proxy_cache_key "$uri$slice_range";
+proxy_cache_valid 200 206 1h;
+proxy_cache_lock on;
+proxy_cache_lock_timeout ${MYTUBE_CACHE_LOCK_TIMEOUT};
+proxy_cache_use_stale error timeout updating;
+add_header X-Cache-Status $upstream_cache_status always;
