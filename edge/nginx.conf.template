@@ -55,7 +55,7 @@ server {
     # a visible decision, not silent drift.
     location /v/ {
         proxy_intercept_errors on;
-        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-Host  $http_host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_pass http://orchestrator;
     }
@@ -64,7 +64,7 @@ server {
     # Prefix match, NOT exact: always /refresh/{uuid}.
     # retry=1 on the /blob/ address is added by the orchestrator's own 302, not edge.
     location /refresh/ {
-        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-Host  $http_host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_pass http://orchestrator;
     }
