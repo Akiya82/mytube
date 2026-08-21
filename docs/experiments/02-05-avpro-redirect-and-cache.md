@@ -255,7 +255,7 @@ about real player request timing, real network jitter between three
 different people, or AVPro's actual buffering/seek behavior in a live
 world.
 
-### Master-request attribution fix, and its own regression proof — NOT done
+### Master-request attribution fix, and its own regression proof — PASSED
 
 The single-session proof above ran one linear download from one client, so
 every empty-`$slice_range` line it produced landed in one bucket regardless
@@ -277,17 +277,84 @@ now counted separately and a window made entirely of them reports
 insufficient data rather than a false pass. Unit-covered in
 `tests/test_cache_report.py`.
 
-- [ ] Reproduce the traffic shape that produced the false positive: five
-      point Range requests to five distinct mid-file offsets through the
-      real `/v/{slug}` redirect, twice (cold then warm), and confirm
-      `cache-report --since` reports five chunks at one storage fetch each
-      on the first pass and zero on the second. **Not run in this session:**
-      this execution environment has no Docker available (checked -- not
-      installed, no `docker.exe` found, no `nginx -t`, no live edge to
-      recreate or curl against), so no real log line could be captured and
-      no live measurement could be taken. The fix above is unit-tested
-      against the deterministic output of the new nginx `map`, not against
-      a live capture.
+**Live, on this machine's running stack** (`docker compose ps` -- all five
+services healthy throughout):
+
+```
+$ docker compose run --rm --no-deps edge nginx -t
+...
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+```
+
+Rendered config confirmed carrying all four load-bearing lines after
+`docker compose up -d --wait --force-recreate edge`:
+`proxy_cache_valid 200 206` (1), `proxy_cache_key "$uri$slice_range"` (1),
+`log_subrequest on` (1), `client_range_start` (3 -- the map, its log_format
+use, its doc comment).
+
+Two real captured lines from `blob_access.log`, through the real `/v/{slug}`
+redirect (never a hand-built `/blob/` URL):
+
+```
+# curl -r 50000000-50000099 through /v/kontrolnyi-rolik
+2026-08-21T16:16:23+00:00 /blob/45d6415c-....mp4 - HIT 206 100 50000000
+
+# curl with no Range header, same title
+2026-08-21T16:16:23+00:00 /blob/45d6415c-....mp4 - HIT 200 92330979 0
+```
+
+Both are seven whitespace-separated fields, no space inside any field; the
+first shows `-` in `$slice_range` and `50000000` in the new last field, the
+second shows `0`. This is exactly the shape `tests/test_cache_report.py`'s
+fixtures assumed -- confirmed against a real line, not just derived from the
+`map`'s own logic.
+
+**The false-positive regression, reproduced and closed**, after
+`docker compose build api` (the running `api` image had been built before
+this fix and does not bind-mount source -- rebuilding to pick up code
+changes is a normal step this session's first attempt missed) and a fresh
+`--force-recreate` of `edge`+`api` for a genuinely cold cache:
+
+```
+$ for off in 10000000 20000000 30000000 40000000 50000000; do
+    curl -r ${off}-$((off+99)) .../v/kontrolnyi-rolik; done
+206 206 206 206 206
+$ cache-report --since <mark taken right before the loop>
+уникальных кусков: 5, доля HIT: 0.0%
+кусков с более чем одним запросом к хранилищу: 0
+exit: 0
+```
+
+Five distinct offsets, five chunks, zero double-fetches, zero HIT (genuinely
+cold, no phantom `-` bucket) -- this is the exact traffic shape that used to
+report one phantom chunk fetched five times. Repeating the same five
+requests a second time:
+
+```
+уникальных кусков: 5, доля HIT: 100.0%
+кусков с более чем одним запросом к хранилищу: 0
+exit: 0
+```
+
+Same five chunks, 100% HIT, still zero violations -- the fix did not merely
+relabel the phantom bucket, it measures the real cache behaviour.
+
+`tools/check_decodable.sh http://localhost:8080/v/kontrolnyi-rolik` --
+`[PASS] decodable video stream (h264)`.
+
+`bash tools/smoke_blob.sh`: steps 1 (stack up) and 2 (storage unreachable
+from host) pass. Steps 3 and 4 onward fail for a cause **unrelated to this
+plan's files**: the `storage` service's SeaweedFS `mytube` collection has
+exhausted its volume capacity (`mytube_8.dat` already at 1,132,605,264 bytes,
+over the `-master.volumeSizeLimitMB=1024` cap, dated 2026-08-21 11:57 --
+before this session's work began -- and the disk location reports "8 volumes
+max 8", meaning no ninth volume can be grown for any collection). This
+predates this plan, is not caused by `edge/nginx.conf.template` or
+`orchestrator/cli/cache_report.py`, and is not fixed here -- it needs either
+manual cleanup of the accumulated test volumes or a capacity/`-max` change
+to the `storage` service definition, both out of this plan's scope
+(`edge/`, `orchestrator/cli/cache_report.py` and
+`orchestrator/cli/cache_warm.py`, `SETUP.md`, this file).
 
 ### Manual — NOT done
 
