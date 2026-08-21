@@ -255,6 +255,40 @@ about real player request timing, real network jitter between three
 different people, or AVPro's actual buffering/seek behavior in a live
 world.
 
+### Master-request attribution fix, and its own regression proof — NOT done
+
+The single-session proof above ran one linear download from one client, so
+every empty-`$slice_range` line it produced landed in one bucket regardless
+of what that bucket meant -- it could not have surfaced the following defect
+on its own. Separately, the automated `cache-report` report was found
+bucketing *every* master-request line (any client's first Range request, not
+just chunk 1) under the single literal key `-`, rather than the slice each
+line actually fetched. Three viewers opening the same file at three
+different mid-file offsets would have collided in that one phantom bucket
+and reported a fetch count that grows with the number of viewers -- the
+opposite of what this criterion measures, and the exact traffic shape
+criterion 3 itself is about.
+
+Fixed by logging the client's own Range start offset (`$client_range_start`,
+`edge/nginx.conf.template`) and attributing each master line to the slice
+that offset falls in, aligned to `MYTUBE_SLICE_SIZE`
+(`orchestrator/cli/cache_report.py`); a line the report cannot attribute is
+now counted separately and a window made entirely of them reports
+insufficient data rather than a false pass. Unit-covered in
+`tests/test_cache_report.py`.
+
+- [ ] Reproduce the traffic shape that produced the false positive: five
+      point Range requests to five distinct mid-file offsets through the
+      real `/v/{slug}` redirect, twice (cold then warm), and confirm
+      `cache-report --since` reports five chunks at one storage fetch each
+      on the first pass and zero on the second. **Not run in this session:**
+      this execution environment has no Docker available (checked -- not
+      installed, no `docker.exe` found, no `nginx -t`, no live edge to
+      recreate or curl against), so no real log line could be captured and
+      no live measurement could be taken. The fix above is unit-tested
+      against the deterministic output of the new nginx `map`, not against
+      a live capture.
+
 ### Manual — NOT done
 
 - [ ] Three viewers, simultaneously, in one live VRChat world, watching the

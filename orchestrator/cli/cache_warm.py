@@ -116,9 +116,8 @@ def cache_warm(
         datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=1)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
     typer.echo(
-        "замеряйте сеанс начиная с этой метки — прогрев шлёт точечные "
-        "Range-запросы, в access_log неотличимые от первого куска обычного "
-        "линейного проигрывания, и его попадание в окно даёт ложное нарушение:"
+        "замеряйте сеанс начиная с этой метки — так `cache-report` увидит "
+        "сам сеанс, а не растянутый на прогрев начальный отрезок файла:"
     )
     typer.echo(f"    cache-report --since {safe_since}")
 
