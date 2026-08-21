@@ -1,182 +1,299 @@
-# Эксперименты 2 и 5, внешний реверс-прокси, чистая машина: финальная приёмка фазы 1
+# Experiments 2 and 5, external reverse proxy, clean machine: phase-1 final acceptance
 
-D-32: фаза считается закрытой только по всем пяти критериям ROADMAP сразу
-(критерии 3 и 4 — в редакции D-02 и D-28, см. `.planning/phases/01-delivery/01-CONTEXT.md`).
-Всё, что снимается без живого VRChat и без чистой машины, снято автоматически
-ниже. Три проверки (эксперимент 2 в самом VRChat, синхронный просмотр втроём,
-`docker compose up` на чистой машине) требуют владельца — они отмечены `TBD`
-и ждут его наблюдений.
+D-32: the phase closes only when all five ROADMAP success criteria hold at
+once (criteria 3 and 4 in the revised wording from `01-CONTEXT.md`: D-02/D-28
+instead of the original `X-Cache-Status` and ACL phrasing). This document
+went through a correction after the first automated pass — see the section
+immediately below before reading anything else in this file.
 
-**Стек на момент прогона:** `docker compose ps` — все пять сервисов (`api`,
-`db`, `db-backup`, `edge`, `storage`) healthy. Дата автоматического прогона:
-2026-08-21.
+## Defect found and corrected: the first acceptance run used a non-video fixture
 
-## Эксперимент 2 — короткая ссылка в AVPro (критерий 2 ROADMAP)
+The first automated pass through this checklist (2026-08-21, morning) added
+a title called `acceptance-reel`, backed by a file that turned out to be
+**3,145,728 bytes of random data, not video**. First bytes: `24 4a 77 2a 16
+e3 3e ad ...` — no `ftyp` box, and `ffprobe` on it reports `Invalid data
+found when processing input`. It was never checked with a decoder at any
+point; only its size and HTTP status were checked.
 
-### Автоматически снято
+This mattered a great deal: it reproduced, exactly, the real-world symptom
+that started this whole plan — a file that downloads with the right status
+code and byte count and does not open in a player. The first pass proved
+that the *delivery mechanics* work (302, signed 206, correct byte range) but
+never proved that what comes out the other end is playable video. That is
+the actual gap the owner hit.
 
-Тестовый тайтл заведён CLI:
+**Correction applied:**
+
+- `acceptance-reel` was removed via `docker compose exec api python -m
+  orchestrator.cli remove acceptance-reel` (D-13 grace-delete path — the
+  object is gone or on its way out, not silently left as a live "passing"
+  acceptance record backed by garbage).
+- All evidence in this document from this point on is re-measured against
+  the title `kontrolnyi-rolik` (slug), edition `45d6415c-19c7-4fe5-8cf3-
+  38b9f4538a3c`, backed by `build/control.mp4` / staged as
+  `ingest/control.mp4`: verified H.264 High profile, level 4.1, `yuv420p`,
+  `+faststart`, 1920x1080, 120.0s, 92,330,979 bytes. Confirmed locally with
+  `ffprobe -of json` before any of the measurements below were taken.
+- **`tools/check_decodable.sh` was added** so this cannot silently recur:
+  it runs `ffprobe -select_streams v:0 -of json` against a URL or local
+  file and fails unless a real video stream comes back. It is now part of
+  the acceptance procedure (used below) and documented in `SETUP.md` under
+  "Verifying served video is actually decodable". `ffprobe` on this
+  machine reorders `-of csv=p=0` output, so the script parses named fields
+  from `-of json` instead — this is a real, previously-hit trap, not
+  hypothetical caution.
+
+**Five more defects were found and fixed while driving the short link end
+to end as a real client** (following the actual `302` chain, not just
+probing `/blob/` directly with a hand-built signature, which is all the
+phase's existing automated tests and `smoke_blob.sh` had ever done):
+
+| Commit | Defect | Fix |
+|---|---|---|
+| `0b724cd` | `storage.py` uploaded with no `ExtraArgs`, so S3 stored `application/octet-stream` — browsers download such a response instead of playing it | Pin `ContentType: video/mp4` on upload; regression test in `tests/test_storage.py` |
+| `0b724cd` | nginx `X-Forwarded-Host` was `$host`, which drops the port; a client following the `302` from `:8080` landed on `:80` | Use `$http_host` instead |
+| `b6ddf11` | nginx `X-Forwarded-Proto` was `$scheme` (`http` behind a TLS-terminating external proxy) — the app built an `http://` `Location` for an `https://` client | `map` prefers an incoming `X-Forwarded-Proto`, falls back to `$scheme` |
+| `eaca534` | `return 302 /refresh/$edition_id` is relative in nginx's own terms, but nginx expanded it *absolutely* using its own scheme, breaking the D-04 loop guard behind a TLS proxy | `absolute_redirect off;` keeps the `Location` relative |
+| `eaca534` | `/errors/` added a `Content-Type` for files nginx already types from `mime.types`, doubling the header | Removed the redundant directive |
+
+**Verification-quality lesson, worth carrying into later phases:** none of
+these five were caught by the phase's own test suite or by
+`tools/smoke_blob.sh`, because that smoke test probes `/blob/` directly
+with a constructed signature and never follows the `302` chain the way an
+actual client (browser or AVPro) does. A test suite that never exercises
+the redirect it built is not testing the thing a viewer actually uses.
+Recorded here rather than fixed quietly — the automated coverage for
+future phases should include at least one true end-to-end request through
+`/v/{slug}` following redirects, not only direct `/blob/` probes.
+
+**Stack at the time of this run:** `docker compose ps` — all five services
+(`api`, `db`, `db-backup`, `edge`, `storage`) healthy. Date: 2026-08-21.
+Full `pytest` suite: 67 passed. `tools/smoke_blob.sh`: all 13 steps passed.
+
+---
+
+## Experiment 2 — short link in AVPro (ROADMAP criterion 2)
+
+### Automated, re-measured against the real clip (local stack)
 
 ```
-$ docker compose exec api python -m orchestrator.cli add --file /ingest/accept.mp4 --name "Acceptance Reel"
-/v/acceptance-reel
-```
-
-Короткая ссылка резолвится в подписанный `302`:
-
-```
-$ curl -sD- -o /dev/null http://127.0.0.1:8080/v/acceptance-reel
+$ curl -sD- -o /dev/null http://127.0.0.1:8080/v/kontrolnyi-rolik
 HTTP/1.1 302 Found
-Server: nginx/1.27.5
-Date: Fri, 21 Aug 2026 01:06:01 GMT
-Content-Length: 0
-Connection: keep-alive
-location: http://127.0.0.1/blob/26fb4033-e065-47ca-98a3-ffb7b9557ab5.mp4?exp=1787317561&sig=cJx494sw9j3w5jrOpmse4w
+location: http://127.0.0.1:8080/blob/45d6415c-19c7-4fe5-8cf3-38b9f4538a3c.mp4?exp=...&sig=...
 ```
 
-`Location` — абсолютный, содержит `/blob/`, `exp=` и `sig=`, как того требует
-D-01/D-02. (Хост в `Location` — `127.0.0.1` без порта: это `$host` nginx,
-который по определению не включает порт; на реальном домене за TLS-
-терминацией снаружи порт не нужен, см. D-19.)
-
-Подписанный `/blob/`-адрес отдаёт байты через edge (`slice` + кэш работают):
-
 ```
-$ curl -r 0-1048575 -sD- -o /dev/null "http://127.0.0.1:8080/blob/26fb4033-e065-47ca-98a3-ffb7b9557ab5.mp4?exp=1787317561&sig=cJx494sw9j3w5jrOpmse4w"
+$ curl -sD- -o /dev/null -r 0-1048575 "http://127.0.0.1:8080/blob/45d6415c-...mp4?exp=...&sig=..."
 HTTP/1.1 206 Partial Content
-Content-Length: 1048576
-X-Cache-Status: MISS
-Content-Range: bytes 0-1048575/3145728
+Content-Type: video/mp4
+Content-Range: bytes 0-1048575/92330979
 ```
 
-### Manual — TBD
+```
+$ bash tools/check_decodable.sh build/smoke/kontrolnyi-head.mp4
+[PASS] decodable video stream (h264): build/smoke/kontrolnyi-head.mp4
+```
 
-- [ ] Короткий адрес `https://<домен>/v/<слаг>` открыт в плеере AVPro в
-      приватном или friends-инстансе VRChat, видео играет (плеер следует за
-      `302`).
-- [ ] Проверка переподписи: испорченная подпись на `/blob/`-адресе даёт
-      `302` на `/refresh/`, повторный заход с `retry=1` — ролик-заглушку, а
-      не бесконечный редирект.
+Full-file sha256 fetched through the local edge matches `build/control.mp4`
+byte for byte — confirmed independently of the live-domain measurement
+below.
 
-**Результат:** `TBD` — ждёт владельца в живом VRChat-инстансе.
+Tampered signature (D-04 loop guard):
 
-## Внешний реверс-прокси (D-20, DELIV-07)
+```
+$ curl -sD- -o /dev/null "http://.../blob/45d6415c-...mp4?exp=...&sig=tampered...."
+HTTP/1.1 302 Moved Temporarily
+Location: /refresh/45d6415c-19c7-4fe5-8cf3-38b9f4538a3c
+```
 
-### Автоматически снято
+```
+$ curl -sD- -o /dev/null "http://.../blob/45d6415c-...mp4?exp=...&sig=tampered....&retry=1"
+HTTP/1.1 200 OK
+Content-Type: video/mp4
+Content-Length: 12526
+```
 
-Проверено **изнутри compose-стека** (`http://127.0.0.1:8080`, то есть сам
-edge-nginx) — `slice` + `secure_link` отдают корректный `206` с верным
-`Content-Range` (см. вывод curl выше в разделе «Эксперимент 2»). Это
-подтверждает, что **edge сам по себе** не буферизует и Range пропускает
-целиком.
+Second attempt with a bad signature and `retry=1` serves the stub clip
+exactly once instead of redirecting again — the D-04 loop guard works.
 
-Недостижимость служебных путей и хранилища в обход edge (D-38, D-21) —
-проверено на уровне самого compose-стека:
+Unknown slug (D-31 not-found stub, not a bare 404):
+
+```
+$ curl -sD- -o /dev/null "http://.../v/no-such-title"
+HTTP/1.1 200 OK
+Content-Type: video/mp4
+Content-Length: 12266
+```
+
+### Live measurements through the real domain `https://mytube.example.com`
+
+Captured by the orchestrator after the five fixes above landed, against the
+same `kontrolnyi-rolik` title:
+
+- `GET /v/kontrolnyi-rolik` → `302`, `Location:
+  https://mytube.example.com/blob/45d6415c-19c7-4fe5-8cf3-38b9f4538a3c.mp4?exp=...&sig=...`
+  — note **https**, proving the `X-Forwarded-Proto` fix works behind the
+  real TLS-terminating proxy.
+- Following it → `200`, `Content-Type: video/mp4`, `92330979` bytes — the
+  full control clip.
+- `Range: bytes=0-1048575` → `206`, `Content-Range: bytes
+  0-1048575/92330979`, `Content-Type: video/mp4`.
+- Mid-file seek `Range: bytes=50000000-50999999` → `206`, `Content-Range:
+  bytes 50000000-50999999/92330979`.
+- Tampered signature → `302`, `Location: /refresh/45d6415c-...` (relative —
+  proving `absolute_redirect off;` works behind the real proxy); chain ends
+  `200 video/mp4`.
+- Tampered signature carrying `retry=1` → `200`, `Content-Type: video/mp4`
+  (exactly once), `12526` bytes — the stub clip. D-04 loop guard terminates.
+- Unknown slug `/v/no-such-title` → `200`, `Content-Type: video/mp4` — the
+  not-found stub per D-31.
+- Byte integrity: sha256 of the file fetched through the edge matches
+  `build/control.mp4` exactly.
+
+### Manual — done
+
+- [x] The short address `https://mytube.example.com/v/kontrolnyi-rolik`
+      played in AVPro in an unchanged, previously-verified VRChat
+      environment (same conditions as experiment 1: build 2026.3.1, world
+      `06_Leaf` by `_hoshino_`, VizVid player, Invite+ instance). Owner
+      confirmed playback directly.
+- [x] Re-signing on a tampered signature and the `retry=1` loop guard —
+      confirmed above through both the local stack and the live domain.
+
+**Result: PASSED.** ROADMAP criterion 2 is closed: `/v/{slug}` opens in
+AVPro via `302`, confirmed live, with the full redirect and re-signing
+chain independently measured against a real decodable clip.
+
+---
+
+## External reverse proxy (D-20, DELIV-07)
+
+### Automated
+
+Local edge (`127.0.0.1:8080`) does not buffer and passes `Range` correctly
+(see the `206`/`Content-Range` output above) — confirms the **edge itself**
+is not the problem.
+
+Storage unreachable in a way that is a connection error, not an HTTP code
+(D-38), checked at the container-network level:
 
 ```
 $ docker port src-storage-1
-# (пусто -- ни один порт не опубликован)
-
-$ docker inspect src-storage-1 --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'
-172.20.0.2
+# (empty -- no port published)
 
 $ curl -m 3 -sS -o /dev/null -w 'http_code=%{http_code} exit=%{exitcode}\n' http://172.20.0.2:8333/
 curl: (28) Operation timed out after 3001 milliseconds with 0 bytes received
 http_code=000 exit=28
 ```
 
-Обращение даже к внутреннему container-IP хранилища таймаутит (`curl` exit
-`28`) — **ошибка соединения, а не HTTP-код**, ровно в редакции D-38.
+`/healthz` through edge returns the same not-found stub as any unmatched
+path (D-31), not the orchestrator's real health response — the real
+`/healthz` is not reachable externally, only `/v/`, `/p/`, `/blob/`,
+`/refresh/` have defined `location` blocks.
 
-`/healthz` через edge не проксируется в `api` — попадает на тот же
-error_page-заглушку, что и любой несуществующий путь (D-31), а не отдаёт
-реальный статус оркестратора:
+### Live, through the real domain
 
-```
-$ curl -sD- -o /dev/null http://127.0.0.1:8080/healthz
-HTTP/1.1 200 OK
-Content-Type: video/mp4
-Content-Length: 12266
-```
+`curl -r 0-1048575 -D- "https://mytube.example.com/blob/...?exp=...&sig=..."`
+→ `206`, correct `Content-Range` (see full output in the Experiment 2
+section above) — the external reverse proxy the owner actually runs does
+**not** buffer and passes `Range` through untouched. This is the specific
+check the plan asked for and it is now measured against real
+infrastructure, not just the internal edge.
 
-Это `video/mp4`-заглушка «не найдено», не JSON-ответ `/healthz` — снаружи
-через edge реальный healthcheck оркестратора недостижим, только `/v/`,
-`/p/`, `/blob/`, `/refresh/` имеют определённые `location`.
+**Result: PASSED.** D-20/DELIV-07 closed against the live external proxy.
 
-### Manual — TBD
+---
 
-- [ ] `curl -r 0-1048575 -D- -o /dev/null "https://<домен>/blob/...?exp=...&sig=..."`
-      через **настоящий внешний домен и реверс-прокси владельца** (не через
-      `127.0.0.1:8080` напрямую) — ожидается `206` и корректный
-      `Content-Range`. Это отдельная, невоспроизводимая изнутри compose
-      проверка: она тестирует конкретно внешний прокси владельца
-      (nginx/Caddy/Traefik), инфраструктуру, недоступную из этого
-      окружения.
-- [ ] Снаружи (через тот же внешний домен) `/healthz` и консоль хранилища
-      недостижимы -- то же самое свойство, что проверено выше изнутри
-      стека, но через реальный внешний канал.
+## Experiment 5 — cache on a synchronous session (ROADMAP criterion 3, D-28 revision)
 
-**Результат:** `TBD` — ждёт владельца с доступом к его реверс-прокси.
-
-## Эксперимент 5 — кэш на синхронном сеансе (критерий 3 ROADMAP, редакция D-28)
-
-### Автоматически снято (одиночный сеанс, воспроизводимый стенд)
+### Automated — single-session proof, re-measured against the real clip
 
 ```
-$ docker compose exec api python -m orchestrator.cli cache-warm acceptance-reel
-прогрето кусков: 3, прогрето байт: 3145728 из 3145728, зона кэша: 512m, время: 0.0с
-cache-report: замеряйте сеанс с --since меткой времени ПОСЛЕ этого прогрева -- ...
+$ docker compose exec api python -m orchestrator.cli cache-warm kontrolnyi-rolik
+прогрето кусков: 89, прогрето байт: 92330979 из 92330979, зона кэша: 512m, время: 0.3с
+```
 
-$ SINCE=2026-08-21T01:07:24+00:00   # записано после прогрева, с запасом в секунду (см. SETUP.md)
-$ curl -s -o /dev/null "http://127.0.0.1:8080/blob/...?exp=...&sig=..."   # полное скачивание, как сделал бы плеер
+(Warmed the entire 88 MiB clip in one pass — it is smaller than the default
+warm limit of half the 512 MiB cache zone, so the M5 file-longer-than-limit
+path is not exercised here; that path has its own unit-test coverage in
+`tests/test_cache_report.py` and a dedicated acceptance criterion in the
+plan.)
+
+```
+$ SINCE=<timestamp taken >1s after the warm above>
+$ curl -s -o /dev/null "<signed control-clip URL>"   # one full linear download, as a player would do
 
 $ docker compose exec api python -m orchestrator.cli cache-report --since "$SINCE"
-прочитано строк: 191, разобрано: 3
-уникальных кусков: 3, доля HIT: 100.0%
+прочитано строк: 199, разобрано: 89
+уникальных кусков: 89, доля HIT: 100.0%
 кусков с более чем одним запросом к хранилищу (нарушение D-28): 0
 $ echo $?
 0
 ```
 
-D-28 выполнен на одиночном воспроизводимом сеансе: после прогрева ноль
-кусков ушло в хранилище больше одного раза, код возврата `0`. Доля `HIT`
-100% — справочно (D-25: целевой сценарий одиночного сеанса не имеет
-теоретического потолка ниже 100%, в отличие от N синхронных зрителей).
+D-28 holds on a single, reproducible session against real decodable video:
+after warming, zero chunks went to storage more than once, exit code `0`.
 
-**Важная находка при автоматической проверке** (см. `orchestrator/cli/cache_report.py`,
-докстринг модуля, и `01-05-SUMMARY.md`): `cache-warm` шлёт свои собственные
-точечные Range-запросы, которые в логе неотличимы от первого куска обычной
-линейной раздачи (оба логируются с пустым `$slice_range`). Если измерять
-`--since` меткой той же секунды, что и конец прогрева, часть запросов
-прогрева может попасть в окно замера и дать ложное нарушение D-28 — это
-воспроизведено и задокументировано в `SETUP.md`, раздел «Как проверить
-кэш». Разрешение — секундный (или больший) зазор между прогревом и стартом
-замера, что тривиально выполняется на реальном сеансе (минуты между
-прогревом и тем, когда компания садится смотреть).
+### Machine proof of the single-flight property (DELIV-05), not a substitute for the human test
 
-### Manual — TBD
+`tools/smoke_blob.sh` step 12 already proves the exact property criterion 3
+is asking for, mechanically and repeatably, independent of any human
+session:
 
-- [ ] Втроём одновременно в одном мире VRChat посмотреть прогретый тайтл
-      несколько минут; `cache-report --since <время после прогрева>` на
-      этом сеансе — ноль кусков-нарушителей (код `0`).
-- [ ] Тот же сеанс **без** прогрева — зафиксировать, появились ли
-      нарушители на холодном кэше; если да, первым делом смотреть
-      `proxy_cache_lock_timeout` (Pitfall 11), не сам кэш.
-- [ ] Записать число зрителей и наблюдаемую долю `HIT` как справку (не
-      приёмочное число — D-28: потолок `(N-1)/N`, 67% на троих).
+```
+[PASS] step 12 (DELIV-05): exactly 1 origin fetch for the same cold chunk across 10 parallel requests
+```
 
-**Результат:** `TBD` — ждёт владельца и живого VRChat-инстанса с тремя
-зрителями одновременно.
+Ten concurrent requests for the same cold chunk produce exactly one origin
+fetch — `proxy_cache_lock` genuinely serializes concurrent misses onto a
+single upstream fetch. This is real, repeatable, machine-checked evidence
+that the *mechanism* criterion 3 depends on works. **It is not the same
+claim as criterion 3 itself.** Criterion 3 requires three *simultaneous
+human viewers in one live VRChat world*; ten synthetic parallel `curl`
+requests from one process prove the nginx-level mechanism but say nothing
+about real player request timing, real network jitter between three
+different people, or AVPro's actual buffering/seek behavior in a live
+world.
 
-## `docker compose up` на чистой машине (критерий 4 ROADMAP, DIST-01)
+### Manual — NOT done
 
-### Автоматически снято (на этой машине, не на чистой)
+- [ ] Three viewers, simultaneously, in one live VRChat world, watching the
+      warmed title for several minutes; `cache-report --since <time after
+      warm>` on that session — zero chunks with more than one origin
+      request (exit code `0`).
+- [ ] The same session **without** warming, to observe cold-cache behavior;
+      if violating chunks appear, check `proxy_cache_lock_timeout` first
+      (Pitfall 11), not the cache logic itself.
+- [ ] Record viewer count and observed `HIT` ratio for reference (not an
+      acceptance number — D-28: the ceiling at N synchronous viewers on a
+      cold cache is `(N-1)/N`, 67% at three).
 
-`docker compose config` валиден, все пять сервисов поднимаются и
-становятся healthy на **уже использовавшейся** машине (образы кэшированы
-локально) — это не заменяет прогон на чистой машине, но подтверждает, что
-`docker-compose.yml` синтаксически и логически исправен перед тем, как
-владелец тратит время на реальный чистый прогон:
+**Result: NOT CLOSED.** The single-session automated proof and the
+DELIV-05 machine proof both hold. The specific claim ROADMAP criterion 3
+makes — three simultaneous human viewers, one world — has not been run.
+Do not treat the machine proof as a substitute; it is strong supporting
+evidence for the mechanism, not the acceptance test itself.
+
+---
+
+## `docker compose up` on a clean machine (ROADMAP criterion 4, DIST-01)
+
+Criterion 4 has two independent halves per the D-38 revision: storage stays
+unreachable outside of edge, and the stack comes up clean on a machine with
+no pre-warmed images. They are verified separately below because their
+evidence status differs.
+
+### Storage unreachability — CLOSED
+
+Verified at three levels now: inside the compose network (container IP,
+`curl` exit `28`, connection error not HTTP code — see the External reverse
+proxy section above), via `smoke_blob.sh` step 2 (host cannot reach the
+published-nowhere port), and implicitly via the live domain only ever
+exposing `/v/`, `/p/`, `/blob/`, `/refresh/` (Experiment 2 live section).
+All three agree: the storage port is unreachable in a way that is a
+connection failure, exactly the D-38 wording, not an ACL question.
+
+### Clean-machine `docker compose up` — NOT DONE
 
 ```
 $ docker compose config >/dev/null && docker compose up --wait && sleep 5 \
@@ -186,31 +303,65 @@ $ echo $?
 0
 ```
 
-### Manual — TBD
+This confirms `docker-compose.yml` is syntactically and logically sound on
+**this** machine, which already has every image cached locally — it does
+not confirm the same thing on a machine with cold images, cold layer
+caches, or a first-time reader following `SETUP.md` with no prior
+knowledge of the topology. That run requires a second, genuinely clean
+machine and has not happened.
 
-- [ ] На машине без прогретых образов: `git clone`, `cp .env.example .env`,
-      заполнить, пройти `SETUP.md` по шагам, `docker compose up -d --wait`,
-      завести тайтл, открыть ссылку. Любое расхождение с текстом
-      `SETUP.md` — дефект инструкции, исправляется по факту обнаружения.
-- [ ] Хранилище недостижимо в обход edge (D-38) с хоста и из LAN этой
-      чистой машины — ошибка соединения, не HTTP-код (та же проверка, что
-      выполнена внутри текущего стенда выше, но на другой машине и без
-      предварительного знания топологии).
+**Result: NOT CLOSED (split verdict).** The unreachability half is
+measured and closed. The clean-machine half is unverified and remains
+open — it needs a machine this environment does not have.
 
-**Результат:** `TBD` — ждёт владельца на машине без прогретых образов.
+---
 
-**Расхождения с SETUP.md, найденные при чистом прогоне:** `TBD`.
+## Final reconciliation of the five criteria (D-32)
 
-## Сверка пяти критериев (D-32)
+Criteria are read in the CONTEXT.md revision: criterion 3 is D-28 (origin
+requests per chunk, not `HIT` share), criterion 4 includes D-38
+(unreachability, not ACL).
 
-Критерии в редакции CONTEXT.md: критерий 3 — D-28 (запросов к хранилищу на
-кусок, не доля `HIT`), критерий 4 — включает D-38 (недостижимость, не ACL).
+Критерий 1: пройден
+Критерий 2: пройден
+Критерий 3: не пройден
+Критерий 4: не пройден
+Критерий 5: пройден
 
-Критерий 1: TBD
-Критерий 2: TBD
-Критерий 3: TBD
-Критерий 4: TBD
-Критерий 5: TBD
+In full:
 
-Фаза 1 закрывается только когда все пять строк выше — `пройден`, без
-единого `не пройден` (D-32, вердикт m1 плана 05).
+1. **Direct MP4 plays in VRChat AVPro — PASSED.** Closed in plan 01-01
+   (Experiment 1), unchanged since.
+2. **`/v/{slug}` opens in AVPro via `302` — PASSED.** Closed above: live
+   playback confirmed by the owner, full redirect/re-sign/loop-guard chain
+   independently measured both locally and against the real domain, against
+   a verified real video file.
+3. **Synchronous three-viewer cache property — NOT PASSED.** The mechanism
+   (single-flight per cold chunk) is machine-proven by `smoke_blob.sh` step
+   12 and by a real single-session `cache-report` run against real video,
+   both showing zero D-28 violations. The specific three-simultaneous-human
+   claim has not been run. Gap: needs three people in one live world.
+4. **Clean-machine `docker compose up`, storage unreachable — NOT PASSED
+   (split).** Storage unreachability is measured and closed at three
+   independent levels. The clean-machine bring-up is unverified. Gap: needs
+   a second machine with no pre-warmed images.
+5. **Slug rename does not break the old link — PASSED.** Closed in plan
+   01-04 by tests and a live run, unaffected by this session.
+
+**Phase-1 verdict: not yet closable under D-32.** D-32 requires all five
+criteria passed at once; two of five (3 and 4) have a named, concrete,
+un-invented gap that only a second human session and a second machine can
+close. Everything that could be automated or driven as a real client from
+this environment has been driven, including finding and fixing five real
+defects along the way. What remains is exactly what the plan always said
+would remain: three people in one VRChat world, and a machine this
+environment does not have.
+
+## Discrepancies against SETUP.md found during this run
+
+None found during the automated and live-domain passes above, beyond the
+gaps this correction itself produced: `SETUP.md` now documents the WSL2
+Hyper-V firewall rule, the `MSYS_NO_PATHCONV=1` trap, and the VPN/TUN
+client note, all added as a direct result of standing up the real domain
+for this acceptance run. The clean-machine walkthrough itself has not been
+run, so any further discrepancy that surfaces there is still `TBD`.

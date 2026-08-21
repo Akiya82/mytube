@@ -106,6 +106,55 @@ docker compose exec api python -m orchestrator.cli add \
 
 Команда напечатает адрес вида `/v/<слаг>`.
 
+## Windows / WSL2 deployment notes
+
+Found while closing out the phase-1 acceptance gate on a real Windows host.
+None of this is Linux-specific advice — it only applies if the compose
+stack runs on Windows with Docker Desktop's WSL2 backend.
+
+**Published port unreachable from the LAN even though `docker compose ps`
+looks fine and Windows Firewall is disabled.** If Docker Desktop's WSL2
+integration uses `networkingMode: mirrored`, the edge port is reachable on
+`127.0.0.1` but the actual gate for anything coming from the LAN or the
+internet is the **Hyper-V firewall** governing the WSL VM, not Windows
+Firewall. It defaults to `DefaultInboundAction: Block` and ships only ICMP
+and mDNS allow rules — a published container port never gets an explicit
+allow rule on its own. Symptom: the reverse proxy (or any machine other
+than the host itself) cannot reach the edge at all, while everything works
+from `127.0.0.1`. Fix, verified on this deployment:
+
+```powershell
+# Look up your own VM's creator ID first -- do not reuse this from another
+# machine, it is not a universal constant.
+Get-NetFirewallHyperVVMSetting
+
+New-NetFirewallHyperVRule -Name "MyTube-Edge-8080" -DisplayName "MyTube edge (HTTP 8080)" `
+  -Direction Inbound -VMCreatorId '<your VMCreatorId from the command above>' `
+  -Protocol TCP -LocalPorts 8080 -Action Allow
+```
+
+**Git Bash mangles container-absolute paths.** Running the `add` command
+above (or any `docker compose exec ... --file /ingest/...`) from Git Bash
+on Windows silently rewrites `/ingest/x.mp4` into something like
+`C:/Program Files/Git/ingest/x.mp4` before it reaches the container --
+Git Bash's POSIX-path auto-conversion does not know the path is meant for
+the container, not the host. Prefix the command with `MSYS_NO_PATHCONV=1`:
+
+```bash
+MSYS_NO_PATHCONV=1 docker compose exec api python -m orchestrator.cli add \
+  --file /ingest/<file> --name "<title>"
+```
+
+Scope `MSYS_NO_PATHCONV=1` to this one command, not the whole shell session
+-- exporting it globally also disables Git Bash's path translation for
+tools like `curl -o /d/some/local/path`, which then silently fail to write
+their local output file while still reporting success.
+
+**Viewer-side VPN trap, not a service defect.** At least one viewer's VPN
+client ("throne") had to be switched from its default mode to TUN mode
+before the address worked at all. If a friend reports the link does not
+load, ask about their VPN client's mode before debugging the server.
+
 ## Что прокинуть в реверс-прокси
 
 Наружу через внешний реверс-прокси владельца (D-19/D-20) выставляются
@@ -130,6 +179,25 @@ curl -r 0-1048575 -D- -o /dev/null "https://<домен>/blob/<edition_id>.mp4?e
 Ожидается код `206` и заголовок `Content-Range` вида
 `bytes 0-1048575/<полный размер>`. Код `200` с целым файлом означает, что
 внешний прокси буферизует — чинить нужно на его стороне, не в compose.
+
+## Verifying served video is actually decodable
+
+A `200`/`206` with the right `Content-Length` is proof the delivery
+mechanics work -- it is **not** proof the bytes are playable video. The
+phase-1 acceptance record was once validated against 3 MiB of random bytes
+that happened to have a plausible size; the delivery chain looked perfect
+and nothing would have opened in a player (see
+`docs/experiments/02-05-avpro-redirect-and-cache.md`). Use
+`tools/check_decodable.sh <url-or-path>` after adding any new title to
+assert the served bytes actually decode as video, not merely that a
+request for them succeeded:
+
+```bash
+bash tools/check_decodable.sh "https://<домен>/blob/<edition_id>.mp4?exp=...&sig=..."
+```
+
+`ffprobe` on this machine reorders `-of csv=p=0` output, so the script
+parses `-of json` by field name instead -- do not "simplify" it back to csv.
 
 ## Как проверить кэш
 
