@@ -93,3 +93,22 @@ async def db_conn(migrated_db_url):
     finally:
         await tx.rollback()
         await conn.close()
+
+
+@pytest.fixture
+async def raw_conn(migrated_db_url):
+    """A plain, non-transactional connection to the same migrated Postgres.
+
+    The CLI (orchestrator/cli/__main__.py) opens its own `asyncpg.connect()`
+    per invocation and commits for real -- `db_conn`'s rollback-at-teardown
+    wrapper would be invisible to that separate connection. Tests that need
+    to set up or inspect state the CLI-under-test can see use this instead.
+    Rows created through it are real commits and outlive the test (the
+    session-scoped Postgres is shared across this whole test run) -- tests
+    using it pick unique slugs/names per test to avoid collisions.
+    """
+    conn = await asyncpg.connect(migrated_db_url)
+    try:
+        yield conn
+    finally:
+        await conn.close()
