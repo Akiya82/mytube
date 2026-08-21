@@ -130,7 +130,7 @@ async def _rename(old_slug: str, new_name: str) -> None:
             typer.echo(str(exc), err=True)
             raise typer.Exit(1)
 
-        typer.echo(f"/v/{old_slug} по-прежнему работает (ADDR-05)")
+        typer.echo(f"/v/{old_slug} по-прежнему работает")
         typer.echo(f"/v/{chosen} -- новый адрес")
     finally:
         await conn.close()

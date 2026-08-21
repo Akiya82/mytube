@@ -137,7 +137,7 @@ def cache_report(log_path: str, since: str | None = None) -> int:
 
     print(f"прочитано строк: {read_count}, разобрано: {parsed_count}")
     print(f"уникальных кусков: {total_slices}, доля HIT: {hit_ratio:.1%}")
-    print(f"кусков с более чем одним запросом к хранилищу (нарушение D-28): {len(worst)}")
+    print(f"кусков с более чем одним запросом к хранилищу: {len(worst)}")
     for uri, rng in worst[:10]:
         print(f"  {uri} {rng}: {upstream_hits[(uri, rng)]} запросов к хранилищу")
 
