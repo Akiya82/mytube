@@ -1,0 +1,5 @@
+{"identities":[
+  {"name":"mytube","credentials":[{"accessKey":"__MYTUBE_S3_KEY__","secretKey":"__MYTUBE_S3_SECRET__"}],
+   "actions":["Admin","Read","Write","List","Tagging"]},
+  {"name":"anonymous","actions":["Read"]}
+]}

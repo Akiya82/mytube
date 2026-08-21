@@ -1,0 +1,107 @@
+services:
+  db:
+    image: postgres:16-alpine
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - db_net
+
+  # Image/tag/command/volumes/bring-up sequence are fixed by the DIST-02
+  # verdict in src/docs/experiments/07-object-storage.md — not re-chosen here.
+  storage:
+    image: chrislusf/seaweedfs:3.97
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    env_file: .env
+    volumes:
+      - storage_data:/data
+      - ./storage/s3.json.template:/etc/seaweedfs/s3.json.template:ro
+      - ./storage/entrypoint.sh:/entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T2 -O- http://127.0.0.1:8333/ >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    networks:
+      - storage_net
+    # No ports published — reachable only from storage_net (D-38). Anonymous
+    # read inside the network comes from the "anonymous" identity baked into
+    # s3.json.template; the boundary is unreachability from outside, not ACL.
+
+  api:
+    build: .
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+    volumes:
+      - nginx_logs:/var/log/nginx:ro
+      - ./ingest:/ingest
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=2)\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - edge_net
+      - storage_net
+      - db_net
+    # No port published — the only path to api is through edge (D-21/D-22).
+
+  edge:
+    image: nginx:1.27-alpine
+    shm_size: 1g
+    env_file: .env
+    environment:
+      NGINX_ENVSUBST_FILTER: "^MYTUBE_"
+    depends_on:
+      api:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+    healthcheck:
+      # No dedicated /healthz on edge itself; any unmatched path hits nginx's
+      # own 404, which error_page maps to the not-found stub clip with =200
+      # (D-31) — a real request through the whole rendered config, not just
+      # "the process is running".
+      test: ["CMD-SHELL", "wget -q -T2 -O /dev/null http://127.0.0.1/ >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    volumes:
+      - ./edge/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./edge/cache-${MYTUBE_CACHE_MODE}.conf.template:/etc/nginx/templates/snippets/cache.conf.template:ro
+      - ./edge/errors:/etc/nginx/errors:ro
+      - nginx_logs:/var/log/nginx
+    ports:
+      - "${MYTUBE_EDGE_PORT}:80"
+    networks:
+      - edge_net
+      - storage_net
+    # Terminates behind the owner's own external reverse proxy; TLS ends
+    # there (D-19/D-20), not in this compose stack.
+
+networks:
+  edge_net: {}
+  db_net: {}
+  storage_net:
+    internal: true
+
+volumes:
+  db_data: {}
+  storage_data: {}
+  nginx_logs: {}
