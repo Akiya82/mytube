@@ -93,6 +93,14 @@ services:
     env_file: .env
     environment:
       NGINX_ENVSUBST_FILTER: "^MYTUBE_"
+      # Defaults keep the out-of-the-box path working: this compose brings up
+      # its own storage over plain http, so a fresh clone needs neither of
+      # these in .env. Setting them there overrides the default and points edge
+      # at an external S3 instead (D-16) -- MYTUBE_S3_HOST is the bare hostname,
+      # without the port, because nginx uses it as both the TLS SNI name and
+      # the Host header (see the upstream block in edge/nginx.conf.template).
+      MYTUBE_S3_SCHEME: "${MYTUBE_S3_SCHEME:-http}"
+      MYTUBE_S3_HOST: "${MYTUBE_S3_HOST:-storage}"
     depends_on:
       api:
         condition: service_healthy

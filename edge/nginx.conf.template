@@ -20,7 +20,20 @@ proxy_cache_path /dev/shm/vid levels=1:2 keys_zone=vid:16m max_size=${MYTUBE_CAC
 
 # Address comes from a variable, not a constant (verdict M7, D-16): edge must talk
 # to the same storage the orchestrator writes to, including an external endpoint.
-upstream storage-internal {
+#
+# The upstream is NAMED after the storage host rather than something descriptive
+# like "storage-internal", and that is load-bearing for the external case. nginx
+# derives both the default `Host` header and the TLS SNI name from the host part
+# of proxy_pass, which for an upstream block is the block's own name -- so a
+# descriptive name puts "storage-internal" into the SNI handshake and the Host
+# header, which a public S3 endpoint has no reason to accept. Naming the block
+# after the real host makes both correct with no extra directives.
+#
+# The block also has to stay a block rather than becoming a literal URL in
+# proxy_pass: proxy_pass here contains $edition_id, and with a variable present
+# nginx resolves the host at request time and demands a `resolver`. Upstream
+# names are looked up before DNS, so this form needs none.
+upstream ${MYTUBE_S3_HOST} {
     server ${MYTUBE_S3_UPSTREAM};
     keepalive 32;
 }
@@ -143,7 +156,19 @@ server {
 
         access_log /var/log/nginx/blob_access.log cache_audit;
 
-        proxy_pass http://storage-internal/${MYTUBE_S3_BUCKET}/$edition_id.mp4;
+        # Scheme is a variable because the storage can be either the one this
+        # compose brings up (plain http inside an internal network) or an
+        # external S3 over TLS (D-16). These three directives are inert when the
+        # scheme is http, so one config covers both without branching.
+        # Verification is ON deliberately: an unverified TLS connection is
+        # encrypted but not authenticated, which buys nothing over http against
+        # an attacker able to answer for the host.
+        proxy_ssl_server_name on;
+        proxy_ssl_verify on;
+        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+        proxy_ssl_verify_depth 3;
+
+        proxy_pass ${MYTUBE_S3_SCHEME}://${MYTUBE_S3_HOST}/${MYTUBE_S3_BUCKET}/$edition_id.mp4;
     }
 
     # Stub clips instead of raw error codes (D-31, Pitfall G): AVPro shows every
