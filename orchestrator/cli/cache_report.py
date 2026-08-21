@@ -5,43 +5,66 @@ The regex below is synchronized field-for-field, in the same order, with
 the `log_format cache_audit` directive in src/edge/nginx.conf.template:
 
     log_format cache_audit '$time_iso8601 $uri $slice_range '
-                            '$upstream_cache_status $status $body_bytes_sent';
+                            '$upstream_cache_status $status $body_bytes_sent '
+                            '$client_range_start';
 
 If that directive's field list or order ever changes, this regex must
 change with it -- a silent mismatch does not error, it just parses zero
 lines, which is exactly the failure mode the zero-parsed-lines guard below
-exists to catch instead of quietly reporting "no violations found".
+exists to catch instead of quietly reporting "no violations found". The
+seventh field is matched as OPTIONAL: a real `blob_access.log` spans the
+edge recreate that introduced it, so the same file legitimately contains
+both six-field lines (recorded before) and seven-field lines (recorded
+after), and a mandatory group would make every pre-recreate line
+unparseable and quietly shrink the measured window instead of just leaving
+those lines unattributed.
 
 No viewer IP anywhere in the format or in this module (D-30): the report's
 output is meant to be safe to paste into an issue on the public repo.
 
-**Measured deviation from the plan's original assumption.** The plan this
-module was written against assumed a full download of N chunks produces
-N+1 log lines: N per-chunk subrequest lines plus one separate "main
-request" line, the latter excluded from chunk statistics entirely. Live
+**What "empty slice_range" actually means, and what changed here.** Live
 measurement against this exact stack (two full downloads of the same
-title, cold then warm) shows that assumption does not hold: nginx's slice
-module fetches chunk #1 directly within the master request, not as an
-internal-redirect subrequest, so chunk #1 never gets its own `bytes=0-...`
-log line -- its `$upstream_cache_status` is logged on the "main" line
-instead, which is why that line's cache status is genuinely observed
-flipping from MISS (cold) to HIT (warm) across two runs of the same file.
-A download of N chunks therefore produces exactly N log lines, not N+1
-(matching the 64-vs-65 discrepancy already recorded in
-src/docs/experiments/07-object-storage.md). Treating the empty-`slice_range`
-line as "not a chunk" and discarding it, as the plan originally specified,
-would silently drop chunk #1's D-28 measurement on every single file --
-this module instead treats it as its own bucket (keyed on the literal `-`
-slice_range value nginx always logs for it), so a chunk-1 repeat fetch is
-caught exactly like any other chunk's.
+title, cold then warm) established that nginx's slice module serves the
+first slice a client asks for directly inside the master request, not as
+an internal-redirect subrequest -- so a master-request line never gets its
+own `bytes=N-...` line, and a download of N chunks therefore produces
+exactly N log lines, not N+1 (matching the 64-vs-65 discrepancy already
+recorded in src/docs/experiments/07-object-storage.md; that observation is
+still correct). What was wrong was the inference drawn from it: an earlier
+version of this module bucketed every master-request line under the
+literal `-`, on the assumption that "the first slice a client asks for" is
+always slice #1. It is not -- it is whichever slice the client's own
+request started in, and a client that opens with a mid-file Range request
+starts there, not at byte 0. Bucketing every such line under one literal
+key meant every viewer's opening request collided in the same phantom
+bucket regardless of where each one actually seeked to, so the reported
+chunk count grew with the number of viewers instead of measuring anything
+about storage.
+
+The fix: `$client_range_start` (added to `log_format cache_audit` in the
+same change as this module) records the offset the client's request
+itself began at. A master-request line is now attributed by flooring that
+offset to a `MYTUBE_SLICE_SIZE` boundary and building the same key shape
+nginx writes into `$slice_range` for a subrequest -- so a master line and
+a subrequest line for the same slice merge into one bucket, and a genuine
+double fetch of that slice is still caught, named by its real byte range.
+A line whose offset cannot be trusted -- absent (it predates this change)
+or not a plain digit string (the nginx map's own "unknown" fallback, e.g.
+a multi-range request) -- is counted as unattributed and never guessed
+into chunk zero; see `_align_master_line_range` and the unattributed-count
+reporting below.
 """
+import os
 import re
 from collections import Counter
 from datetime import datetime
 
+from orchestrator.cli.cache_warm import _parse_size
+
 LINE_RE = re.compile(
     r"(?P<time>\S+) (?P<uri>\S+) (?P<slice_range>\S+) "
     r"(?P<cache_status>\S+) (?P<status>\d+) (?P<bytes>\d+)"
+    r"(?: (?P<client_range_start>\S+))?"
 )
 
 # Statuses that mean nginx went to storage for this chunk (D-28). HIT and
@@ -61,25 +84,48 @@ def _parse_since(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _align_master_line_range(offset_str: str | None, slice_size: int) -> str | None:
+    """Resolve the slice a master-request line (empty `$slice_range`)
+    actually fetched, from the client's own start offset.
+
+    Returns the aligned range in the exact shape nginx writes into
+    `$slice_range` for a subrequest ("bytes=<start>-<end>"), or None when
+    the offset cannot be trusted: absent (the log line predates
+    `$client_range_start`) or not a plain digit string (the nginx map's
+    own "-" fallback for a header it could not parse, e.g. a multi-range
+    request). Callers must count a None result as unattributed, never as
+    chunk zero.
+    """
+    if offset_str is None or not offset_str.isdigit():
+        return None
+    offset = int(offset_str)
+    aligned = (offset // slice_size) * slice_size
+    return f"bytes={aligned}-{aligned + slice_size - 1}"
+
+
 def cache_report(log_path: str, since: str | None = None) -> int:
-    """Parse `log_path` (cache_audit format) and print the D-28 report.
+    """Parse `log_path` (cache_audit format), report on storage re-fetches.
 
     Returns the process exit code: 0 if no chunk was fetched from storage
     more than once, 1 if D-28 was violated, and 2 (verdict B2) if there was
-    not enough data to say either way -- zero parsed lines, whether because
-    the log is empty, no line matched the format, or `--since` filtered
-    everything out. Zero parsed lines must never read as "zero violations":
-    nginx does not log slice subrequests by default, so a misconfigured
-    edge (missing `log_subrequest on;` in `location ~ ^/blob/`) or a format
-    drift between this regex and cache_audit would otherwise make a broken
-    cache report as "passed".
+    not enough data to say either way. Insufficient data covers three
+    cases, all reported the same way rather than as a false "0 violations":
+    zero parsed lines (empty log, no line matched the format, or `--since`
+    filtered everything out); lines parsed but none of them attributable to
+    any chunk (a log window recorded entirely before the edge picked up
+    `$client_range_start`, or entirely multi-range requests); and -- as
+    before Task 1 of this change -- a misconfigured edge (missing
+    `log_subrequest on;`) or a format drift between this regex and
+    `cache_audit`.
     """
     read_count = 0
     since_dt = _parse_since(since) if since else None
+    slice_size = _parse_size(os.environ.get("MYTUBE_SLICE_SIZE", "1m"))
 
     per_slice: Counter[tuple[str, str]] = Counter()
     upstream_hits: Counter[tuple[str, str]] = Counter()
     parsed_count = 0
+    unattributed_count = 0
 
     with open(log_path, encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -100,14 +146,17 @@ def cache_report(log_path: str, since: str | None = None) -> int:
 
             parsed_count += 1
 
-            # slice_range == "-" is chunk #1: nginx's slice module fetches
-            # it directly in the master request rather than as an internal
-            # subrequest, so it never gets a "bytes=0-..." line of its own
-            # -- its cache status is logged right here instead (see module
-            # docstring for the live measurement that established this).
-            # Bucketing on the literal "-" is safe and sufficient: every
-            # repeat fetch of chunk #1 for this uri logs the same "-".
-            key = (m["uri"], m["slice_range"])
+            if m["slice_range"] != "-":
+                # Subrequest line: nginx already names the exact slice it
+                # fetched, nothing to attribute.
+                key = (m["uri"], m["slice_range"])
+            else:
+                aligned = _align_master_line_range(m["client_range_start"], slice_size)
+                if aligned is None:
+                    unattributed_count += 1
+                    continue
+                key = (m["uri"], aligned)
+
             per_slice[key] += 1
             if m["cache_status"] in UPSTREAM_STATUSES:
                 upstream_hits[key] += 1
@@ -122,6 +171,20 @@ def cache_report(log_path: str, since: str | None = None) -> int:
             "вероятная причина: в src/edge/nginx.conf.template для "
             "location ~ ^/blob/ не включён `log_subrequest on;`, "
             "либо формат access_log разошёлся с log_format cache_audit"
+        )
+        return INSUFFICIENT_DATA_EXIT_CODE
+
+    if not per_slice:
+        print(
+            "недостаточно данных: прочитано "
+            f"{read_count} строк(и), разобрано {parsed_count}, но ни одна "
+            "не привязана ни к одному куску -- мерить нечем, это не "
+            "значит, что нарушителей нет"
+        )
+        print(
+            "вероятная причина: всё окно лога записано до появления поля "
+            "смещения клиента (edge ещё не пересоздан), либо это сплошь "
+            "multi-range запросы"
         )
         return INSUFFICIENT_DATA_EXIT_CODE
 
@@ -140,5 +203,11 @@ def cache_report(log_path: str, since: str | None = None) -> int:
     print(f"кусков с более чем одним запросом к хранилищу: {len(worst)}")
     for uri, rng in worst[:10]:
         print(f"  {uri} {rng}: {upstream_hits[(uri, rng)]} запросов к хранилищу")
+    if unattributed_count:
+        print(
+            f"не привязано ни к одному куску: {unattributed_count} строк(и) -- "
+            "вероятная причина: строки записаны до появления поля смещения "
+            "клиента, либо это multi-range запросы"
+        )
 
     return VIOLATION_EXIT_CODE if worst else OK_EXIT_CODE
