@@ -59,6 +59,15 @@ server {
     listen 80;
     server_name _;
 
+    # `return 302 /refresh/$edition_id` below is relative, but nginx expands a
+    # relative Location into an absolute URL using the scheme IT sees — http
+    # whenever TLS is terminated upstream. That handed an https client an http
+    # redirect and broke the D-04 loop guard behind a TLS-terminating proxy.
+    # Off means the Location stays relative and the client resolves it against
+    # whatever scheme, host and port it actually used. Scheme-agnostic, so it
+    # needs no forwarded headers to be correct.
+    absolute_redirect off;
+
     # D-21 originally listed only /v/, /p/, /blob/. This adds /refresh/ as a direct
     # consequence of D-04: nginx only knows edition_id (no slug), so re-signing goes
     # through edition_id and the player reopens this address itself — it must be
@@ -125,6 +134,9 @@ server {
     location /errors/ {
         internal;
         alias /etc/nginx/errors/;
-        add_header Content-Type video/mp4 always;
+        # No add_header for the content type here: nginx already types these .mp4
+        # files from mime.types, and add_header appends rather than replaces, so
+        # the stub went out with Content-Type: video/mp4 listed twice. A duplicated
+        # Content-Type is not something every player forgives.
     }
 }
