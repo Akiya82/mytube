@@ -24,7 +24,13 @@ dump_once() {
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   out="$BACKUP_DIR/mytube-${ts}.sql.gz"
 
-  if pg_dump "$MYTUBE_DATABASE_URL" | gzip > "${out}.tmp"; then
+  # --clean --if-exists makes the dump self-sufficient: it emits DROP ... IF
+  # EXISTS before every CREATE, so it restores into a live database as well as
+  # an empty one. Without it the dump only loads into a freshly created database,
+  # and restoring over an existing one fails on the first CREATE TABLE — which is
+  # the case that actually matters, since you restore when the data is there and
+  # wrong, not when it is absent.
+  if pg_dump --clean --if-exists "$MYTUBE_DATABASE_URL" | gzip > "${out}.tmp"; then
     mv "${out}.tmp" "$out"
     echo "backup: ok -- $out ($(wc -c < "$out") bytes)"
   else
