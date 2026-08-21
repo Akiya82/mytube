@@ -19,6 +19,7 @@ as `inactive`'s window, not indefinitely.
 """
 import os
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import typer
@@ -104,12 +105,21 @@ def cache_warm(
             "выкинет прогретое после окончания прогрева (D-24), греть дальше "
             "бессмысленно (вердикт M5)"
         )
+    # Hand the operator the exact --since value instead of telling them to take a
+    # timestamp themselves. nginx logs whole seconds, so a warm that finishes in
+    # a fraction of a second shares its log second with a timestamp taken right
+    # after it, and --since is inclusive: the warm's own point-Range requests land
+    # inside the measurement window and report a violation that did not happen.
+    # Rounding up to the next whole second past the last warm request is what makes
+    # the instruction actually followable.
+    safe_since = (
+        datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=1)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
     typer.echo(
-        "cache-report: замеряйте сеанс с --since меткой времени ПОСЛЕ этого "
-        "прогрева -- сам прогрев шлёт отдельные точечные Range-запросы, "
-        "которые в access_log неотличимы от первого куска обычного "
-        "линейного проигрывания, и попадание прогрева в окно замера даст "
-        "ложное нарушение D-28"
+        "замеряйте сеанс начиная с этой метки — прогрев шлёт точечные "
+        "Range-запросы, в access_log неотличимые от первого куска обычного "
+        "линейного проигрывания, и его попадание в окно даёт ложное нарушение:"
     )
+    typer.echo(f"    cache-report --since {safe_since}")
 
     return 0
