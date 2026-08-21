@@ -1,0 +1,17 @@
+# Every shell script here is executed inside a Linux container. A CRLF checkout
+# makes the shell read `set -eu\r` and die with "set: illegal option -", so the
+# stack cannot start at all.
+#
+# This is not hypothetical and not a preference: Git for Windows ships
+# core.autocrlf=true in its system config, a fresh clone does not inherit the
+# core.autocrlf=false someone may have set in another working copy, and without
+# this file every clone on Windows produces unusable entrypoints — including
+# docker-entrypoint.sh, which is what runs the migrations. Found by walking
+# SETUP.md on a clean checkout.
+* text=auto eol=lf
+
+# Never let text normalisation near binary payloads.
+*.mp4 binary
+*.png binary
+*.jpg binary
+*.gz  binary
