@@ -14,7 +14,7 @@
 # (orchestrator/signing.py) is unaffected, since it does plain string
 # concatenation and never touches nginx's own variable parser.
 
-log_format cache_audit '$time_iso8601 $uri $slice_range $upstream_cache_status $status $body_bytes_sent';
+log_format cache_audit '$time_iso8601 $uri $slice_range $upstream_cache_status $status $body_bytes_sent $client_range_start';
 
 proxy_cache_path /dev/shm/vid levels=1:2 keys_zone=vid:16m max_size=${MYTUBE_CACHE_SIZE} inactive=${MYTUBE_CACHE_INACTIVE} use_temp_path=off;
 
@@ -53,6 +53,28 @@ map "$secure_link:$arg_retry" $blob_action {
     "~^1:"    serve;    # valid signature -> bytes, regardless of retry marker
     "~:1$"    stub;     # already retried once -> stub clip, not another redirect (D-04 loop-guard)
     default   refresh;  # first attempt with a bad/expired signature -> re-sign
+}
+
+# The master request logs an empty $slice_range, so on its own a log line
+# cannot say which slice it fetched -- nginx's slice module serves the first
+# slice a client asks for directly inside the master request, not as an
+# internal-redirect subrequest. $client_range_start records where the
+# client's own request began, which is what makes a linear start (byte 0)
+# and a mid-file seek distinguishable after the fact: cache-report floors
+# this offset to a slice boundary and merges the master line into the same
+# bucket as any subrequest for that slice. Subrequest lines carry this field
+# too and cache-report ignores it there -- expected, not a bug.
+#
+# Mapped, never $http_range logged raw: the header is client-controlled and
+# a legitimate multi-range value contains a space, which in a
+# space-delimited log line would shift every following field and let a
+# client forge log content. This map emits digits or a single hyphen
+# ("offset unknown") and nothing else; the field's last position in
+# cache_audit is a second layer on the same concern.
+map $http_range $client_range_start {
+    default                        -;
+    ""                             0;
+    "~^bytes=(?<range_start>\d+)-" $range_start;
 }
 
 server {
