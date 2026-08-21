@@ -38,6 +38,32 @@ services:
     # read inside the network comes from the "anonymous" identity baked into
     # s3.json.template; the boundary is unreachability from outside, not ACL.
 
+  # D-15: dumps go to a host bind mount under ./data/ (already covered by
+  # the top-level /data/ rule in .gitignore, same pattern as storage's own
+  # data — nothing new to ignore). No scheduler daemon and no extra image:
+  # this is the same postgres:16-alpine that already ships pg_dump, entry
+  # point overridden to run backup/backup.sh's loop instead of a server.
+  db-backup:
+    image: postgres:16-alpine
+    entrypoint: ["bash", "/backup/backup.sh"]
+    env_file: .env
+    environment:
+      # Compose-level fallback so these are always set on the container even
+      # on an .env predating this plan (backup.sh has its own ${VAR:-default}
+      # too, but that only helps callers going through the script itself --
+      # this also covers direct inspection like `test -d "$MYTUBE_BACKUP_DIR"`).
+      MYTUBE_BACKUP_DIR: "${MYTUBE_BACKUP_DIR:-/backups}"
+      MYTUBE_BACKUP_KEEP_DAYS: "${MYTUBE_BACKUP_KEEP_DAYS:-7}"
+    volumes:
+      - ./backup/backup.sh:/backup/backup.sh:ro
+      - ./data/backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - db_net
+    restart: unless-stopped
+
   api:
     build: .
     env_file: .env
