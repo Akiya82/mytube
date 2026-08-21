@@ -132,7 +132,14 @@ def test_nginx_accepts_python_signature(tmp_path: Path, signing_secret: str):
         resp = httpx.get(good_url, timeout=5)
         assert resp.status_code == 200, f"valid signature rejected: {resp.status_code} {resp.text}"
 
-        tampered_sig = sig[:-1] + ("A" if sig[-1] != "A" else "B")
+        # Портим ПЕРВЫЙ символ, а не последний. Подпись — 22 символа base64url
+        # от 128-битного MD5 без padding: последний символ несёт всего 2 значащих
+        # бита (остальные 4 не используются), поэтому подмена 'A' -> 'B' меняет
+        # только неиспользуемый бит и декодируется в те же 16 байт. nginx в этом
+        # случае справедливо отвечает 200, и тест падал на четверти подписей.
+        # Любой символ, кроме последнего, несёт все 6 бит — его подмена всегда
+        # реальная порча.
+        tampered_sig = ("A" if sig[0] != "A" else "B") + sig[1:]
         bad_url = f"{base_url}/blob/{edition_id}.mp4?sig={tampered_sig}&exp={expires}"
         resp_bad = httpx.get(bad_url, timeout=5)
         assert resp_bad.status_code == 403, f"tampered signature accepted: {resp_bad.status_code}"
