@@ -411,9 +411,11 @@ caches, or a first-time reader following `SETUP.md` with no prior
 knowledge of the topology. That run requires a second, genuinely clean
 machine and has not happened.
 
-**Result: NOT CLOSED (split verdict).** The unreachability half is
-measured and closed. The clean-machine half is unverified and remains
-open — it needs a machine this environment does not have.
+**Result: split verdict.** The unreachability half is measured and closed.
+The clean-machine half was never run here and needs a machine this
+environment does not have; on 2026-08-21 the owner accepted it as
+unverified and closed the criterion on that basis. See the reconciliation
+at the end of this document.
 
 ---
 
@@ -423,11 +425,15 @@ Criteria are read in the CONTEXT.md revision: criterion 3 is D-28 (origin
 requests per chunk, not `HIT` share), criterion 4 includes D-38
 (unreachability, not ACL).
 
-Критерий 1: пройден
-Критерий 2: пройден
-Критерий 3: не пройден
-Критерий 4: не пройден
-Критерий 5: пройден
+Criterion 1: passed
+Criterion 2: passed
+Criterion 3: passed
+Criterion 4: passed for the measured half, accepted for the install half
+Criterion 5: passed
+
+Criteria 3 and 4 read "not passed" here until 2026-08-21. Both were settled
+later that day and this section was corrected then; the per-criterion text
+below states how each was settled.
 
 In full:
 
@@ -437,26 +443,41 @@ In full:
    playback confirmed by the owner, full redirect/re-sign/loop-guard chain
    independently measured both locally and against the real domain, against
    a verified real video file.
-3. **Synchronous three-viewer cache property — NOT PASSED.** The mechanism
-   (single-flight per cold chunk) is machine-proven by `smoke_blob.sh` step
-   12 and by a real single-session `cache-report` run against real video,
-   both showing zero D-28 violations. The specific three-simultaneous-human
-   claim has not been run. Gap: needs three people in one live world.
-4. **Clean-machine `docker compose up`, storage unreachable — NOT PASSED
-   (split).** Storage unreachability is measured and closed at three
-   independent levels. The clean-machine bring-up is unverified. Gap: needs
-   a second machine with no pre-warmed images.
+3. **Synchronous three-viewer cache property — PASSED.** The owner
+   confirmed that the measured window had three video players open at once,
+   each with an empty client-side cache: 53 unique chunks, 100% HIT, and no
+   chunk fetched from storage more than once. The mechanism itself
+   (single-flight per cold chunk) is separately machine-proven by
+   `smoke_blob.sh` step 12 and by a single-session `cache-report` run
+   against real video, but the three-viewer claim rests on the owner's
+   confirmation of the live session rather than on that machine proof.
+4. **Clean-machine `docker compose up`, storage unreachable — SPLIT:
+   measured for one half, accepted for the other.** Storage unreachability
+   is measured and closed at three independent levels, and everything
+   downstream of pulling the images was walked end to end on a fresh clone
+   with fresh volumes. The remaining half — installing Docker, configuring
+   WSL2, creating the firewall rule, and pulling the images on a machine
+   that has none — was never run here and cannot be, without a second
+   machine. On 2026-08-21 the owner accepted that half as unverified and
+   closed the criterion on that basis. It was accepted, not verified: no
+   clean-machine run happened. What was done instead is recorded above and
+   in `SETUP.md` — the four image references were confirmed to still resolve
+   for this platform without pulling them, the undeclared host prerequisites
+   were declared, and the Windows and WSL claims were narrowed to what
+   read-only evidence on this host actually supports.
 5. **Slug rename does not break the old link — PASSED.** Closed in plan
    01-04 by tests and a live run, unaffected by this session.
 
-**Phase-1 verdict: not yet closable under D-32.** D-32 requires all five
-criteria passed at once; two of five (3 and 4) have a named, concrete,
-un-invented gap that only a second human session and a second machine can
-close. Everything that could be automated or driven as a real client from
-this environment has been driven, including finding and fixing five real
-defects along the way. What remains is exactly what the plan always said
-would remain: three people in one VRChat world, and a machine this
-environment does not have.
+**Phase-1 verdict: no criterion remains open.** Four of the five are
+passed on measurement or on the owner's confirmation of a live session. The
+fifth, criterion 4, is passed for everything downstream of the image pull
+and closed for the install half by the owner's explicit acceptance on
+2026-08-21 rather than by a run on a clean machine — that run still has not
+happened and nothing here claims it did. Everything that could be automated
+or driven as a real client from this environment has been driven, which is
+how five real defects were found and fixed along the way. The residual risk
+is a stranger's first-run experience on a machine with no Docker, and it is
+stated as such in `SETUP.md` where a reader will actually meet it.
 
 ## Discrepancies against SETUP.md found during this run
 
