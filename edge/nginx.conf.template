@@ -30,12 +30,12 @@ upstream orchestrator {
     keepalive 8;
 }
 
-# Внешняя схема для Location в 302 (ADDR-07, D-11). $scheme — это схема, какой
-# её видит edge, то есть http, когда TLS терминирует внешний прокси. Подставлять
-# её напрямую значит выдать клиенту http-редирект с https-страницы: браузер
-# ругается на mixed content, плеер получает адрес не по той схеме. Поэтому
-# пришедший X-Forwarded-Proto имеет приоритет, а $scheme остаётся запасным
-# вариантом для прямого обращения к edge без внешнего прокси.
+# External scheme for the 302 Location (ADDR-07, D-11). $scheme is the scheme as
+# the edge sees it, which is http whenever TLS is terminated by an upstream proxy.
+# Using it directly hands the client an http redirect from an https page: mixed
+# content in a browser, and the wrong scheme for the player. So an incoming
+# X-Forwarded-Proto wins, and $scheme stays as the fallback for reaching the edge
+# directly with no proxy in front.
 map $http_x_forwarded_proto $external_proto {
     default $http_x_forwarded_proto;
     ""      $scheme;

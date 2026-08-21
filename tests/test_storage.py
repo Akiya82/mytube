@@ -1,9 +1,10 @@
-"""Заливка обязана проставлять Content-Type.
+"""Uploads must set a Content-Type.
 
-Регрессия: `upload_file()` без `ExtraArgs` не передаёт тип, S3 подставляет
-`application/octet-stream`, и это доезжает до клиента. Браузер такой ответ
-скачивает вместо воспроизведения. Тракт при этом выглядит рабочим — 302,
-200, байты совпадают, — поэтому ни один сквозной тест фазы дефект не поймал.
+Regression: `upload_file()` with no `ExtraArgs` sends no type, S3 stores
+`application/octet-stream`, and that reaches the client. A browser downloads
+such a response instead of playing it. The delivery path still looks healthy
+while this is broken — 302, 200, bytes match — which is why no end-to-end
+test in the phase caught it.
 """
 
 from unittest.mock import MagicMock

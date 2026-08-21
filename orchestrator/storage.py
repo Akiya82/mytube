@@ -31,13 +31,13 @@ def get_s3_client():
 
 
 def put_object_from_file(path: str, key: str) -> None:
-    """Залить файл под ключ `key`.
+    """Upload a file under object key `key`.
 
-    ContentType проставляется явно. Без него boto3 не передаёт тип вообще,
-    S3 подставляет `application/octet-stream`, и дальше это доезжает до
-    клиента как есть: браузер такой ответ скачивает вместо воспроизведения,
-    а плееру приходится угадывать формат. Тип здесь константа, а не догадка
-    по расширению, — сервис по дизайну отдаёт только прогрессивный MP4.
+    ContentType is set explicitly. Without it boto3 sends no type at all, S3
+    stores `application/octet-stream`, and that reaches the client verbatim:
+    a browser downloads such a response instead of playing it, and a player
+    has to guess the format. The type is a constant rather than a guess from
+    the file extension because the service serves progressive MP4 only.
     """
     settings = get_settings()
     get_s3_client().upload_file(
