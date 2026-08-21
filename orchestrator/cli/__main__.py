@@ -16,6 +16,8 @@ from pathlib import Path
 import asyncpg
 import typer
 
+from orchestrator.cli.cache_report import cache_report as _cache_report
+from orchestrator.cli.cache_warm import DEFAULT_BASE_URL, cache_warm as _cache_warm
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.slugs import SlugError, normalize_slug, pick_unique_slug
@@ -162,6 +164,39 @@ async def _remove(slug: str) -> None:
         )
     finally:
         await conn.close()
+
+
+@app.command("cache-warm")
+def cache_warm_command(
+    slug: str = typer.Argument(..., help="Слаг тайтла, который прогреваем перед сеансом (D-27)"),
+    base_url: str = typer.Option(
+        DEFAULT_BASE_URL, "--base-url", help="Адрес edge, обычно внутренний (D-36)"
+    ),
+    chunk_size: int = typer.Option(
+        None, "--chunk-size", help="Размер шага в байтах; по умолчанию MYTUBE_SLICE_SIZE"
+    ),
+    bytes: int = typer.Option(
+        None, "--bytes",
+        help="Предел прогрева в байтах (вердикт M5); по умолчанию MYTUBE_WARM_BYTES "
+        "или половина зоны кэша",
+    ),
+) -> None:
+    code = _cache_warm(slug, base_url=base_url, chunk_size=chunk_size, warm_bytes=bytes)
+    raise typer.Exit(code)
+
+
+@app.command("cache-report")
+def cache_report_command(
+    log_path: str = typer.Argument(
+        None, help="Путь к blob_access.log; по умолчанию MYTUBE_BLOB_ACCESS_LOG из настроек"
+    ),
+    since: str = typer.Option(
+        None, "--since", help="Учитывать только строки не старше этого момента (ISO 8601)"
+    ),
+) -> None:
+    path = log_path or get_settings().blob_access_log
+    code = _cache_report(path, since=since)
+    raise typer.Exit(code)
 
 
 if __name__ == "__main__":

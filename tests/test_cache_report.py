@@ -85,14 +85,18 @@ def test_hit_ratio_counted_correctly(tmp_path, capsys):
     assert "75.0%" in out
 
 
-def test_main_request_line_without_chunk_range_not_counted_as_a_chunk(tmp_path, capsys):
-    """Full download of N chunks logs N+1 lines: N slice subrequests plus
-    one line for the original client request, whose $slice_range is empty
-    (nginx logs an empty variable as "-"). That extra line must not be
-    counted as its own chunk."""
+def test_main_request_line_is_chunk_one_and_counts_as_its_own_chunk(tmp_path, capsys):
+    """Measured against the live stack (see cache_report.py module
+    docstring): nginx's slice module fetches chunk #1 directly in the
+    master request rather than as an internal-redirect subrequest, so
+    chunk #1 never gets its own "bytes=0-..." line -- its cache status is
+    logged on the line with empty $slice_range ("-") instead, and that
+    status is observed changing between runs exactly like any other
+    chunk's. A download of N chunks therefore logs exactly N lines (one of
+    which has slice_range "-" for chunk #1), and that line must count as
+    its own chunk, not be discarded."""
     log = tmp_path / "access.log"
     lines = [
-        _line("/blob/v.mp4", "bytes=0-1048575", "MISS"),
         _line("/blob/v.mp4", "bytes=1048576-2097151", "MISS"),
         _line("/blob/v.mp4", "-", "MISS", body_bytes=2097152),
     ]
@@ -102,7 +106,26 @@ def test_main_request_line_without_chunk_range_not_counted_as_a_chunk(tmp_path, 
 
     out = capsys.readouterr().out
     assert code == 0
-    assert "slices seen: 2" in out or "уникальных кусков: 2" in out
+    assert "уникальных кусков: 2" in out
+
+
+def test_repeat_fetch_of_chunk_one_is_caught_like_any_other_chunk(tmp_path, capsys):
+    """The empty-slice_range bucket (chunk #1) must go through the exact
+    same >1-upstream-fetch violation logic as every numbered chunk --
+    otherwise every file's first chunk would be a permanent D-28 blind
+    spot."""
+    log = tmp_path / "access.log"
+    lines = [
+        _line("/blob/v.mp4", "-", "MISS", body_bytes=2097152),
+        _line("/blob/v.mp4", "-", "MISS", body_bytes=2097152),
+    ]
+    log.write_text("".join(lines))
+
+    code = cache_report(str(log))
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "/blob/v.mp4" in out
 
 
 def test_expired_and_stale_count_as_storage_trips_updating_does_not(tmp_path, capsys):
