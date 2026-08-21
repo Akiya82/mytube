@@ -65,6 +65,55 @@ Self-hosted раздача progressive MP4 для просмотра синхр�
 чтобы хранилище было недостижимо снаружи — публичный S3-эндпоинт нарушал
 бы это требование сам по себе, независимо от прочих настроек.
 
+## Prerequisites
+
+Before the first command below can run, the machine needs Docker Desktop
+with Compose v2. Install it from the [official Docker Desktop for Windows
+guide](https://docs.docker.com/desktop/setup/install/windows-install/)
+rather than a copy of it here — a second copy of somebody else's install
+guide rots, and this project would then be maintaining two.
+
+Check the install from a shell before continuing:
+
+```bash
+docker version
+docker compose version
+```
+
+This stack is known to run on Docker Engine 29.7.2 with Compose v5.4.0;
+an older Docker Desktop that still ships Compose v1 (a separate
+`docker-compose` binary, with a hyphen, no `version` output matching the
+above) is not what any command in this document was written against.
+
+If `docker version` reports the command not found even though Docker
+Desktop is installed, its CLI is not on this shell's `PATH` — some Docker
+Desktop installs place it under a per-user directory
+(`%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin`) that is not always
+added automatically. Add that directory to `PATH`, or open a fresh
+terminal after installing.
+
+Past Docker itself, the commands in this document run a handful of other
+binaries directly on the host, not inside a container. On a machine with
+only Docker Desktop and Git for Windows installed:
+
+| Binary | Ships with |
+|---|---|
+| `docker`, `docker compose` | Docker Desktop |
+| `bash`, `cp` | Git for Windows |
+| `openssl`, `curl` | Git for Windows (its bundled MinGW toolchain) |
+| `ffprobe` | **Neither.** Required only for the decodability check under "Verifying served video is actually decodable" below — install it separately (for example, an [ffmpeg Windows build](https://www.gyan.dev/ffmpeg/builds/)) and put it on `PATH` before running that one command. |
+
+This document's own promise is that every command in it was either really
+run or is explicitly marked as not. Installing Docker Desktop itself and
+pulling this stack's four images for the first time have not been walked
+by following this document on a machine that started with neither —
+`docker compose up -d --wait` below has only ever run where the images
+were already present. A registry lookup for each image reference
+(`postgres:16-alpine`, `chrislusf/seaweedfs:3.97`, `nginx:1.27-alpine`,
+`python:3.13-slim`) confirms each one still resolves to a real,
+`linux/amd64`-capable manifest — that is evidence the pull should succeed,
+not a record that it has.
+
 ## Порядок запуска
 
 ```bash
@@ -110,7 +159,14 @@ docker compose exec api python -m orchestrator.cli add \
 
 Found while closing out the phase-1 acceptance gate on a real Windows host.
 None of this is Linux-specific advice — it only applies if the compose
-stack runs on Windows with Docker Desktop's WSL2 backend.
+stack runs on Windows with Docker Desktop's WSL2 backend. None of the
+commands in this section have been walked by following this document
+top-to-bottom on a machine that started with WSL2 unconfigured — what
+follows is corroborated against artifacts already present on one
+already-configured deployment, not a record of a fresh install-and-
+configure run. That deployment's `.wslconfig` does set
+`networkingMode=Mirrored`, the precondition this whole section assumes; if
+yours does not set that, none of it applies to you.
 
 **Published port unreachable from the LAN even though `docker compose ps`
 looks fine and Windows Firewall is disabled.** If Docker Desktop's WSL2
@@ -121,17 +177,50 @@ Firewall. It defaults to `DefaultInboundAction: Block` and ships only ICMP
 and mDNS allow rules — a published container port never gets an explicit
 allow rule on its own. Symptom: the reverse proxy (or any machine other
 than the host itself) cannot reach the edge at all, while everything works
-from `127.0.0.1`. Fix, verified on this deployment:
+from `127.0.0.1`. Fix:
 
 ```powershell
 # Look up your own VM's creator ID first -- do not reuse this from another
 # machine, it is not a universal constant.
 Get-NetFirewallHyperVVMSetting
 
+# Scoped default: only the given remote address or subnet may reach the
+# edge port. Replace <reverse-proxy-address-or-subnet> with the reverse
+# proxy host's address, or the LAN subnet if more than one machine needs
+# it -- see the security note below before running this.
 New-NetFirewallHyperVRule -Name "MyTube-Edge-8080" -DisplayName "MyTube edge (HTTP 8080)" `
   -Direction Inbound -VMCreatorId '<your VMCreatorId from the command above>' `
+  -RemoteAddress '<reverse-proxy-address-or-subnet>' `
   -Protocol TCP -LocalPorts 8080 -Action Allow
+
+# Unscoped form -- only if the edge is genuinely meant to be reachable from
+# any address that can reach this machine at all (omitting -RemoteAddress
+# defaults it to Any):
+# New-NetFirewallHyperVRule -Name "MyTube-Edge-8080" -DisplayName "MyTube edge (HTTP 8080)" `
+#   -Direction Inbound -VMCreatorId '<your VMCreatorId from the command above>' `
+#   -Protocol TCP -LocalPorts 8080 -Action Allow
 ```
+
+**What this rule opens.** Without `-RemoteAddress`, this admits inbound TCP
+to the edge port from any remote address that can reach the VM at all —
+the block-by-default posture the Hyper-V firewall normally provides is
+gone for this one port, for anyone, not just the reverse proxy. Scope it
+to the reverse proxy host or the LAN subnet, as the default form above
+does; keep the unscoped form only for the case where the edge is
+genuinely meant to be reachable from anywhere, which this project's own
+design does not call for — external traffic is already meant to arrive
+through the owner's own reverse proxy (see "Что прокинуть в
+реверс-прокси" below), not directly at this port.
+
+On one already-configured deployment, a Hyper-V rule matching this exact
+command — same name, display name, and that VM's own creator ID — is
+present, which corroborates that this command (or one equivalent to it)
+was applied there; it does not establish that running it from a blocked
+state was directly observed to restore reachability, since no
+before/after test accompanies it. That same host also carries a second,
+broader Hyper-V rule this document never instructed creating
+(`VMCreatorId: Any`, unscoped by remote address), so observed reachability
+on it cannot be attributed to the command above alone.
 
 **Git Bash mangles container-absolute paths.** Running the `add` command
 above (or any `docker compose exec ... --file /ingest/...`) from Git Bash
