@@ -1,5 +1,12 @@
 # Легитимность тринадцати PyPI-пакетов фазы 1 (T-01-SC)
 
+**English abstract:** Verified that all thirteen PyPI packages this phase
+installs are the real, legitimate packages, not typosquats or hallucinated
+names. An automated checker flagged all seven originally-audited packages as
+suspicious for a reason unrelated to legitimacy (recency of the latest
+release, not package age), so every package was instead confirmed by hand
+against its real pypi.org page. Verdict: all thirteen cleared.
+
 Гейт перед первой установкой зависимостей (план 01-03). Автоматический чекер
 (`gsd-tools query package-legitimacy check --ecosystem pypi`) уже прогнан по
 исходной семёрке в исследовании (`01-RESEARCH.md`, раздел «Package Legitimacy

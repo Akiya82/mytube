@@ -1,5 +1,13 @@
 # Эксперимент 7: выбор объектного хранилища (DIST-02)
 
+**English abstract:** Compared Garage and SeaweedFS as the self-hosted S3
+backend, both driven through the same nginx `slice` setup, on two required
+criteria: sha256 integrity through the full delivery chain, and anonymous
+unsigned Range GET from inside the network. Garage failed the anonymous
+Range criterion; SeaweedFS passed both. Verdict: SeaweedFS
+(`chrislusf/seaweedfs:3.97`), the image/tag/parameters this document
+records being what the stack actually runs.
+
 **Дата прогона:** 2026-08-21
 **Стенд:** `src/tools/experiment07_storage.sh`
 **Окружение:** Docker Desktop 29.7.2 (Windows 11, Git Bash), сеть `mytube-exp07`, все объекты стенда временные (см. `## Уборка` внизу)

@@ -1,5 +1,12 @@
 # Эксперимент 3: extensionless + Content-Type (справка, D-06/D-07)
 
+**English abstract:** Checked whether an extensionless address serving
+`Content-Type: video/mp4` plays directly in AVPro, as a reference point
+only -- the actual implementation always redirects through a signed
+`/blob/{edition_id}.mp4` address regardless of this result, since a direct
+extensionless address has nowhere to carry the signature without polluting
+the short link. Informational; does not gate anything.
+
 **Результат этого эксперимента справочный и не влияет на реализацию.** Даже если
 файл без расширения с `Content-Type: video/mp4` играет напрямую в AVPro, прямая
 отдача выбрана не будет: подписи (D-01/D-02/D-03) некуда положить, не испачкав

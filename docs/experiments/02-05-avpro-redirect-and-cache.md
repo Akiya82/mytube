@@ -1,5 +1,12 @@
 # Experiments 2 and 5, external reverse proxy, clean machine: phase-1 final acceptance
 
+**English abstract:** The final acceptance record for phase 1's delivery
+skeleton -- redirect-then-signed-URL playback through the owner's real
+reverse proxy, and the slice cache under simultaneous viewers. The first
+automated pass produced a false PASS against a non-video fixture (right
+size, no actual video bytes); the record was corrected and re-run against a
+real decodable file before being trusted.
+
 D-32: the phase closes only when all five ROADMAP success criteria hold at
 once (criteria 3 and 4 in the revised wording from `01-CONTEXT.md`: D-02/D-28
 instead of the original `X-Cache-Status` and ACL phrasing). This document

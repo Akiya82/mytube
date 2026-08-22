@@ -1,5 +1,11 @@
 # Эксперимент 1: прямой MP4 с собственного домена в AVPro (VRChat)
 
+**English abstract:** Tested whether a progressive MP4 file, served from the
+owner's own domain, plays directly in VRChat's AVPro video player -- the
+foundational technical bet the entire project rests on. Verdict: **PASS**,
+confirmed on both a direct address and the real production form with a
+signed query string.
+
 Go/no-go всего проекта (ROADMAP критерий 1). Провал ≠ пересмотр замысла — сначала
 перебор причин по списку D-33.
 

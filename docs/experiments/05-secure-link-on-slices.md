@@ -1,5 +1,13 @@
 # Эксперимент 5: `secure_link` на slice-подзапросах (DELIV-06, D-01/D-02/D-04)
 
+**English abstract:** Confirmed that nginx's `secure_link` signature check
+runs locally on every slice subrequest, with no per-chunk round trip to the
+backend, and that the check still holds under the three failure modes most
+likely to break it in practice. Not a gate on the architecture choice itself
+(already decided) -- a protocol for three measurements that would have had
+to fail if the real implementation had drifted from the intent. All three
+held.
+
 **Дата прогона:** 2026-08-21
 **Стенд:** `src/tools/smoke_blob.sh`, полный стек `docker-compose.yml` (db, storage, api, edge)
 **nginx:** `nginx/1.27.5` (образ `nginx:1.27-alpine`)

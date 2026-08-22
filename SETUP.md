@@ -1,69 +1,175 @@
 # MyTube — SETUP
 
-Короткая инструкция фазы 1 (D-37): переменные `.env`, порядок запуска, что
-прокинуть во внешний реверс-прокси, как проверить кэш, бэкап и режимы кэша.
-В фазе 6 этот файл вырастает в честный README по DIST-04 — здесь он
-намеренно минимален.
+[Русская версия](SETUP.ru.md)
 
-Каждая команда ниже либо реально выполнена при написании этого файла на
-живом стеке (`docker compose ps` — все сервисы healthy), либо помечена как
-непроверенная явно.
+A short setup guide: `.env` variables, startup order, what to expose through
+an external reverse proxy, how to check the cache, backup, and cache modes.
+This file stays intentionally minimal for now; it is expected to grow into a
+full README once the project publishes images.
 
-## Что это и чего не умеет
+Every command below was either actually run while writing this document,
+against a live stack (`docker compose ps` — every service healthy), or is
+explicitly marked as not run.
 
-Self-hosted раздача progressive MP4 для просмотра синхронной компанией
-7–15 друзей в браузере и в плеере AVPro внутри VRChat.
+## What this is, and what it does not do
 
-Три честных ограничения:
+Self-hosted progressive-MP4 delivery for a synchronous group of 7–15 friends
+watching in a browser and in the AVPro player inside VRChat.
 
-- Каждый зритель в VRChat обязан **один раз** включить в настройках
-  «Allow Untrusted URLs» — без этого AVPro не откроет ни один внешний
-  адрес, включая свой собственный.
-- **Публичные и group-public инстансы VRChat не поддерживаются** начиная
-  с билда 1546 — только приватные и friends-инстансы.
-- **Адаптивного битрейта нет и не будет.** Разные качества (если
-  понадобятся) живут как разные издания одного тайтла, не как один поток
-  с переключением на лету — ABR подтверждённо не работает в VRChat.
+Three honest limitations:
 
-## Переменные `.env`
+- Every viewer inside VRChat has to enable "Allow Untrusted URLs" in their
+  own settings **once** — without it AVPro will not open any external
+  address, including this service's own.
+- **Public and group-public VRChat instances are not supported**, as of
+  build 1546 — only private and friends instances.
+- **There is no adaptive bitrate, and there will not be.** Different
+  qualities, if ever needed, live as separate editions of the same title,
+  not as one stream switching on the fly — adaptive bitrate is confirmed not
+  to work inside VRChat.
 
-Скопировать `.env.example` в `.env` и заполнить. Значения из
-`.env.example` — рабочие дефолты для локального стенда, кроме отмеченных
-«обязательно сгенерировать».
+## `.env` variables
 
-| Переменная | Назначение | По умолчанию | Обязательность |
+Copy `.env.example` to `.env` and fill it in. The values already in
+`.env.example` are working defaults for a local stand, except the ones
+marked "must be generated".
+
+| Variable | Purpose | Default | Requirement |
 |---|---|---|---|
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Учётные данные Postgres, потребляются образом `postgres:16-alpine` напрямую | `mytube` / `change-me...` / `mytube` | Пароль обязательно сгенерировать |
-| `MYTUBE_SECURE_LINK_SECRET` | Секрет подписи `/blob/`-адресов (D-01/D-02) | — | Обязательно сгенерировать: `openssl rand -hex 32`. **В репозиторий не попадает** — `.env` в `.gitignore` |
-| `MYTUBE_SIGN_TTL_SECONDS` | Срок жизни подписи, секунды (D-03) | `43200` (12ч) | Опционально |
-| `MYTUBE_DATABASE_URL` | Строка подключения к Postgres, должна совпадать с `POSTGRES_*` выше | `postgresql://mytube:...@db:5432/mytube` | Обязательно держать в синхроне с `POSTGRES_*` |
-| `MYTUBE_S3_ENDPOINT` | S3-эндпоинт хранилища. Если указан внешний — используется он (D-16) | `http://storage:8333` | Опционально |
-| `MYTUBE_S3_UPSTREAM` | `host:port` того же хранилища для `upstream storage-internal` внутри edge | `storage:8333` | **Обязательно менять вместе с `MYTUBE_S3_ENDPOINT`** — см. предупреждение ниже (вердикт M7) |
-| `MYTUBE_S3_BUCKET` / `MYTUBE_S3_REGION` | Имя бакета и произвольный непустой регион | `mytube` / `mytube` | Опционально |
-| `MYTUBE_S3_KEY` / `MYTUBE_S3_SECRET` | Учётные данные S3-идентичности `mytube` (Admin/Read/Write/List/Tagging) | — | Обязательно сгенерировать: `openssl rand -hex 16` / `openssl rand -hex 32` |
-| `MYTUBE_DELETE_GRACE_SECONDS` | Окно между `410` и физическим удалением объекта (D-13) | `300` (5 мин) | Опционально |
-| `MYTUBE_CACHE_MODE` | `memory` или `off` — выбирает `edge/cache-${MYTUBE_CACHE_MODE}.conf.template` (DELIV-08) | `memory` | Опционально, см. «Режимы кэша» |
-| `MYTUBE_CACHE_SIZE` | Размер зоны кэша в tmpfs (D-23) | `512m` | Опционально |
-| `MYTUBE_CACHE_INACTIVE` | Окно вытеснения неактивных кусков (D-24) | `120s` | Опционально |
-| `MYTUBE_SLICE_SIZE` | Размер куска для `nginx slice` | `1m` | Опционально |
-| `MYTUBE_CACHE_LOCK_TIMEOUT` | `proxy_cache_lock_timeout` — держать заметно выше дефолта nginx (Pitfall 11) | `20s` | Опционально |
-| `MYTUBE_EDGE_PORT` | Порт, на котором edge слушает на хосте | `8080` | Опционально |
-| `MYTUBE_BACKUP_DIR` | Каталог дампов внутри контейнера `db-backup`, смонтирован на `./data/backups` хоста | `/backups` | Опционально |
-| `MYTUBE_BACKUP_KEEP_DAYS` | Сколько дней хранить дампы перед удалением | `7` | Опционально |
-| `MYTUBE_WARM_BYTES` | Предел прогрева кэша в байтах (вердикт M5) | `268435456` (половина зоны 512m) | Опционально |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Postgres credentials, consumed directly by the `postgres:16-alpine` image | `mytube` / `change-me...` / `mytube` | The password must be generated |
+| `MYTUBE_SECURE_LINK_SECRET` | Signing secret for `/blob/` addresses | — | Must be generated: `openssl rand -hex 32`. **Never committed** — `.env` is in `.gitignore` |
+| `MYTUBE_SIGN_TTL_SECONDS` | Signature lifetime, seconds | `43200` (12h) | Optional |
+| `MYTUBE_DATABASE_URL` | Postgres connection string, must match `POSTGRES_*` above | `postgresql://mytube:...@db:5432/mytube` | Must be kept in sync with `POSTGRES_*` |
+| `MYTUBE_S3_ENDPOINT` | The storage's S3 endpoint. If it names an external host, the external storage is used | `http://storage:8333` | Optional |
+| `MYTUBE_S3_UPSTREAM` | `host:port` of that same storage, used by edge's own upstream block to the storage | `storage:8333` | **Must change together with `MYTUBE_S3_ENDPOINT`** — see the warning below |
+| `MYTUBE_S3_BUCKET` / `MYTUBE_S3_REGION` | Bucket name and an arbitrary non-empty region | `mytube` / `mytube` | Optional |
+| `MYTUBE_S3_KEY` / `MYTUBE_S3_SECRET` | Credentials for the `mytube` S3 identity (Admin/Read/Write/List/Tagging) | — | Must be generated: `openssl rand -hex 16` / `openssl rand -hex 32` |
+| `MYTUBE_DELETE_GRACE_SECONDS` | Window between the `410` response and the object's physical deletion | `300` (5 min) | Optional |
+| `MYTUBE_CACHE_MODE` | `memory` or `off` — selects `edge/cache-${MYTUBE_CACHE_MODE}.conf.template` | `memory` | Optional, see "Cache modes" |
+| `MYTUBE_CACHE_SIZE` | Cache zone size in tmpfs | `512m` | Optional |
+| `MYTUBE_CACHE_INACTIVE` | Eviction window for chunks nobody has touched | `120s` | Optional |
+| `MYTUBE_SLICE_SIZE` | Chunk size for `nginx slice` | `1m` | Optional |
+| `MYTUBE_CACHE_LOCK_TIMEOUT` | `proxy_cache_lock_timeout` — keep noticeably above nginx's own default | `20s` | Optional |
+| `MYTUBE_EDGE_PORT` | Host port edge listens on | `8080` | Optional |
+| `MYTUBE_BACKUP_DIR` | Dump directory inside the `db-backup` container, bind-mounted to `./data/backups` on the host | `/backups` | Optional |
+| `MYTUBE_BACKUP_KEEP_DAYS` | How many days to keep dumps before deleting them | `7` | Optional |
+| `MYTUBE_WARM_BYTES` | Cache warm-up limit in bytes | `268435456` (half of the 512m zone) | Optional |
+| `MYTUBE_PUBLIC_BASE_URL` | The address viewers reach, scheme included, no trailing slash | — | **Required — the service refuses to start without it.** Written into every copied link, so it is never derived from a browser's own address bar |
+| `MYTUBE_SHARE_HOST_PATH` | Host path of the mounted network share, bind-mounted read-only into `api` at `/share` | `./ingest` | Optional |
+| `MYTUBE_UI_PORT` | Host port the interface is published on | `8081` | Optional |
+| `MYTUBE_UI_BIND` | Host address the interface port binds to | `127.0.0.1` | Optional, but see "Interface" below before changing it |
+| `MYTUBE_STORAGE_QUOTA_BYTES` | Configured storage quota in bytes, `0` means no quota enforced — used only for the interface's usage figure | `0` | Optional |
 
-**Про `MYTUBE_S3_UPSTREAM` отдельно (вердикт M7).** `api` ходит в
-хранилище по `MYTUBE_S3_ENDPOINT`, `edge` — по `MYTUBE_S3_UPSTREAM`. Это
-два разных адреса на одно и то же хранилище: если сменить один и забыть
-второй, загрузка (через `api`) и выдача (через `edge`) уйдут в разные
-места, и поломка вскроется не сразу, а на первом же просмотре нового
-тайтла. При переходе на внешнее хранилище (D-16) **меняются обе
-переменные одновременно**.
+**About `MYTUBE_S3_UPSTREAM` specifically.** `api` reaches storage through
+`MYTUBE_S3_ENDPOINT`; `edge` reaches it through `MYTUBE_S3_UPSTREAM`. These
+are two different addresses pointing at the same storage: change one and
+forget the other, and uploads (through `api`) and playback (through `edge`)
+end up talking to two different places — a break that does not surface
+immediately, only the first time someone opens a newly added title. Both
+variables change together whenever the storage endpoint changes.
 
-Отдельное ограничение фазы 1: внешнее хранилище обязано быть достижимо
-**только из внутренней сети владельца** по обычному HTTP. D-38 требует,
-чтобы хранилище было недостижимо снаружи — публичный S3-эндпоинт нарушал
-бы это требование сам по себе, независимо от прочих настроек.
+**External storage endpoint.** Two more variables exist for this case but
+are not required in `.env` because they default to values matching the
+bundled storage service, so a fresh clone still starts with neither set:
+`MYTUBE_S3_SCHEME` (`http` or `https`; the bundled storage is plain HTTP,
+an external endpoint is normally HTTPS) and `MYTUBE_S3_HOST` (the bare
+hostname of the external endpoint, deliberately **without** a port — edge
+uses it as both the TLS SNI name and the `Host` header it sends upstream,
+and a hostname with a port attached would not match either). Set all four
+variables together (`MYTUBE_S3_ENDPOINT`, `MYTUBE_S3_UPSTREAM`,
+`MYTUBE_S3_SCHEME`, `MYTUBE_S3_HOST`) when pointing this stack at storage
+that is not the bundled one.
+
+A separate constraint: an external storage endpoint must be reachable
+**only from the owner's own internal network**. Nothing in this stack
+enforces bucket-level access control — storage privacy rests on the bucket
+being unreachable from outside, and a public S3 endpoint with anonymous
+read would break that on its own, independent of every other setting here.
+
+## Network share
+
+The share this stack browses and adds files from is mounted on the **host**
+and bind-mounted read-only into the `api` container at a single mount
+point — the container cannot mount a CIFS/NFS share for itself. Set
+`MYTUBE_SHARE_HOST_PATH` to the host path of an already-mounted share
+before starting the stack.
+
+**Linux**, an already-mounted CIFS share under `/mnt`:
+
+```bash
+MYTUBE_SHARE_HOST_PATH=/mnt/media-share
+```
+
+**Windows**, a share already mapped to a drive letter (map it first with
+Windows' own "Map network drive", then point at that drive):
+
+```bash
+MYTUBE_SHARE_HOST_PATH=//./Z:
+```
+
+The share is bind-mounted read-only (`:ro`): nothing this stack does can
+write back to it, including a failed add — the source file on the share is
+never touched by any code path.
+
+## Interface
+
+The web interface is published on its own host port
+(`MYTUBE_UI_PORT`, default `8081`), separate from the edge port that serves
+video. It is bound to `127.0.0.1` (loopback) by default — reachable only
+from the machine running the stack, not from the LAN.
+
+**The public reverse proxy must never forward this port.** It points at the
+edge port only (see "What to expose to the reverse proxy" below); the
+interface is not meant to be reachable from outside the owner's own network
+at all.
+
+**Widening `MYTUBE_UI_BIND` to a LAN address is a deliberate, informed act,
+not a convenience toggle.** Every route on the interface port is
+unauthenticated, including the one that deletes a video immediately —
+anyone on that network, any browser open to any page, can reach every one
+of those routes. The loopback default is the only thing standing between
+those routes and the network; widening it hands that boundary away
+knowingly. The service logs the same warning at startup whenever the bind
+address is not loopback.
+
+## Storage capacity
+
+The bundled storage service (SeaweedFS) is configured with no fixed volume
+count — capacity follows the host's own free disk space, volumes are grown
+lazily as needed, and each individual volume is capped at 30 GB. In
+practice this means the collection's real ceiling is whatever disk space is
+free on the host running the `storage` container's data volume, not a
+number this stack imposes on top of that.
+
+When the host genuinely runs low on disk, adds start failing for a reason
+that has nothing to do with the file being added — the add's own pre-flight
+free-space check may still pass (it compares against the ephemeral work
+directory, not the storage backend), so a failure here can look unrelated
+to capacity at first. Check the host's own free disk space for the volume
+backing the `storage` service before assuming anything else is wrong.
+
+To change the per-volume ceiling, edit `-master.volumeSizeLimitMB` in
+`storage/entrypoint.sh` and recreate the service:
+
+```bash
+docker compose up -d --force-recreate storage
+```
+
+**Reading current usage** does not require running anything: the library
+screen's header shows the total bytes used (and free bytes, once
+`MYTUBE_STORAGE_QUOTA_BYTES` is set to a real quota). For detail beyond the
+total — which objects nothing in the catalog points at, and which catalog
+addresses point at objects the bucket no longer has — run:
+
+```bash
+docker compose exec api python -m orchestrator.cli storage-audit
+```
+
+This command only reads; it never deletes or modifies anything. When it
+finds unreferenced objects, it prints the exact command to remove each one
+through your own storage client — reclaiming that space is left to the
+operator, on purpose, rather than automated on the strength of a
+comparison that could be run against the wrong storage pairing.
 
 ## Prerequisites
 
@@ -92,6 +198,10 @@ Desktop installs place it under a per-user directory
 added automatically. Add that directory to `PATH`, or open a fresh
 terminal after installing.
 
+The orchestrator image now carries `ffmpeg` and `ffprobe` internally — an
+add through the interface or the CLI needs nothing installed on the host
+for that step.
+
 Past Docker itself, the commands in this document run a handful of other
 binaries directly on the host, not inside a container. On a machine with
 only Docker Desktop and Git for Windows installed:
@@ -105,59 +215,58 @@ only Docker Desktop and Git for Windows installed:
 
 This document's own promise is that every command in it was either really
 run or is explicitly marked as not. Installing Docker Desktop itself and
-pulling this stack's four images for the first time have not been walked
-by following this document on a machine that started with neither —
+pulling this stack's images for the first time have not been walked by
+following this document on a machine that started with neither —
 `docker compose up -d --wait` below has only ever run where the images
 were already present. A registry lookup for each image reference
-(`postgres:16-alpine`, `chrislusf/seaweedfs:3.97`, `nginx:1.27-alpine`,
-`python:3.13-slim`) confirms each one still resolves to a real,
-`linux/amd64`-capable manifest — that is evidence the pull should succeed,
-not a record that it has.
+(`postgres:16-alpine`, `chrislusf/seaweedfs:3.97`, `nginx:1.27-alpine`)
+confirms each one still resolves to a real, `linux/amd64`-capable manifest
+— that is evidence the pull should succeed, not a record that it has.
 
-## Порядок запуска
+## Startup order
 
 ```bash
 cp .env.example .env
-# заполнить .env — как минимум MYTUBE_SECURE_LINK_SECRET, MYTUBE_S3_KEY,
-# MYTUBE_S3_SECRET, POSTGRES_PASSWORD (см. таблицу выше)
+# fill in .env -- at minimum MYTUBE_SECURE_LINK_SECRET, MYTUBE_S3_KEY,
+# MYTUBE_S3_SECRET, POSTGRES_PASSWORD, MYTUBE_PUBLIC_BASE_URL
+# (see the variable table above)
 
 docker compose up -d --wait
 ```
 
-Порядок именно такой — **сначала поднять стек, а не «сначала накатить
-миграции»** (вердикты M1, m2). База живёт в этом же compose, поэтому
-накатить миграции до её подъёма физически невозможно, а отдельного
-одноразового сервиса миграций в стеке намеренно нет: `docker compose up
---wait` считает выход контейнера отказом, и разовый init-сервис сломал
-бы именно эту команду. Вместо этого `docker-entrypoint.sh` сервиса `api`
-делает `alembic upgrade head`, затем заводит бакет хранилища
-(`ensure_bucket()`) при **каждом** старте — обе операции идемпотентны,
-рестарт безопасен.
+The order matters — **bring the stack up first, do not "run migrations
+first"**. The database lives in this same compose project, so migrating
+before it comes up is not physically possible, and there is deliberately no
+separate one-shot migration service in the stack: `docker compose up
+--wait` treats a container exiting as a failure, and a one-shot init
+service would trip exactly that check. Instead, the `api` service's
+`docker-entrypoint.sh` runs `alembic upgrade head`, then ensures the
+storage bucket exists (`ensure_bucket()`) on **every** start — both
+operations are idempotent, so a restart is safe.
 
-Проверить, что всё поднялось:
+Check that everything came up:
 
 ```bash
-docker compose ps            # все сервисы — healthy
-docker compose logs api      # ищем строку про успешную миграцию
+docker compose ps            # every service -- healthy
+docker compose logs api      # look for a line about a successful migration
 ```
 
-Если `ensure_bucket()` не смог завести бакет через S3 API, точная команда
-штатного пути для выбранного хранилища (SeaweedFS) есть в
-`docs/experiments/07-object-storage.md` — выполнить её и перезапустить
-`api`.
+If `ensure_bucket()` could not create the bucket over the S3 API, the exact
+manual command for the chosen storage backend (SeaweedFS) is in
+`docs/experiments/07-object-storage.md` — run it, then restart `api`.
 
-Завести первый тайтл:
+Add a first title from the command line:
 
 ```bash
 docker compose exec api python -m orchestrator.cli add \
-  --file /ingest/<файл в src/ingest/> --name "<название>"
+  --file /ingest/<file under src/ingest/> --name "<title>"
 ```
 
-Команда напечатает адрес вида `/v/<слаг>`.
+The command prints an address of the form `/v/<slug>`.
 
 ## Windows / WSL2 deployment notes
 
-Found while closing out the phase-1 acceptance gate on a real Windows host.
+Found while closing out an earlier acceptance gate on a real Windows host.
 None of this is Linux-specific advice — it only applies if the compose
 stack runs on Windows with Docker Desktop's WSL2 backend. None of the
 commands in this section have been walked by following this document
@@ -209,8 +318,8 @@ to the reverse proxy host or the LAN subnet, as the default form above
 does; keep the unscoped form only for the case where the edge is
 genuinely meant to be reachable from anywhere, which this project's own
 design does not call for — external traffic is already meant to arrive
-through the owner's own reverse proxy (see "Что прокинуть в
-реверс-прокси" below), not directly at this port.
+through the owner's own reverse proxy (see "What to expose to the reverse
+proxy" below), not directly at this port.
 
 On one already-configured deployment, a Hyper-V rule matching this exact
 command — same name, display name, and that VM's own creator ID — is
@@ -244,36 +353,37 @@ client ("throne") had to be switched from its default mode to TUN mode
 before the address worked at all. If a friend reports the link does not
 load, ask about their VPN client's mode before debugging the server.
 
-## Что прокинуть в реверс-прокси
+## What to expose to the reverse proxy
 
-Наружу через внешний реверс-прокси владельца (D-19/D-20) выставляются
-**ровно четыре** пути: `/v/`, `/p/`, `/blob/` и `/refresh/`. Всё
-остальное — админка, консоль хранилища, `/healthz` — остаётся в LAN
-(D-21). Отдельного пути доступа изнутри LAN в обход внешнего канала нет
-намеренно: один адрес и один кодовый путь для всех, включая владельца
-(D-22) — так владелец видит поломку первым, теми же глазами, что и
-друзья.
+Through the owner's own external reverse proxy, **exactly four** paths are
+exposed: `/v/`, `/p/`, `/blob/` and `/refresh/`. Everything else — any
+admin surface, the storage console, `/healthz`, and the web interface
+described above — stays inside the LAN. There is deliberately no separate
+access path from inside the LAN that bypasses the external channel: one
+address and one code path for everyone, including the owner — so the owner
+sees a break first, through the same eyes as everyone else.
 
-**Обязательная проверка: внешний прокси не должен буферизовать ответ и
-обязан пропускать `Range` целиком.** Это классическая грабля двух nginx
-подряд — если внешний прокси собирает весь ответ перед отправкой клиенту,
-`slice`-кэш работает вхолостую, а сам ответ на Range-запрос вернётся
-целым файлом вместо `206`. Проверяется одной командой через внешний
-домен:
+**Required check: the external proxy must not buffer the response, and
+must pass `Range` through untouched.** This is the classic pitfall of two
+nginx instances in a row — if the external proxy buffers the whole
+response before forwarding it to the client, the slice cache does nothing
+useful, and the response to a Range request comes back as the whole file
+instead of a `206`. Check with one command against the external domain:
 
 ```bash
-curl -r 0-1048575 -D- -o /dev/null "https://<домен>/blob/<edition_id>.mp4?exp=...&sig=..."
+curl -r 0-1048575 -D- -o /dev/null "https://<domain>/blob/<edition_id>.mp4?exp=...&sig=..."
 ```
 
-Ожидается код `206` и заголовок `Content-Range` вида
-`bytes 0-1048575/<полный размер>`. Код `200` с целым файлом означает, что
-внешний прокси буферизует — чинить нужно на его стороне, не в compose.
+Expect a `206` status and a `Content-Range` header shaped like
+`bytes 0-1048575/<full size>`. A `200` with the whole file means the
+external proxy is buffering — fix that on its side, not in this compose
+project.
 
 ## Verifying served video is actually decodable
 
 A `200`/`206` with the right `Content-Length` is proof the delivery
-mechanics work -- it is **not** proof the bytes are playable video. The
-phase-1 acceptance record was once validated against 3 MiB of random bytes
+mechanics work -- it is **not** proof the bytes are playable video. An
+earlier acceptance record was once validated against 3 MiB of random bytes
 that happened to have a plausible size; the delivery chain looked perfect
 and nothing would have opened in a player (see
 `docs/experiments/02-05-avpro-redirect-and-cache.md`). Use
@@ -282,133 +392,132 @@ assert the served bytes actually decode as video, not merely that a
 request for them succeeded:
 
 ```bash
-bash tools/check_decodable.sh "https://<домен>/blob/<edition_id>.mp4?exp=...&sig=..."
+bash tools/check_decodable.sh "https://<domain>/blob/<edition_id>.mp4?exp=...&sig=..."
 ```
 
 `ffprobe` on this machine reorders `-of csv=p=0` output, so the script
 parses `-of json` by field name instead -- do not "simplify" it back to csv.
 
-## Как проверить кэш
+## Checking the cache
 
-Прогреть кэш **непосредственно перед сеансом** (D-27):
-
-```bash
-docker compose exec api python -m orchestrator.cli cache-warm <слаг>
-```
-
-Записать текущее время (для `--since` ниже), провести сеанс, затем
-посчитать:
+Warm the cache **right before a viewing session**:
 
 ```bash
-docker compose exec api python -m orchestrator.cli cache-report --since <записанное время>
+docker compose exec api python -m orchestrator.cli cache-warm <slug>
 ```
 
-Критерий приёмки (D-28): **ноль кусков с более чем одним запросом к
-хранилищу**, то есть код возврата `0`. Доля `HIT` печатается справочно —
-приёмочным числом она не является: при N синхронных зрителях на холодном
-кэше её теоретический потолок — `(N-1)/N`, то есть 67% на троих.
+Note the current time (for `--since` below), run the session, then count:
 
-**Ненулевой код `cache-report` без списка кусков-нарушителей означает не
-«всё плохо», а «мерить нечем»** (вердикт B2) — например, лог пуст или
-`--since` отфильтровал всё. В этом случае первым делом проверить, что в
-`edge/nginx.conf.template` для `location ~ ^/blob/` включена директива
-`log_subrequest on;` — без неё nginx не логирует slice-подзапросы вообще,
-и `cache-report` физически нечего разбирать.
+```bash
+docker compose exec api python -m orchestrator.cli cache-report --since <recorded time>
+```
 
-**Честная арифметика прогрева (вердикт M5).** Зона кэша 512 МБ (D-23) при
-профиле 1080p ~6 Мбит/с вмещает около 11 минут видео, а `inactive` ~2
-минуты (D-24) выкидывает всё, к чему не обращались это время. Поэтому
-`cache-warm` по умолчанию греет только начало файла — это единственное,
-что прогрев реально лечит (стартовый стойл), — и по той же причине
-обещание D-26 «перезапуск хранилища посреди вечера незаметен» действует
-ровно в пределах окна `inactive` после того, как хранилище снова стало
-доступно, а не бесконечно долго.
+Acceptance criterion: **zero chunks fetched from storage more than once**,
+i.e. an exit code of `0`. The `HIT` ratio prints for reference only — it is
+not the acceptance number itself: with N simultaneous viewers on a cold
+cache, its theoretical ceiling is `(N-1)/N`, i.e. 67% for three viewers.
 
-**При интерпретации лога вручную:** `cache-warm` шлёт свои собственные
-точечные Range-запросы, и каждый из них `cache-report` привязывает к
-куску, который он реально запросил, — попадание прогрева в окно измерения
-стоит не больше одного запроса к хранилищу на кусок, а не ложное
-нарушение. Причина по-прежнему мерить сеанс от напечатанной метки —
-увидеть сам сеанс, а не растянутый на весь прогрев начальный отрезок
-файла. Строки, записанные до обновления edge, которое добавило это поле
-смещения, привязать нельзя — `cache-report` считает их отдельно, и если
-всё окно состоит только из них, сообщает «недостаточно данных», а не
-чистое прохождение. `cache-warm` печатает инструкцию с `--since` сам после
-каждого прогона.
+**A non-zero `cache-report` exit code with no offending-chunk list does not
+mean "everything is wrong" — it means "there is nothing to measure".** For
+example, the log is empty, or `--since` filtered everything out. In that
+case, first check that `location ~ ^/blob/` in
+`edge/nginx.conf.template` has `log_subrequest on;` enabled — without it
+nginx never logs the slice subrequests at all, and `cache-report` has
+nothing to parse.
 
-**Замечено при проверке на живом стеке:** `$time_iso8601` в логе имеет
-разрешение в одну секунду. Если записать `--since` и тут же, в ту же
-секунду, начать сеанс — хвост прогрева и начало сеанса могут попасть в
-один и тот же таймстемп и дать точно такое же ложное нарушение. На
-реальном сеансе (минуты между прогревом и тем, когда компания
-действительно смотрит) это не встречается — упомянуто здесь только
-потому, что при автоматической проверке этого файла воспроизвелось
-у самого исполнителя плана.
+**Honest arithmetic behind the warm-up.** The 512 MB cache zone at a
+1080p/~6 Mbps profile holds about 11 minutes of video, and the `inactive`
+window (~2 minutes by default) evicts anything nobody touched for that
+long. That is why `cache-warm` only warms the start of the file by
+default — that is the one thing warming actually fixes (start-of-playback
+stall) — and for the same reason, the promise that "storage restarting
+mid-session goes unnoticed" holds only for the length of the `inactive`
+window after storage becomes reachable again, not indefinitely.
 
-## Бэкап и восстановление
+**When reading the log by hand:** `cache-warm` sends its own point Range
+requests, and `cache-report` attributes each of them to the chunk it
+actually asked for — a warm-up landing inside the measurement window costs
+at most one storage request per chunk, not a false violation. The reason to
+still measure a session starting from the printed timestamp is to see the
+session itself, not a start-of-file segment stretched out by the whole
+warm-up. Lines recorded before the edge update that added this offset
+field cannot be attributed at all — `cache-report` counts them separately,
+and if the whole window consists only of them, it reports "not enough
+data" rather than a clean pass. `cache-warm` prints the `--since`
+instruction itself after every run.
 
-**Почему это есть уже в фазе 1** (D-15): видеофайлы можно залить заново,
-историю слагов — нет. Сервис `db-backup` в `docker-compose.yml` раз в
-сутки снимает `pg_dump` в сжатый файл с датой в имени, кладёт в
-`./data/backups` на хосте (то же дерево `/data/`, что уже в
-`.gitignore`) и удаляет дампы старше `MYTUBE_BACKUP_KEEP_DAYS` дней.
+**Observed during a live check:** `$time_iso8601` in the log has one-second
+resolution. Recording `--since` and starting a session in the same second
+can put the tail of a warm-up and the start of a session in the same
+timestamp, producing the same false violation. This does not come up during
+a real session (minutes pass between warming and the group actually
+watching) — mentioned here only because it reproduced once while checking
+this document automatically.
 
-Разовый прогон вручную (например, прямо перед рискованной операцией):
+## Backup and restore
+
+**Why this exists this early:** video files can be re-added; slug history
+cannot. The `db-backup` service in `docker-compose.yml` takes a `pg_dump`
+once a day into a compressed, date-named file, drops it into
+`./data/backups` on the host (the same `/data/` tree already in
+`.gitignore`), and deletes dumps older than `MYTUBE_BACKUP_KEEP_DAYS` days.
+
+A one-off manual run (for example, right before a risky operation):
 
 ```bash
 docker compose exec db-backup bash /backup/backup.sh --once
 ```
 
-**Восстановление** (проверено на живом стеке в реальном случае — дамп
-восстановлен поверх **непустой** базы, все слаги вернулись, ссылка
-играет):
+**Restore** (verified on a live stack in a real case — a dump restored over
+a **non-empty** database, every slug came back, the link played):
 
 ```bash
-# 1. Остановить api. Это не формальность: шаг 3 роняет таблицы, и api,
-#    держащий к ним соединения, на этом завершится.
+# 1. Stop api. Not a formality: step 3 drops tables, and api, holding
+#    connections to them, would exit on its own at that point anyway.
 docker compose stop api
 
-# 2. Убедиться, что база поднята
+# 2. Make sure the database is up
 docker compose up -d --wait db
 
-# 3. Восстановить последний дамп.
-#    ON_ERROR_STOP=1 обязателен: без него psql проглатывает все ошибки и
-#    выходит с кодом 0, то есть полностью провалившееся восстановление
-#    рапортует об успехе.
+# 3. Restore the latest dump.
+#    ON_ERROR_STOP=1 is required: without it psql swallows every error and
+#    exits 0, so a completely failed restore would report success.
 LATEST=$(docker compose exec -T db-backup sh -c 'ls -t /backups/mytube-*.sql.gz | head -1')
 docker compose exec -T db-backup sh -c "gunzip -c $LATEST" \
   | docker compose exec -T db psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
-echo "код возврата: $?"   # 0 — восстановлено; иначе НЕ восстановлено
+echo "exit code: $?"   # 0 -- restored; anything else -- NOT restored
 
-# 4. Поднять остальное. api без этого шага не вернётся сам.
+# 4. Bring the rest back up. api will not come back on its own without this.
 docker compose up -d --wait
 ```
 
-Дамп снимается с `pg_dump --clean --if-exists`, поэтому он самодостаточен:
-кладётся и на пустую базу, и поверх существующей. Это важно, потому что
-восстанавливаются, когда данные **есть** и они неверны, а не когда их нет.
+The dump is taken with `pg_dump --clean --if-exists`, so it is
+self-contained: it applies cleanly to an empty database and over an
+existing one alike. That matters because a restore is normally needed when
+data **exists** and is wrong, not when it is absent.
 
-**Дампы, снятые до появления этого флага, поверх непустой базы не лягут** —
-упадут на первом `CREATE TABLE ... already exists`. Снимите свежий дамп
-(`--once` выше) и проверьте, что восстановление проходит, до того как он
-понадобится всерьёз.
+**Dumps taken before this flag existed will not apply over a non-empty
+database** — they fail on the first `CREATE TABLE ... already exists`.
+Take a fresh dump (`--once` above) and confirm the restore works before it
+is ever needed for real.
 
-**Под Git Bash на Windows** команды с путём внутри контейнера требуют
-префикса `MSYS_NO_PATHCONV=1`, иначе `/backup/backup.sh` превращается в
+**Under Git Bash on Windows**, commands with a path inside the container
+need the `MSYS_NO_PATHCONV=1` prefix, or `/backup/backup.sh` turns into
 `C:/Program Files/Git/backup/backup.sh`.
 
-## Режимы кэша
+## Cache modes
 
-`MYTUBE_CACHE_MODE` выбирает между `edge/cache-memory.conf.template` и
-`edge/cache-off.conf.template` (DELIV-08):
+`MYTUBE_CACHE_MODE` selects between `edge/cache-memory.conf.template` and
+`edge/cache-off.conf.template`:
 
-- **`memory`** — рабочий режим. `proxy_cache` в tmpfs (`/dev/shm`),
-  ключ кэша `$uri$slice_range` (без `$arg_sig`/`$arg_exp` — иначе кэш
-  делился бы по подписи каждого зрителя, и общий просмотр компанией не
-  экономил бы ни одного запроса к хранилищу).
-- **`off`** — кэш выключен полностью. Нужен для диагностики: если
-  поведение (например, число запросов к хранилищу) отличается только в
-  `memory`, проблема в самом кэше, а не в `slice`/подписи/хранилище.
+- **`memory`** — the working mode. `proxy_cache` in tmpfs (`/dev/shm`),
+  cache key `$uri$slice_range` (without `$arg_sig`/`$arg_exp` — otherwise
+  the cache would be partitioned per viewer's own signature, and a group
+  watching together would save nothing on storage requests).
+- **`off`** — the cache is fully disabled. Useful for diagnosis: if some
+  behavior (for example, the number of storage requests) differs only
+  under `memory`, the cache itself is the problem, not `slice`, the
+  signature, or storage.
 
-Переключение — сменить `MYTUBE_CACHE_MODE` в `.env` и перезапустить
-`edge`: `docker compose up -d --wait edge`.
+To switch, change `MYTUBE_CACHE_MODE` in `.env` and restart `edge`:
+`docker compose up -d --wait edge`.
