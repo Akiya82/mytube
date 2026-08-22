@@ -119,6 +119,34 @@ async def test_reaper_does_not_touch_titles_before_grace_expires(raw_conn, delet
     assert row["status"] == "pending_delete"
 
 
+async def test_reaper_retries_next_cycle_when_an_object_delete_fails(raw_conn, monkeypatch):
+    """A storage outage during a reap must not end with the title recorded
+    as deleted and the bytes still in the bucket: nothing would ever retry,
+    and the object becomes an orphan no audit can attribute.
+    """
+    title_id, object_key = await _create_title(
+        raw_conn, "Reaper Outage", "reaper-outage-slug"
+    )
+    await queries.mark_for_delete(raw_conn, title_id, grace_seconds=0)
+
+    def failing_delete(key):
+        raise RuntimeError("storage is down")
+
+    monkeypatch.setattr(reaper, "delete_object", failing_delete)
+    await reaper.reap_once(_SinglePoolLike(raw_conn))
+
+    row = await queries.resolve_slug(raw_conn, "reaper-outage-slug")
+    assert row["status"] == "pending_delete"
+
+    deleted = []
+    monkeypatch.setattr(reaper, "delete_object", deleted.append)
+    await reaper.reap_once(_SinglePoolLike(raw_conn))
+
+    assert object_key in deleted
+    row_after = await queries.resolve_slug(raw_conn, "reaper-outage-slug")
+    assert row_after["status"] == "deleted"
+
+
 class _SingleAcquireCtx:
     def __init__(self, conn):
         self._conn = conn
