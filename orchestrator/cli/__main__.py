@@ -23,7 +23,7 @@ from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media.add import plan_slug
 from orchestrator.slugs import SlugError, normalize_slug, pick_unique_slug
-from orchestrator.storage import put_object_from_file
+from orchestrator.storage import delete_object, put_object_from_file
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -64,20 +64,55 @@ async def _add(file: Path, name: str, explicit_slug: str | None, reuse: bool) ->
         # calls the exact same sequence, in the exact same order, so the
         # two never drift. The tombstone-then-reuse decision below and its
         # printed messages are unchanged from before the extraction.
-        try:
-            slug_plan = await plan_slug(conn, name, explicit_slug)
-        except SlugError as exc:
-            typer.echo(str(exc), err=True)
-            raise typer.Exit(1)
+        async def planned():
+            try:
+                return await plan_slug(conn, name, explicit_slug)
+            except SlugError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(1)
 
-        if slug_plan.is_tombstone and not reuse:
-            typer.echo(
-                f"Слаг {slug_plan.candidate!r} принадлежит удалённому тайтлу -- адрес "
-                "мог разойтись по мирам. Повторите с --reuse-slug для "
-                "явного подтверждения.",
-                err=True,
+        def refuse_tombstone(plan) -> None:
+            if plan.is_tombstone and not reuse:
+                typer.echo(
+                    f"Слаг {plan.candidate!r} принадлежит удалённому тайтлу -- адрес "
+                    "мог разойтись по мирам. Повторите с --reuse-slug для "
+                    "явного подтверждения.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+
+        # Planned twice on purpose. This first pass is a pre-flight with no
+        # lock held: an unusable name, or a tombstone the operator has not
+        # confirmed, should be refused before the upload spends minutes on
+        # a file that is not going to get a row. It decides nothing -- the
+        # plan that reaches the catalog is the one read under the lock.
+        refuse_tombstone(await planned())
+
+        edition_id = uuid.uuid4()
+        object_key = f"{edition_id}.mp4"
+        put_object_from_file(str(file), object_key)
+
+        # The upload deliberately sits *outside* this transaction. The
+        # advisory lock is shared with the web add route, and holding it
+        # across a multi-gigabyte upload would stall every add made through
+        # the interface for the whole duration. What has to be inside it is
+        # the read-and-insert pair -- see create_title_with_edition's
+        # docstring for the race a slug planned before the lock leaves open.
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1)", queries.SLUG_CLAIM_LOCK_KEY
             )
-            raise typer.Exit(1)
+            slug_plan = await planned()
+            if slug_plan.is_tombstone and not reuse:
+                # Another process tombstoned this slug between the
+                # pre-flight and the lock. Rare -- but the object is
+                # already in the bucket and no row will ever point at it.
+                delete_object(object_key)
+                refuse_tombstone(slug_plan)
+
+            await queries.create_title_with_edition(
+                conn, name, slug_plan.chosen, edition_id, object_key
+            )
 
         if slug_plan.is_tombstone:
             # --reuse-slug: use the exact requested slug, no suffixing --
@@ -93,14 +128,6 @@ async def _add(file: Path, name: str, explicit_slug: str | None, reuse: bool) ->
             typer.echo(
                 f"Предупреждение: похожий слаг уже занят: {', '.join(slug_plan.similar)}"
             )
-
-        edition_id = uuid.uuid4()
-        object_key = f"{edition_id}.mp4"
-        put_object_from_file(str(file), object_key)
-
-        await queries.create_title_with_edition(
-            conn, name, slug_plan.chosen, edition_id, object_key
-        )
 
         typer.echo(f"/v/{slug_plan.chosen}")
     finally:
@@ -119,17 +146,26 @@ async def _rename(old_slug: str, new_name: str) -> None:
     conn = await _connect()
     try:
         candidate = _candidate_slug(None, new_name)
-        taken = await queries.taken_slugs(conn)
-        chosen, similar = pick_unique_slug(candidate, taken)
+
+        # Same lock, same reason, same shape as the web rename route: the
+        # taken_slugs read and the slug_history insert have to be one
+        # serialized pair, or a concurrent add claims the address this
+        # rename has just decided is free.
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1)", queries.SLUG_CLAIM_LOCK_KEY
+            )
+            taken = await queries.taken_slugs(conn)
+            chosen, similar = pick_unique_slug(candidate, taken)
+
+            try:
+                await queries.rename_slug(conn, old_slug, chosen)
+            except LookupError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(1)
 
         if similar:
             typer.echo(f"Предупреждение: похожий слаг уже занят: {', '.join(similar)}")
-
-        try:
-            await queries.rename_slug(conn, old_slug, chosen)
-        except LookupError as exc:
-            typer.echo(str(exc), err=True)
-            raise typer.Exit(1)
 
         typer.echo(f"/v/{old_slug} по-прежнему работает")
         typer.echo(f"/v/{chosen} -- новый адрес")

@@ -3,6 +3,7 @@ put), a real Postgres runs behind the CLI's own connection -- `_add`,
 `_rename`, `_remove` are called directly (bypassing typer's argument
 parsing, which has nothing to do with the behavior under test here).
 """
+import asyncio
 import uuid
 
 import pytest
@@ -175,3 +176,29 @@ async def test_remove_output_names_undo_and_purge_now_in_the_interface(
     assert "не окно отмены" not in out
     assert "Отменить удаление" in out
     assert "веб-интерфейсе" in out
+
+
+async def test_two_cli_adds_racing_on_one_name_get_two_different_addresses(
+    source_file, uploaded_objects
+):
+    """The CLI runs against the same live service the interface does
+    (`docker compose exec api`), so a CLI add and a web add -- or two CLI
+    adds -- really can read the free-slug set at the same moment. Without
+    the read and the insert serialized, both claim the same address and
+    the first title silently stops resolving at the address it printed.
+    """
+    await asyncio.gather(
+        cli._add(source_file, "CLI Slug Race", None, False),
+        cli._add(source_file, "CLI Slug Race", None, False),
+    )
+
+    conn = await cli._connect()
+    try:
+        rows = await conn.fetch(
+            "SELECT slug FROM slug_history WHERE slug LIKE 'cli-slug-race%'"
+        )
+    finally:
+        await conn.close()
+
+    slugs = sorted(row["slug"] for row in rows)
+    assert slugs == ["cli-slug-race", "cli-slug-race-2"]
