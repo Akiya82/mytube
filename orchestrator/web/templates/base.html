@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}MyTube{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <nav class="site-nav" aria-label="primary">
+      <a class="site-nav__link" href="/add">{{ t("nav.share") }}</a>
+      <a class="site-nav__link" href="/library">{{ t("nav.library") }}</a>
+    </nav>
+
+    {# The real used/free figures land in a later plan (D-67) -- this slot
+       exists now, empty, so the header layout does not shift when it is
+       filled in. #}
+    <div class="site-header__storage" aria-live="polite"></div>
+
+    <div class="lang-switch">
+      <a
+        class="lang-switch__link{% if lang == 'en' %} lang-switch__link--active{% endif %}"
+        href="/lang/en?next={{ request.url.path | urlencode }}"
+      >{{ t("lang.en") }}</a>
+      <a
+        class="lang-switch__link{% if lang == 'ru' %} lang-switch__link--active{% endif %}"
+        href="/lang/ru?next={{ request.url.path | urlencode }}"
+      >{{ t("lang.ru") }}</a>
+    </div>
+  </header>
+
+  <main class="page">
+    <h1 class="page__heading">{% block heading %}{% endblock %}</h1>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

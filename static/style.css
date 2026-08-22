@@ -1,0 +1,270 @@
+/* Design tokens -- both palettes, computed contrast figures recorded in
+   02-UI-SPEC.md, not repeated here. Every rule below this block references
+   a custom property; no literal hex color appears anywhere past it. */
+:root {
+  /* Light palette (default, D-71) */
+  --surface-dominant: #FAFAF8;
+  --surface-secondary: #FFFFFF;
+  --surface-secondary-border: #E4E4E0;
+  --accent: #1D4ED8;
+  --destructive: #B42318;
+  --text-primary: #1A1A18;
+  --text-muted: #5B5B56;
+  --text-on-accent: #FFFFFF;
+  --text-on-destructive: #FFFFFF;
+
+  --status-preparing-bg: #FEF3C7;
+  --status-preparing-text: #92400E;
+  --status-failed-bg: #FEE4E2;
+  --status-failed-text: #B42318;
+  --status-info-bg: #DBEAFE;
+  --status-info-text: #1E3A8A;
+  --status-neutral-bg: #E4E4E0;
+  --status-neutral-text: #3F3F3A;
+
+  /* Spacing scale (multiples of 4 only) */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+
+  /* Type scale -- four sizes, two weights */
+  --text-label-size: 14px;
+  --text-label-weight: 400;
+  --text-label-line: 1.4;
+  --text-body-size: 16px;
+  --text-body-weight: 400;
+  --text-body-line: 1.5;
+  --text-heading-size: 20px;
+  --text-heading-weight: 600;
+  --text-heading-line: 1.2;
+  --text-display-size: 28px;
+  --text-display-weight: 600;
+  --text-display-line: 1.2;
+
+  --font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Dark palette (D-71) -- independently designed status tints, not the
+       light set darkened; dark-mode buttons use dark foreground text on
+       the accent/destructive fills (see 02-UI-SPEC.md Color). */
+    --surface-dominant: #121212;
+    --surface-secondary: #1E1E1E;
+    --surface-secondary-border: #33332E;
+    --accent: #6699FF;
+    --destructive: #FF6B6B;
+    --text-primary: #ECECE7;
+    --text-muted: #A6A69E;
+    --text-on-accent: #121212;
+    --text-on-destructive: #121212;
+
+    --status-preparing-bg: #3A2E13;
+    --status-preparing-text: #FBBF24;
+    --status-failed-bg: #3A1512;
+    --status-failed-text: #FF6B6B;
+    --status-info-bg: #12233A;
+    --status-info-text: #93C5FD;
+    --status-neutral-bg: #232320;
+    --status-neutral-text: #C9C9C0;
+  }
+}
+/* palette-end */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family);
+  background: var(--surface-dominant);
+  color: var(--text-primary);
+  font-size: var(--text-body-size);
+  font-weight: var(--text-body-weight);
+  line-height: var(--text-body-line);
+}
+
+a {
+  color: var(--accent);
+}
+
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--surface-secondary);
+  border-bottom: 1px solid var(--surface-secondary-border);
+}
+
+.site-nav {
+  display: flex;
+  gap: var(--space-md);
+}
+
+.site-nav__link {
+  padding: var(--space-sm) var(--space-sm);
+  text-decoration: none;
+  font-weight: var(--text-heading-weight);
+}
+
+.site-header__storage {
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+  flex: 1;
+  text-align: center;
+}
+
+.lang-switch {
+  display: flex;
+  gap: var(--space-sm);
+  font-size: var(--text-label-size);
+}
+
+.lang-switch__link {
+  padding: var(--space-xs) var(--space-sm);
+  text-decoration: none;
+  color: var(--text-muted);
+}
+
+.lang-switch__link--active {
+  color: var(--accent);
+  font-weight: var(--text-heading-weight);
+}
+
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--space-xl) var(--space-lg) var(--space-3xl);
+}
+
+.page__heading {
+  font-size: var(--text-display-size);
+  font-weight: var(--text-display-weight);
+  line-height: var(--text-display-line);
+  margin: 0 0 var(--space-2xl);
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  padding: var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-xl);
+  background: var(--surface-secondary);
+  border: 1px solid var(--surface-secondary-border);
+  border-radius: 4px;
+  font-size: var(--text-label-size);
+}
+
+.breadcrumb__segment {
+  text-decoration: none;
+  color: var(--accent);
+}
+
+.breadcrumb__segment--current {
+  color: var(--text-primary);
+}
+
+.breadcrumb__sep {
+  color: var(--text-muted);
+}
+
+.share-listing {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--surface-secondary-border);
+}
+
+.share-row {
+  border-bottom: 1px solid var(--surface-secondary-border);
+}
+
+.share-row__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  min-height: 40px;
+  padding: var(--space-sm) var(--space-xs);
+  text-decoration: none;
+  color: var(--text-primary);
+}
+
+.share-row--folder .share-row__link::before {
+  content: "\1F4C1";
+  margin-right: var(--space-xs);
+}
+
+.share-row__name {
+  font-size: var(--text-body-size);
+  overflow-wrap: anywhere;
+}
+
+.share-row__size {
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.empty-state {
+  padding: var(--space-xl) var(--space-lg);
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.empty-state__heading {
+  font-size: var(--text-heading-size);
+  font-weight: var(--text-heading-weight);
+  color: var(--text-primary);
+  margin: 0 0 var(--space-sm);
+}
+
+.empty-state__body {
+  font-size: var(--text-body-size);
+  margin: 0;
+}
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-lg);
+  border-radius: 4px;
+  margin-bottom: var(--space-xl);
+}
+
+.banner--error {
+  background: var(--status-failed-bg);
+  color: var(--status-failed-text);
+  border: 1px solid var(--destructive);
+}
+
+.banner__icon {
+  flex-shrink: 0;
+}
+
+.banner__heading {
+  font-size: var(--text-body-size);
+  font-weight: var(--text-heading-weight);
+  margin: 0 0 var(--space-xs);
+}
+
+.banner__body {
+  font-size: var(--text-body-size);
+  margin: 0;
+}

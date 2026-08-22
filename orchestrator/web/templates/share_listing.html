@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import warning %}
+
+{% block title %}{{ t("page.share.heading") }} - MyTube{% endblock %}
+
+{% block heading %}{{ t("page.share.heading") }}{% endblock %}
+
+{% block content %}
+<nav class="breadcrumb" aria-label="breadcrumb">
+  {% for crumb in breadcrumb %}
+    {% if not loop.last %}
+      <a class="breadcrumb__segment" href="{{ crumb.href }}">{{ t("share.breadcrumb.root") if crumb.is_root else crumb.label }}</a>
+      <span class="breadcrumb__sep" aria-hidden="true">/</span>
+    {% else %}
+      <span class="breadcrumb__segment breadcrumb__segment--current">{{ t("share.breadcrumb.root") if crumb.is_root else crumb.label }}</span>
+    {% endif %}
+  {% endfor %}
+</nav>
+
+{% if share_unreachable %}
+  <div class="banner banner--error" role="alert">
+    {{ warning(cls="banner__icon") }}
+    <div class="banner__text">
+      <p class="banner__heading">{{ t("share.unreachable.heading") }}</p>
+      <p class="banner__body">{{ t("share.unreachable.body") }}</p>
+    </div>
+  </div>
+{% elif not entries %}
+  <div class="empty-state">
+    <p class="empty-state__heading">{{ t("share.empty.heading") }}</p>
+    <p class="empty-state__body">{{ t("share.empty.body") }}</p>
+  </div>
+{% else %}
+  <ul class="share-listing">
+    {% for entry in entries %}
+      <li class="share-row{% if entry.is_dir %} share-row--folder{% else %} share-row--file{% endif %}">
+        <a class="share-row__link" href="{{ entry.href }}">
+          <span class="share-row__name">{{ entry.name }}</span>
+          {% if not entry.is_dir %}
+            <span class="share-row__size">{{ entry.size | filesizeformat_binary }}</span>
+          {% endif %}
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+{% endif %}
+{% endblock %}
