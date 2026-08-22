@@ -46,7 +46,7 @@ from orchestrator.db import queries
 from orchestrator.media import compat, remux
 from orchestrator.media.add import required_free_bytes
 from orchestrator.media.compat import ProbeError
-from orchestrator.media.share import safe_join
+from orchestrator.media.share import ShareEscape, safe_join
 from orchestrator.storage import abort_dangling_multipart, delete_object, put_object_from_file
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ def _reason_key_for(exc: Exception) -> str:
     """
     if isinstance(exc, _InsufficientSpaceError):
         return "reason.storage_full"
-    if isinstance(exc, (ProbeError, OSError)):
+    if isinstance(exc, (ProbeError, OSError, ShareEscape)):
         return "reason.unreadable"
     return "failed.reason.upload"
 
@@ -151,7 +151,9 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
        that had not begun.
     2. Resolve the source through `safe_join` against the share root
        again -- a path validated on a previous request is not
-       automatically the path arriving on this one.
+       automatically the path arriving on this one. Inside the failure
+       handler's `try`, so a rejected path fails the row rather than
+       stranding it.
     3. Probe and analyze the resolved source, using the job's own
        `audio_stream_index` as the selected track, from the file as it is
        right now rather than as it was when the form was drawn.
@@ -177,16 +179,23 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
     async with pool.acquire() as conn:
         await queries.mark_title_started(conn, job.title_id)
 
-    root = Path(settings.share_root)
-    source = safe_join(root, job.source_rel_path)
-
-    work_dir = Path(settings.work_dir)
-    scratch_video = work_dir / f"{job.edition_id}.mp4"
-    scratch_poster = work_dir / f"{job.edition_id}.jpg"
-
     poster_key: str | None = None
 
     try:
+        # Resolved inside the try, not above it: the row is already
+        # 'preparing' with started_at set by this point, so a ShareEscape
+        # (or a TypeError from a null source_path on a job rebuilt from an
+        # older edition row) raised out here would escape past the failure
+        # handler and strand the row on "Working..." until a process
+        # restart, while count_preparing_ahead kept counting it against
+        # every later add.
+        root = Path(settings.share_root)
+        source = safe_join(root, job.source_rel_path)
+
+        work_dir = Path(settings.work_dir)
+        scratch_video = work_dir / f"{job.edition_id}.mp4"
+        scratch_poster = work_dir / f"{job.edition_id}.jpg"
+
         probe_json = await asyncio.to_thread(compat.probe, source)
         moov_first = await asyncio.to_thread(compat.moov_before_mdat, source)
         verdict = compat.analyze(

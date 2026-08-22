@@ -773,3 +773,55 @@ async def test_startup_sweep_re_enqueues_a_never_started_row_without_touching_st
     job = add_queue._queue.get_nowait()
     assert job.title_id == title_id
     assert job.object_key == object_key
+
+
+async def test_a_source_path_that_escapes_the_share_fails_the_row_instead_of_stranding_it(
+    raw_conn, storage_spy, env
+):
+    """A rejected path is resolved after the row is already 'preparing' and
+    started, so it has to fail the row like any other error -- an exception
+    escaping process_add leaves "Working..." on screen forever and keeps
+    counting against every later add's queue position.
+    """
+    from orchestrator.db import queries as queries_module
+
+    edition_id = uuid.uuid4()
+    object_key = f"{edition_id}.mp4"
+    title_id = await queries_module.create_title_with_edition(
+        raw_conn,
+        "Escaping Source",
+        "escaping-source",
+        edition_id,
+        object_key,
+        status="preparing",
+        source_path="../outside-the-share.mp4",
+        audio_stream_index=1,
+        audio_channels=2,
+    )
+
+    class _SingleAcquireCtx:
+        def __init__(self, conn):
+            self._conn = conn
+
+        async def __aenter__(self):
+            return self._conn
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    class _SinglePoolLike:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def acquire(self):
+            return _SingleAcquireCtx(self._conn)
+
+    pool = _SinglePoolLike(raw_conn)
+    job_row = await queries_module.job_row(raw_conn, title_id)
+    await queue_module.process_add(pool, AddJob.from_row(title_id, job_row))
+
+    title = await raw_conn.fetchrow(
+        "SELECT status, failure_reason FROM titles WHERE id = $1", title_id
+    )
+    assert title["status"] == "failed"
+    assert title["failure_reason"] == "reason.unreadable"
