@@ -65,5 +65,6 @@
   "share.unreachable.body": "Сетевая шара не отвечает. Проверьте, что она подключена, и попробуйте снова.",
   "share.unreachable.heading": "Шара недоступна",
   "storage.usage": "{used} занято, {free} свободно",
-  "storage.usage_used_only": "{used} занято"
+  "storage.usage_used_only": "{used} занято",
+  "storage.reconciliation_issue": " -- объектов без ссылок: {unreferenced}, сломанных адресов: {missing}; подробности покажет storage-audit"
 }

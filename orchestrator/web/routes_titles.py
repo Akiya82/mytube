@@ -48,7 +48,7 @@ from orchestrator.media.queue import AddJob
 from orchestrator.media.share import ShareEscape, safe_join
 from orchestrator.reaper import reap_once
 from orchestrator.slugs import SlugError
-from orchestrator.storage import delete_object, get_object_bytes, storage_usage
+from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
 from orchestrator.web.routes_share import _unreachable_response
 from orchestrator.web.templates import humanize_seconds, render
 
@@ -297,8 +297,21 @@ async def library_route(request: Request):
     async with pool.acquire() as conn:
         raw_rows = await queries.library_rows(conn)
         rows = [await _row_context(conn, settings, row) for row in raw_rows]
+        referenced = await queries.referenced_objects(conn)
 
-    return render(request, "library.html", rows=rows, storage_usage=storage_usage())
+    # The reconciliation costs one catalog query and no extra bucket
+    # enumeration -- usage.listing is the same sixty-second-cached listing
+    # the used/free figure already reads (storage.storage_usage()).
+    usage = storage_usage()
+    reconciliation = reconcile(usage.listing, referenced)
+
+    return render(
+        request,
+        "library.html",
+        rows=rows,
+        storage_usage=usage,
+        reconciliation=reconciliation,
+    )
 
 
 @router.get("/library/{title_id}/row")

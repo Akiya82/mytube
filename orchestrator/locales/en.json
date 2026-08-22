@@ -65,5 +65,6 @@
   "share.unreachable.body": "The network share is not responding. Check that it is mounted and try again.",
   "share.unreachable.heading": "Cannot reach the share",
   "storage.usage": "{used} used, {free} free",
-  "storage.usage_used_only": "{used} used"
+  "storage.usage_used_only": "{used} used",
+  "storage.reconciliation_issue": " -- {unreferenced} stored objects nothing points at, {missing} addresses broken; run storage-audit to see which"
 }

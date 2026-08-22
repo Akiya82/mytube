@@ -18,6 +18,7 @@ import typer
 
 from orchestrator.cli.cache_report import cache_report as _cache_report
 from orchestrator.cli.cache_warm import DEFAULT_BASE_URL, cache_warm as _cache_warm
+from orchestrator.cli.storage_audit import run_storage_audit as _storage_audit
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media.add import plan_slug
@@ -197,6 +198,15 @@ def cache_report_command(
     path = log_path or get_settings().blob_access_log
     code = _cache_report(path, since=since)
     raise typer.Exit(code)
+
+
+@app.command(
+    "storage-audit",
+    help="Сверить каталог с реальным содержимым хранилища в обе стороны. "
+    "Только читает — ничего не удаляет и не меняет.",
+)
+def storage_audit_command() -> None:
+    raise typer.Exit(_storage_audit())
 
 
 if __name__ == "__main__":

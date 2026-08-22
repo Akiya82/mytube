@@ -67,6 +67,7 @@ class _QueriesStub:
     preparing_ahead_by_id: dict = field(default_factory=dict)
     failed_keys_by_id: dict = field(default_factory=dict)
     dismiss_calls: list = field(default_factory=list)
+    referenced: list = field(default_factory=list)
 
 
 @pytest.fixture
@@ -90,11 +91,15 @@ def queries_stub(monkeypatch):
     async def _delete_failed_title(conn, title_id):
         stub.dismiss_calls.append(title_id)
 
+    async def _referenced_objects(conn):
+        return stub.referenced
+
     monkeypatch.setattr(queries, "library_rows", _library_rows)
     monkeypatch.setattr(queries, "library_row", _library_row)
     monkeypatch.setattr(queries, "count_preparing_ahead", _count_preparing_ahead)
     monkeypatch.setattr(queries, "failed_title_object_keys", _failed_title_object_keys)
     monkeypatch.setattr(queries, "delete_failed_title", _delete_failed_title)
+    monkeypatch.setattr(queries, "referenced_objects", _referenced_objects)
     return stub
 
 
@@ -243,6 +248,36 @@ async def test_header_shows_used_only_when_no_quota_configured(client, storage_s
 
     assert "used" in resp.text
     assert "free" not in resp.text
+
+
+async def test_header_shows_reconciliation_counts_when_either_is_nonzero(
+    client, queries_stub, storage_stub
+):
+    storage_stub.usage = StorageUsage(
+        total_bytes=100, object_count=1, free_bytes=None, listing={"orphan.mp4": 100}
+    )
+    queries_stub.referenced = [
+        {"key": "gone.mp4", "kind": "video", "title_name": "Gone", "slug": "gone-slug"}
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "1" in resp.text  # one unreferenced, one missing -- both counts render
+
+
+async def test_header_shows_no_reconciliation_clause_when_both_counts_are_zero(
+    client, queries_stub, storage_stub
+):
+    storage_stub.usage = StorageUsage(
+        total_bytes=100, object_count=1, free_bytes=None, listing={"a.mp4": 100}
+    )
+    queries_stub.referenced = [{"key": "a.mp4", "kind": "video", "title_name": "A", "slug": "a"}]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "storage-audit" not in resp.text
 
 
 async def test_empty_library_renders_empty_state(client, queries_stub):

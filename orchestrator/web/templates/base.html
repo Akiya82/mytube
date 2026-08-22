@@ -26,6 +26,11 @@
           {{ t("storage.usage_used_only").format(used=storage_usage.total_bytes | filesizeformat_binary) }}
         {% endif %}
       {% endif %}
+      {% if reconciliation is defined and (reconciliation.unreferenced | length > 0 or reconciliation.missing | length > 0) %}
+        {# A line that reports zero problems on every page becomes furniture and
+           stops being read -- shown only when there is something to act on. #}
+        {{ t("storage.reconciliation_issue").format(unreferenced=reconciliation.unreferenced | length, missing=reconciliation.missing | length) }}
+      {% endif %}
     </div>
 
     <div class="lang-switch">

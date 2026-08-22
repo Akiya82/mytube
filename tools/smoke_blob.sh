@@ -25,6 +25,7 @@ FAIL_COUNT=0
 pass() { echo "[PASS] $*"; }
 fail() { echo "[FAIL] $*"; FAIL_COUNT=$((FAIL_COUNT + 1)); }
 info() { echo "[....] $*" >&2; }
+na() { echo "[ N/A] $*"; }
 
 command -v docker >/dev/null 2>&1 || { echo "ERROR: docker not found in PATH" >&2; exit 1; }
 dk info >/dev/null 2>&1 || { echo "ERROR: docker daemon unreachable (docker info failed) — this is an environment failure, not a smoke-test result." >&2; exit 1; }
@@ -83,21 +84,35 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: storage unreachable from the host (D-38, verdict B1).
+# Step 2: storage unreachable from the host -- only when the bundled
+# storage service is the one actually in the delivery path (D-38, verdict
+# B1). An external endpoint's reachability is the operator's own network
+# boundary, not this stack's; when one is configured this step says so and
+# skips the check rather than passing for a container that is no longer
+# in the delivery path.
 # ---------------------------------------------------------------------------
 info "step 2: storage unreachable from host"
-PORT_OUT=$(dc port storage 8333 2>&1)
-STORAGE_IP=$(dk inspect "$(dc ps -q storage)" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null)
-CURL_CODE=0
-curl -m 3 -s -o /dev/null "http://${STORAGE_IP}:8333/" 2>/dev/null || CURL_CODE=$?
-if [ -z "$PORT_OUT" ] || [[ "$PORT_OUT" == *"no port"* ]] || [[ "$PORT_OUT" == *"invalid"* ]]; then
-  if [ "$CURL_CODE" -ne 0 ]; then
-    pass "step 2: storage not published (dc port: '$PORT_OUT') and host curl to $STORAGE_IP:8333 failed to connect (curl exit $CURL_CODE) — connection error, not an HTTP code"
-  else
-    fail "step 2: storage port not published, but host curl to $STORAGE_IP:8333 connected — privacy broken"
-  fi
+S3_ENDPOINT_HOST=$(python3 -c "
+import os
+from urllib.parse import urlparse
+print(urlparse(os.environ.get('MYTUBE_S3_ENDPOINT', '')).hostname or '')
+")
+if [ "$S3_ENDPOINT_HOST" != "storage" ]; then
+  na "step 2: MYTUBE_S3_ENDPOINT points at '$S3_ENDPOINT_HOST', not the bundled storage service -- its reachability is the operator's own boundary, not this stack's; skipped, not counted as passed"
 else
-  fail "step 2: dc port storage 8333 printed a mapping: '$PORT_OUT' — privacy broken"
+  PORT_OUT=$(dc port storage 8333 2>&1)
+  STORAGE_IP=$(dk inspect "$(dc ps -q storage)" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null)
+  CURL_CODE=0
+  curl -m 3 -s -o /dev/null "http://${STORAGE_IP}:8333/" 2>/dev/null || CURL_CODE=$?
+  if [ -z "$PORT_OUT" ] || [[ "$PORT_OUT" == *"no port"* ]] || [[ "$PORT_OUT" == *"invalid"* ]]; then
+    if [ "$CURL_CODE" -ne 0 ]; then
+      pass "step 2: storage not published (dc port: '$PORT_OUT') and host curl to $STORAGE_IP:8333 failed to connect (curl exit $CURL_CODE) — connection error, not an HTTP code"
+    else
+      fail "step 2: storage port not published, but host curl to $STORAGE_IP:8333 connected — privacy broken"
+    fi
+  else
+    fail "step 2: dc port storage 8333 printed a mapping: '$PORT_OUT' — privacy broken"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
