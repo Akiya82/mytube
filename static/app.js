@@ -22,3 +22,26 @@ document.addEventListener("click", (event) => {
     }, 2000);
   });
 });
+
+// Preparing-row poll (D-49, 02-UI-SPEC.md States -> Preparing): every 4
+// seconds, fetch a row's fragment route and replace only that row's
+// element -- never the page, so scroll position and focus elsewhere
+// survive. Stops once the returned row is no longer "preparing".
+function pollLibraryRow(row) {
+  const titleId = row.getAttribute("data-title-id");
+  fetch(`/library/${titleId}/row`)
+    .then((res) => res.text())
+    .then((html) => {
+      const template = document.createElement("template");
+      template.innerHTML = html.trim();
+      const fresh = template.content.firstElementChild;
+      row.replaceWith(fresh);
+      if (fresh.getAttribute("data-row-status") === "preparing") {
+        setTimeout(() => pollLibraryRow(fresh), 4000);
+      }
+    });
+}
+
+document
+  .querySelectorAll('.library-row[data-row-status="preparing"]')
+  .forEach((row) => setTimeout(() => pollLibraryRow(row), 4000));
