@@ -74,7 +74,16 @@
       </button>
     {% endif %}
 
-    {% if row.title_status in ("active", "pending_delete") %}
+    {# The measurements are optional on the edition row, so this line has
+       to be too. A title added from the command line reaches 'active'
+       carrying none of them -- there is no ffprobe output on that path to
+       write. Rendering the line anyway raises on the first format filter,
+       and because the page renders rows in a loop, one such title takes
+       the whole Library down rather than just its own row. The address
+       above is the row's reason to exist and shows either way. #}
+    {% if row.title_status in ("active", "pending_delete")
+          and row.size_bytes is not none and row.duration_seconds is not none
+          and row.width and row.height %}
       <p class="library-row__detail">
         {{ row.size_bytes | filesizeformat_binary }}
         &middot; {{ row.duration_seconds | duration_hms }}

@@ -186,6 +186,37 @@ async def test_active_row_renders_technical_detail_and_audio_note(client, querie
     assert "audio re-encoded" in resp.text
 
 
+async def test_active_row_without_edition_measurements_renders_without_detail_line(client, queries_stub):
+    """A title added through the command line reaches 'active' with no
+    measurements on its edition -- create_title_with_edition defaults to
+    'active' and the command line has no ffprobe output to pass. The row
+    still has to render: the address is the whole reason the row exists,
+    and one such row must not take the entire page down with it.
+    """
+    queries_stub.rows = [
+        _row(
+            title_name="Added From The Command Line",
+            size_bytes=None,
+            duration_seconds=None,
+            width=None,
+            height=None,
+            audio_language=None,
+            audio_title=None,
+            audio_reencoded=None,
+            source_path=None,
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert resp.status_code == 200
+    assert "Added From The Command Line" in resp.text
+    assert "data-copy-text" in resp.text
+    assert 'class="library-row__detail"' not in resp.text
+    assert "None" not in resp.text
+
+
 async def test_active_row_untouched_audio_shows_untouched_note(client, queries_stub):
     queries_stub.rows = [_row(audio_reencoded=False)]
 
