@@ -66,19 +66,44 @@ class _InsufficientSpaceError(Exception):
     """
 
 
+class _UploadError(Exception):
+    """Internal signal only -- never escapes `process_add`. Wraps whatever
+    the storage client raised at an upload call site, so "the upload did
+    not finish" is told to the operator when the upload is what failed and
+    not, as it used to be, for every unexpected exception in the pipeline.
+    """
+
+
+async def _upload(path, key: str, content_type: str = "video/mp4") -> None:
+    """One upload, with its failures labelled. The only place
+    `put_object_from_file` is called from `process_add`.
+    """
+    try:
+        await asyncio.to_thread(put_object_from_file, str(path), key, content_type)
+    except Exception as exc:
+        raise _UploadError(f"{key}: {exc}") from exc
+
+
 def _reason_key_for(exc: Exception) -> str:
     """Map a failure to a translation catalog key, never an English
-    sentence (D-66): the storage-full key for the space precheck, the
-    unreadable key for a source that stopped being readable, and the
-    upload key for everything else -- an unexpected exception logs its
-    own traceback and records the upload key rather than inventing a
-    fifth reason.
+    sentence (D-66).
+
+    The residual case gets its own neutral key rather than being folded
+    into the upload one. A wrong reason costs more than a vague one: the
+    most likely real failure in this pipeline is ffmpeg exiting non-zero
+    or hitting its timeout, and telling the operator the upload to storage
+    did not finish sends them to look at storage for a file that never
+    reached it.
     """
     if isinstance(exc, _InsufficientSpaceError):
         return "reason.storage_full"
     if isinstance(exc, (ProbeError, OSError, ShareEscape)):
         return "reason.unreadable"
-    return "failed.reason.upload"
+    if isinstance(exc, remux.RemuxError):
+        return "failed.reason.remux"
+    if isinstance(exc, _UploadError):
+        return "failed.reason.upload"
+    return "failed.reason.unknown"
 
 
 @dataclass(frozen=True)
@@ -220,9 +245,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         started_at = time.monotonic()
         try:
             if verdict.already_correct:
-                await asyncio.to_thread(
-                    put_object_from_file, str(source), job.object_key
-                )
+                await _upload(source, job.object_key)
             else:
                 cmd = remux.build_remux_command(
                     source,
@@ -234,9 +257,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 await asyncio.to_thread(
                     remux.run_ffmpeg, cmd, timeout=REMUX_TIMEOUT_SECONDS
                 )
-                await asyncio.to_thread(
-                    put_object_from_file, str(scratch_video), job.object_key
-                )
+                await _upload(scratch_video, job.object_key)
         finally:
             if await asyncio.to_thread(scratch_video.exists):
                 await asyncio.to_thread(scratch_video.unlink)
@@ -250,12 +271,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 remux.run_ffmpeg, poster_cmd, timeout=POSTER_TIMEOUT_SECONDS
             )
             candidate_poster_key = f"{job.edition_id}.jpg"
-            await asyncio.to_thread(
-                put_object_from_file,
-                str(scratch_poster),
-                candidate_poster_key,
-                "image/jpeg",
-            )
+            await _upload(scratch_poster, candidate_poster_key, "image/jpeg")
             poster_key = candidate_poster_key
         except Exception:
             # A poster that will not extract must not fail an add that

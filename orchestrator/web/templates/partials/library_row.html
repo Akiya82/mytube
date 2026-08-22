@@ -14,7 +14,7 @@
      thumbnail, and the reclaimed width goes to the reason text. #}
   <div class="library-row__body">
     <h2 class="library-row__title">{{ row.title_name }}</h2>
-    <p class="library-row__reason">{{ t("failed.reason_prefix").format(reason=t(row.failure_reason or "failed.reason.upload")) }}</p>
+    <p class="library-row__reason">{{ t("failed.reason_prefix").format(reason=t(row.failure_reason or "failed.reason.unknown")) }}</p>
   </div>
   <div class="library-row__actions">
     <form method="post" action="/library/{{ row.title_id }}/dismiss">

@@ -15,6 +15,9 @@ _PLANNING_ID_PATTERN = re.compile(
     r"(D-[0-9]{2}|ASIS-[0-9]{2}|UI-[0-9]{2}|ADDR-[0-9]{2}|phase [0-9])"
 )
 _TEMPLATE_KEY_PATTERN = re.compile(r"""t\(\s*["']([^"']+)["']""")
+# A reason key as it appears in source: quoted, so the same identifier
+# mentioned in a docstring or a comment is not collected.
+_REASON_KEY_PATTERN = re.compile(r"""["']((?:failed\.)?reason\.[a-z_]+)["']""")
 
 
 def _load(lang: str) -> dict[str, str]:
@@ -44,15 +47,37 @@ def test_every_template_translation_key_exists_in_both_catalogs():
         assert key in ru, f"{key!r} missing from ru.json"
 
 
-def test_every_verdict_reason_key_exists_in_both_catalogs():
-    """`analyze` picks a reason key at runtime and the template renders it
-    as t(verdict.reason_key), so the template scan above cannot see these.
-    They are the one family of keys a missing entry would only reveal by
-    showing the operator a bare key instead of a sentence.
+def test_every_failure_reason_key_in_the_source_exists_in_both_catalogs():
+    """`analyze` and the worker's failure handler pick a reason key at
+    runtime and the templates render it as `t(verdict.reason_key)` /
+    `t(row.failure_reason)`, so the template scan above cannot see any of
+    them. They are the one family of keys where a missing entry surfaces
+    only as a bare key shown to the operator instead of a sentence.
+
+    Collected from the source rather than listed here, so a reason added
+    to the worker without a catalog line fails this test instead of
+    waiting to be noticed on screen.
     """
     en = _load("en")
     ru = _load("ru")
-    for key in ("reason.codec", "reason.level", "reason.no_audio",
-                "reason.pixfmt", "reason.profile", "reason.unreadable"):
+
+    found: set[str] = set()
+    for pattern in ("orchestrator/**/*.py", "orchestrator/**/*.html"):
+        for path in REPO_ROOT.glob(pattern):
+            found.update(
+                _REASON_KEY_PATTERN.findall(path.read_text(encoding="utf-8"))
+            )
+
+    # The mapper's own five, as a floor: a scan that silently collected
+    # nothing would otherwise pass.
+    assert {
+        "reason.storage_full",
+        "reason.unreadable",
+        "failed.reason.remux",
+        "failed.reason.upload",
+        "failed.reason.unknown",
+    } <= found
+
+    for key in sorted(found):
         assert key in en, f"{key!r} missing from en.json"
         assert key in ru, f"{key!r} missing from ru.json"
