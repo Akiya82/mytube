@@ -304,6 +304,20 @@ def analyze(
 
     tracks = audio_tracks(probe_json)
     default_index = _default_track_index(tracks)
+
+    if eligible and not tracks:
+        # A silent source is compliant video and would otherwise come back
+        # eligible with an empty track list -- the form then renders a live
+        # Add button above a track picker with no options, and the POST's
+        # required audio_track field can only be answered with a raw 422.
+        # Only the selected track survives into the output (D-42), so a
+        # source with none has no add path; refusing it here routes it
+        # through the same localized banner as every other rejection
+        # instead of leaving that third, unreachable state.
+        eligible = False
+        reason_key = "reason.no_audio"
+        reason_params = {}
+
     selected_index = (
         selected_audio_index if selected_audio_index is not None else default_index
     )

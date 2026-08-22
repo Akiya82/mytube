@@ -158,6 +158,24 @@ async def test_incompatible_file_renders_no_enabled_add_control_and_disabled_con
     assert "hevc" in resp.text  # reason.codec's {codec} parameter
 
 
+async def test_silent_file_renders_no_add_control_and_explains_why(
+    web_client, monkeypatch
+):
+    """The third state the form must never reach: a live Add button over a
+    track picker with no options, whose POST can only answer the required
+    audio_track field with a 422.
+    """
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("no_audio.json"))
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert resp.status_code == 200
+    assert 'type="submit"' not in resp.text
+    assert 'name="audio_track"' not in resp.text
+    assert "no audio track" in resp.text.lower()
+
+
 async def test_unreadable_file_renders_unreadable_reason_not_traceback(
     web_client, monkeypatch
 ):

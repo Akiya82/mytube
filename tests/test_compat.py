@@ -27,6 +27,8 @@ Fixtures were generated locally with this project's own pinned ffmpeg
     #   track (index 1, language rus) is NOT AAC and the second (index 2,
     #   language eng) is
     # no_aac_track.json: single ac3 audio track, no AAC track at all
+    # no_audio.json: the same command with no sine input at all, so the
+    #   clip is compliant High-4.1 video with zero audio streams
     # moov_first.mp4 / moov_last.mp4: a 1s libx264 clip built with and
     #   without -movflags +faststart -- kept as real bytes (not JSON)
     #   because moov_before_mdat reads the file's bytes, not ffprobe JSON
@@ -162,6 +164,36 @@ def test_missing_duration_and_size_keys_become_none():
 
     assert verdict.duration_seconds is None
     assert verdict.size_bytes is None
+
+
+def test_a_video_with_no_audio_track_is_refused_with_the_no_audio_reason():
+    """A silent clip is compliant video and used to come back eligible with
+    an empty track list. The form then drew a live Add button over a radio
+    group with nothing in it, and the required audio_track field the POST
+    declares could only be answered with a raw 422. Only the selected track
+    ever survives into the output, so a source with none has no add path --
+    say so with the same reason machinery every other refusal uses.
+    """
+    verdict = analyze(_load("no_audio.json"))
+
+    assert verdict.tracks == []
+    assert verdict.eligible is False
+    assert verdict.reason_key == "reason.no_audio"
+    assert verdict.reason_params == {}
+    assert verdict.already_correct is False
+
+
+def test_a_video_reason_still_wins_over_the_missing_audio_track():
+    """A file that is both the wrong codec and silent is named by its video
+    problem -- re-encoding it is the operator's next question, and the
+    absent audio track is not the thing to lead with.
+    """
+    data = _load("no_audio.json")
+    next(s for s in data["streams"] if s["codec_type"] == "video")["codec_name"] = "hevc"
+
+    verdict = analyze(data)
+
+    assert verdict.reason_key == "reason.codec"
 
 
 def test_format_name_matching_splits_on_commas_for_a_real_mp4():

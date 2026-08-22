@@ -42,3 +42,17 @@ def test_every_template_translation_key_exists_in_both_catalogs():
     for key in used_keys:
         assert key in en, f"{key!r} missing from en.json"
         assert key in ru, f"{key!r} missing from ru.json"
+
+
+def test_every_verdict_reason_key_exists_in_both_catalogs():
+    """`analyze` picks a reason key at runtime and the template renders it
+    as t(verdict.reason_key), so the template scan above cannot see these.
+    They are the one family of keys a missing entry would only reveal by
+    showing the operator a bare key instead of a sentence.
+    """
+    en = _load("en")
+    ru = _load("ru")
+    for key in ("reason.codec", "reason.level", "reason.no_audio",
+                "reason.pixfmt", "reason.profile", "reason.unreadable"):
+        assert key in en, f"{key!r} missing from en.json"
+        assert key in ru, f"{key!r} missing from ru.json"

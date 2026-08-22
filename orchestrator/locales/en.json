@@ -52,6 +52,7 @@
   "page.share.heading": "Add from share",
   "reason.codec": "This is {codec} video. Only H.264 can be added as-is right now.",
   "reason.level": "This video is encoded above level 4.1, which is not supported yet.",
+  "reason.no_audio": "This video has no audio track, so there is nothing to add yet.",
   "reason.pixfmt": "This video is 10-bit, or another unsupported color format, which is not supported yet.",
   "reason.profile": "This video uses the {profile} profile, which is not supported yet.",
   "reason.storage_full": "Not enough free space to add this file safely. Free up space and try again.",
