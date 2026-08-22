@@ -7,6 +7,34 @@
 // element, writes it to the clipboard, swaps the button label to the
 // "copied" text for two seconds. Later plans append the delete countdown
 // tick and the status poll to this same file.
+//
+// navigator.clipboard exists only in a secure context, and the documented
+// way to widen this interface -- MYTUBE_UI_BIND on a LAN address -- is
+// reached over plain http, which is not one. Reading .writeText off an
+// undefined clipboard throws, so this screen's headline control would do
+// nothing at all with no message. Two fallbacks behind it: a hidden
+// textarea with the legacy copy command, then a prompt holding the address
+// so the operator can at least select it by hand.
+function copyTextToClipboard(text) {
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "0";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch (err) {
+    copied = false;
+  }
+  area.remove();
+  if (!copied) window.prompt("", text);
+  return copied;
+}
+
 document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-copy-text]");
   if (!button) return;
@@ -15,7 +43,15 @@ document.addEventListener("click", (event) => {
   const doneLabel = button.getAttribute("data-copy-done-label") || button.textContent;
   const originalLabel = button.textContent;
 
-  navigator.clipboard.writeText(text).then(() => {
+  const written = navigator.clipboard
+    ? navigator.clipboard.writeText(text).then(
+        () => true,
+        () => copyTextToClipboard(text)
+      )
+    : Promise.resolve(copyTextToClipboard(text));
+
+  written.then((ok) => {
+    if (!ok) return;
     button.textContent = doneLabel;
     setTimeout(() => {
       button.textContent = originalLabel;
