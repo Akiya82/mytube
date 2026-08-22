@@ -7,6 +7,8 @@ test_add_form.py already uses -- no real Postgres, no real S3, quick-loop
 only.
 """
 import pathlib
+import re
+import time
 import uuid
 from dataclasses import dataclass, field
 
@@ -445,3 +447,269 @@ def test_no_htmx_or_cdn_references():
         assert "htmx" not in text
         assert "unpkg" not in text
         assert "jsdelivr" not in text
+
+
+# --- Plan 06 Task 1/2: row actions and the delete countdown markup ------
+
+
+async def test_active_row_has_rename_delete_and_check_actions(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, slug="active-actions-clip")]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert f"/library/{title_id}/rename" in resp.text
+    assert f"/library/{title_id}/delete" in resp.text
+    assert "/check/active-actions-clip" in resp.text
+
+
+async def test_pending_delete_row_shows_countdown_chip_and_future_deadline(client, queries_stub):
+    from datetime import datetime, timedelta, timezone
+
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=200)
+    queries_stub.rows = [_row(title_status="pending_delete", delete_at=deadline)]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-row-status="pending_delete"' in resp.text
+    assert "chip--deleting" in resp.text
+    match = re.search(r'data-deadline="(\d+)"', resp.text)
+    assert match is not None
+    assert int(match.group(1)) > time.time() * 1000
+
+
+async def test_pending_delete_row_has_undo_and_purge_controls_with_native_confirm(client, queries_stub):
+    from datetime import datetime, timedelta, timezone
+
+    title_id = uuid.uuid4()
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=200)
+    queries_stub.rows = [_row(title_id=title_id, title_status="pending_delete", delete_at=deadline)]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert f"/library/{title_id}/undo" in resp.text
+    assert f"/library/{title_id}/purge" in resp.text
+    assert "data-confirm=" in resp.text
+    assert "Rename" not in resp.text
+    assert "Delete now" in resp.text
+
+
+# --- Plan 06 Task 1/2: rename, delete, undo, purge -- real Postgres -----
+# These need the shared slug planner and the mark_for_delete/cancel_delete/
+# reap_once query layer to behave for real, so they run against a real,
+# migrated Postgres (migrated_db_url/raw_conn from conftest.py) rather than
+# the monkeypatched queries stub above -- the same split test_add_flow.py
+# and test_deletion.py already draw between route-shape tests and
+# behavior tests.
+
+
+class _SingleActionAcquireCtx:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _SingleActionConnPool:
+    """Wraps one already-open, really-committing connection behind the
+    .acquire() interface the routes expect from an asyncpg.Pool -- the
+    same shape test_deletion.py's _SinglePoolLike uses, so rename/delete/
+    undo/purge can be exercised end to end without a real pool.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        return _SingleActionAcquireCtx(self._conn)
+
+
+@pytest.fixture
+def _action_env(migrated_db_url, monkeypatch):
+    monkeypatch.setenv("MYTUBE_DATABASE_URL", migrated_db_url)
+    monkeypatch.setenv("MYTUBE_SECURE_LINK_SECRET", "test-secret-do-not-use-in-prod")
+    monkeypatch.setenv("MYTUBE_S3_ENDPOINT", "http://storage:8333")
+    monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
+    monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
+    monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+async def action_client(_action_env, raw_conn):
+    app.state.db_pool = _SingleActionConnPool(raw_conn)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
+        yield ac
+
+
+async def _create_title(conn, name: str, slug: str):
+    edition_id = uuid.uuid4()
+    object_key = f"{edition_id}.mp4"
+    title_id = await queries.create_title_with_edition(conn, name, slug, edition_id, object_key)
+    return title_id, edition_id, object_key
+
+
+@pytest.mark.integration
+async def test_rename_keeps_old_address_resolving_and_new_one_works(action_client, raw_conn):
+    title_id, _, _ = await _create_title(raw_conn, "Rename Source", "rename-source-slug")
+
+    resp = await action_client.post(f"/library/{title_id}/rename", data={"name": "Rename Target"})
+
+    assert resp.status_code == 200
+    assert "rename-source-slug" in resp.text
+    assert "rename-target" in resp.text
+
+    old = await queries.resolve_slug(raw_conn, "rename-source-slug")
+    new = await queries.resolve_slug(raw_conn, "rename-target")
+    assert old is not None and old["status"] == "active"
+    assert new is not None and new["status"] == "active"
+    assert old["title_id"] == new["title_id"] == title_id
+
+    old_v_resp = await action_client.get("/v/rename-source-slug", follow_redirects=False)
+    new_v_resp = await action_client.get("/v/rename-target", follow_redirects=False)
+    assert old_v_resp.status_code == 302
+    assert new_v_resp.status_code == 302
+
+
+@pytest.mark.integration
+async def test_rename_onto_taken_slug_gets_suffixed_and_banner_names_it(action_client, raw_conn):
+    await _create_title(raw_conn, "Rename Collision Target", "rename-collision-target")
+    title_id, _, _ = await _create_title(raw_conn, "Rename Collision Source", "rename-collision-source")
+
+    resp = await action_client.post(
+        f"/library/{title_id}/rename", data={"name": "Rename Collision Target"}
+    )
+
+    assert resp.status_code == 200
+    assert "rename-collision-target-2" in resp.text
+
+    resolved = await queries.resolve_slug(raw_conn, "rename-collision-target-2")
+    assert resolved["title_id"] == title_id
+
+
+@pytest.mark.integration
+async def test_rename_similar_slug_shows_warning_in_response(action_client, raw_conn):
+    await _create_title(raw_conn, "RenameSimilarWarnCase", "renamesimilarwarncase")
+    title_id, _, _ = await _create_title(raw_conn, "Rename Similar Source", "rename-similar-source")
+
+    resp = await action_client.post(
+        f"/library/{title_id}/rename", data={"name": "Rename:Similar:Warn:Case"}
+    )
+
+    assert resp.status_code == 200
+    assert "A similar address is already taken" in resp.text
+    assert "renamesimilarwarncase" in resp.text
+
+
+@pytest.mark.integration
+async def test_delete_marks_pending_and_row_carries_a_future_deadline(action_client, raw_conn):
+    title_id, edition_id, _ = await _create_title(raw_conn, "Delete Wording", "delete-wording-slug")
+    # The row's technical-detail line has to survive a real render -- give
+    # this edition the fields the add worker always sets before flipping a
+    # title to 'active' (create_title_with_edition alone, the CLI's own
+    # path, never does; that gap is pre-existing and out of this plan's
+    # scope, but the row this test renders needs to look like a real one).
+    await queries.set_edition_technical(
+        raw_conn,
+        edition_id,
+        size_bytes=123_456_789,
+        duration_seconds=90.0,
+        width=1280,
+        height=720,
+        audio_language="eng",
+        audio_title=None,
+        audio_reencoded=False,
+    )
+
+    resp = await action_client.post(f"/library/{title_id}/delete")
+    assert resp.status_code == 302
+
+    v_resp = await action_client.get("/v/delete-wording-slug", follow_redirects=False)
+    assert v_resp.status_code == 410
+
+    row_resp = await action_client.get(f"/library/{title_id}/row")
+    assert row_resp.status_code == 200
+    match = re.search(r'data-deadline="(\d+)"', row_resp.text)
+    assert match is not None
+    assert int(match.group(1)) > time.time() * 1000
+
+
+@pytest.mark.integration
+async def test_undo_restores_active_and_v_redirects_again(action_client, raw_conn):
+    title_id, _, _ = await _create_title(raw_conn, "Undo Target", "undo-target-slug")
+    await queries.mark_for_delete(raw_conn, title_id, grace_seconds=300)
+
+    resp = await action_client.post(f"/library/{title_id}/undo")
+    assert resp.status_code == 302
+
+    row = await queries.resolve_slug(raw_conn, "undo-target-slug")
+    assert row["status"] == "active"
+
+    v_resp = await action_client.get("/v/undo-target-slug", follow_redirects=False)
+    assert v_resp.status_code == 302
+
+
+@pytest.mark.integration
+async def test_undo_refuses_a_title_not_pending_deletion(action_client, raw_conn):
+    title_id, _, _ = await _create_title(raw_conn, "Undo Not Pending", "undo-not-pending-slug")
+
+    resp = await action_client.post(f"/library/{title_id}/undo")
+
+    assert resp.status_code == 400
+    row = await queries.resolve_slug(raw_conn, "undo-not-pending-slug")
+    assert row["status"] == "active"
+
+
+@pytest.mark.integration
+async def test_purge_deletes_objects_and_marks_deleted_before_response_returns(
+    action_client, raw_conn, monkeypatch
+):
+    from orchestrator import reaper as reaper_module
+
+    deleted = []
+    monkeypatch.setattr(reaper_module, "delete_object", lambda key: deleted.append(key))
+
+    edition_id = uuid.uuid4()
+    object_key = f"{edition_id}.mp4"
+    poster_key = f"{edition_id}.jpg"
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Purge Target", "purge-target-slug", edition_id, object_key
+    )
+    await queries.set_edition_poster(raw_conn, edition_id, poster_key)
+    await queries.mark_for_delete(raw_conn, title_id, grace_seconds=300)
+
+    resp = await action_client.post(f"/library/{title_id}/purge")
+
+    assert resp.status_code == 302
+    assert object_key in deleted
+    assert poster_key in deleted
+
+    row = await queries.resolve_slug(raw_conn, "purge-target-slug")
+    assert row["status"] == "deleted"
+
+
+@pytest.mark.integration
+async def test_purge_refuses_a_title_that_is_not_pending_deletion(action_client, raw_conn):
+    title_id, _, _ = await _create_title(raw_conn, "Purge Not Pending", "purge-not-pending-slug")
+
+    resp = await action_client.post(f"/library/{title_id}/purge")
+
+    assert resp.status_code == 400
+    row = await queries.resolve_slug(raw_conn, "purge-not-pending-slug")
+    assert row["status"] == "active"
+
+
+def test_routes_titles_never_writes_slug_history_directly():
+    text = (REPO_ROOT / "orchestrator" / "web" / "routes_titles.py").read_text(encoding="utf-8")
+    assert text.count("INSERT INTO slug_history") == 0
+    assert text.count("reap_once") >= 1
