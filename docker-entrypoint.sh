@@ -16,5 +16,8 @@ alembic upgrade head
 echo "docker-entrypoint: ensure_bucket"
 python -c "from orchestrator.storage import ensure_bucket; ensure_bucket()"
 
+echo "docker-entrypoint: ensure_multipart_lifecycle_rule"
+python -c "from orchestrator.storage import ensure_multipart_lifecycle_rule; ensure_multipart_lifecycle_rule()"
+
 echo "docker-entrypoint: exec $*"
 exec "$@"
