@@ -52,7 +52,8 @@ def cache_warm(
     """Warm `slug` through `base_url`, up to `warm_bytes` (default: half the
     cache zone, per `MYTUBE_WARM_BYTES`). Returns a process exit code: 0 on
     a successful warm (whether it reached the limit or the end of the
-    file), 1 if `/v/{slug}` did not resolve.
+    file), 1 if `/v/{slug}` did not resolve or the origin refused to serve
+    ranges at all.
     """
     chunk_size = chunk_size or _parse_size(os.environ.get("MYTUBE_SLICE_SIZE", "1m"))
     warm_bytes = warm_bytes or int(os.environ.get("MYTUBE_WARM_BYTES", DEFAULT_WARM_BYTES))
@@ -74,9 +75,21 @@ def cache_warm(
         total_size: int | None = None
         warm_limit = warm_bytes
 
-        while total_size is None or warmed < min(warm_limit, total_size):
+        range_refused = False
+
+        # The byte limit is checked unconditionally, before anything is
+        # known about the file. Gating it behind a known total_size meant
+        # that an origin answering 200 with the whole body -- which is
+        # exactly what a misconfigured edge does -- left total_size null,
+        # kept the loop condition permanently true, and never consulted
+        # the limit at all: the command re-downloaded a multi-gigabyte
+        # file forever.
+        while warmed < warm_limit and (total_size is None or warmed < total_size):
             end = warmed + chunk_size - 1
             r = client.get(blob_url, headers={"Range": f"bytes={warmed}-{end}"})
+            if r.status_code != 206:
+                range_refused = True
+                break
             content_range = r.headers.get("content-range", "")
             if total_size is None and "/" in content_range:
                 total_size = int(content_range.rsplit("/", 1)[-1])
@@ -91,6 +104,14 @@ def cache_warm(
                 break  # short read -- reached end of file
 
     elapsed = time.monotonic() - started
+    if range_refused:
+        typer.echo(
+            "отдача проигнорировала Range и вернула файл целиком -- "
+            "греть нечего. Проверьте slice и proxy_cache_key в конфиге edge.",
+            err=True,
+        )
+        return 1
+
     limited_by_file_length = total_size is not None and warmed < total_size
 
     typer.echo(
