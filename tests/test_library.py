@@ -1,0 +1,447 @@
+"""Route tests for the Library screen (GET /library, GET /library/{id}/row,
+GET /poster/{edition_id}, POST /library/{id}/dismiss) -- Screen 3 of
+02-UI-SPEC.md. The database layer is monkeypatched at the
+`orchestrator.db.queries` module boundary and storage at the
+`orchestrator.web.routes_titles` module boundary, the same shape
+test_add_form.py already uses -- no real Postgres, no real S3, quick-loop
+only.
+"""
+import pathlib
+import uuid
+from dataclasses import dataclass, field
+
+import httpx
+import pytest
+from botocore.exceptions import ClientError
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+from orchestrator.config import get_settings
+from orchestrator.db import queries
+from orchestrator.main import app
+from orchestrator.storage import StorageUsage
+from orchestrator.web import routes_titles
+
+
+class _DummyConn:
+    pass
+
+
+class _DummyAcquireCtx:
+    async def __aenter__(self):
+        return _DummyConn()
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _DummyPool:
+    def acquire(self):
+        return _DummyAcquireCtx()
+
+    async def close(self):
+        pass
+
+
+@pytest.fixture
+def _web_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYTUBE_SECURE_LINK_SECRET", "test-secret-do-not-use-in-prod")
+    monkeypatch.setenv("MYTUBE_DATABASE_URL", "postgresql://test:test@localhost/test")
+    monkeypatch.setenv("MYTUBE_S3_ENDPOINT", "http://storage:8333")
+    monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
+    monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
+    monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
+    monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(tmp_path))
+    monkeypatch.setenv("MYTUBE_STORAGE_QUOTA_BYTES", "0")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@dataclass
+class _QueriesStub:
+    rows: list = field(default_factory=list)
+    row_by_id: dict = field(default_factory=dict)
+    preparing_ahead_by_id: dict = field(default_factory=dict)
+    failed_keys_by_id: dict = field(default_factory=dict)
+    dismiss_calls: list = field(default_factory=list)
+
+
+@pytest.fixture
+def queries_stub(monkeypatch):
+    stub = _QueriesStub()
+
+    async def _library_rows(conn):
+        return stub.rows
+
+    async def _library_row(conn, title_id):
+        return stub.row_by_id.get(title_id)
+
+    async def _count_preparing_ahead(conn, title_id):
+        return stub.preparing_ahead_by_id.get(title_id, 0)
+
+    async def _failed_title_object_keys(conn, title_id):
+        if title_id not in stub.failed_keys_by_id:
+            raise LookupError("not found")
+        return stub.failed_keys_by_id[title_id]
+
+    async def _delete_failed_title(conn, title_id):
+        stub.dismiss_calls.append(title_id)
+
+    monkeypatch.setattr(queries, "library_rows", _library_rows)
+    monkeypatch.setattr(queries, "library_row", _library_row)
+    monkeypatch.setattr(queries, "count_preparing_ahead", _count_preparing_ahead)
+    monkeypatch.setattr(queries, "failed_title_object_keys", _failed_title_object_keys)
+    monkeypatch.setattr(queries, "delete_failed_title", _delete_failed_title)
+    return stub
+
+
+@dataclass
+class _StorageStub:
+    usage: StorageUsage = None
+    poster_bytes: dict = field(default_factory=dict)
+    deleted: list = field(default_factory=list)
+
+
+@pytest.fixture
+def storage_stub(monkeypatch):
+    stub = _StorageStub(
+        usage=StorageUsage(total_bytes=0, object_count=0, free_bytes=None, listing={})
+    )
+
+    def _storage_usage():
+        return stub.usage
+
+    def _get_object_bytes(key):
+        if key not in stub.poster_bytes:
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        return stub.poster_bytes[key]
+
+    def _delete_object(key):
+        stub.deleted.append(key)
+
+    monkeypatch.setattr(routes_titles, "storage_usage", _storage_usage)
+    monkeypatch.setattr(routes_titles, "get_object_bytes", _get_object_bytes)
+    monkeypatch.setattr(routes_titles, "delete_object", _delete_object)
+    return stub
+
+
+@pytest.fixture
+def client(_web_env, queries_stub, storage_stub):
+    app.state.db_pool = _DummyPool()
+    transport = httpx.ASGITransport(app=app)
+    return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+
+
+def _row(**over) -> dict:
+    row = {
+        "title_id": uuid.uuid4(),
+        "title_name": "A Clip",
+        "title_status": "active",
+        "failure_reason": None,
+        "delete_at": None,
+        "started_at": None,
+        "created_at": None,
+        "slug": "a-clip",
+        "edition_id": uuid.uuid4(),
+        "size_bytes": 1_500_000_000,
+        "duration_seconds": 754.0,
+        "width": 1920,
+        "height": 1080,
+        "audio_language": "eng",
+        "audio_title": "Commentary",
+        "audio_reencoded": True,
+        "poster_key": None,
+        "source_path": "a-clip.mkv",
+    }
+    row.update(over)
+    return row
+
+
+# --- Task 1: technical detail, address, copy button, header, empty ------
+
+
+async def test_active_row_renders_technical_detail_and_audio_note(client, queries_stub):
+    queries_stub.rows = [
+        _row(title_name="My Clip", size_bytes=1_073_741_824, duration_seconds=125, width=1280, height=720)
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert resp.status_code == 200
+    assert "My Clip" in resp.text
+    assert "1.0 GB" in resp.text
+    assert "2:05" in resp.text
+    assert "1280&times;720" in resp.text
+    assert "eng" in resp.text
+    assert "Commentary" in resp.text
+    assert "audio re-encoded" in resp.text
+
+
+async def test_active_row_untouched_audio_shows_untouched_note(client, queries_stub):
+    queries_stub.rows = [_row(audio_reencoded=False)]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "audio untouched" in resp.text
+    assert "audio re-encoded" not in resp.text
+
+
+async def test_copy_link_data_attribute_is_exact_address_no_query_string(client, queries_stub):
+    queries_stub.rows = [_row(slug="kontrolnyi-rolik")]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-copy-text="https://mytube.example/v/kontrolnyi-rolik"' in resp.text
+    assert "?" not in resp.text.split('data-copy-text="')[1].split('"')[0]
+
+
+async def test_healthy_row_has_no_status_chip(client, queries_stub):
+    queries_stub.rows = [_row()]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'class="chip' not in resp.text
+
+
+async def test_script_tag_title_renders_escaped_in_heading(client, queries_stub):
+    queries_stub.rows = [_row(title_name="<script>alert(1)</script>")]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "<script>alert(1)</script>" not in resp.text
+    assert "&lt;script&gt;" in resp.text
+
+
+async def test_header_shows_used_and_free_when_quota_configured(client, storage_stub):
+    storage_stub.usage = StorageUsage(
+        total_bytes=1_073_741_824, object_count=3, free_bytes=2_147_483_648, listing={}
+    )
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "1.0 GB" in resp.text
+    assert "used" in resp.text
+    assert "free" in resp.text
+
+
+async def test_header_shows_used_only_when_no_quota_configured(client, storage_stub):
+    storage_stub.usage = StorageUsage(
+        total_bytes=1_073_741_824, object_count=3, free_bytes=None, listing={}
+    )
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "used" in resp.text
+    assert "free" not in resp.text
+
+
+async def test_empty_library_renders_empty_state(client, queries_stub):
+    queries_stub.rows = []
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "Nothing added yet" in resp.text
+    assert "Add a file from the share to see it here." in resp.text
+
+
+# --- Task 2: the poster frame --------------------------------------------
+
+
+async def test_active_row_with_poster_key_renders_image_with_title_alt(client, queries_stub):
+    edition_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_name="Poster Clip", edition_id=edition_id, poster_key=f"{edition_id}.jpg")]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert f'src="/poster/{edition_id}"' in resp.text
+    assert 'alt="Poster Clip"' in resp.text
+
+
+async def test_active_row_without_poster_key_renders_placeholder(client, queries_stub):
+    queries_stub.rows = [_row(poster_key=None)]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "<img" not in resp.text
+    assert "library-row__thumb--placeholder" in resp.text
+    assert "No preview available" in resp.text
+
+
+async def test_preparing_row_with_poster_key_still_shows_placeholder(client, queries_stub):
+    edition_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(title_status="preparing", started_at=None, edition_id=edition_id, poster_key=f"{edition_id}.jpg")
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "<img" not in resp.text
+    assert "library-row__thumb--placeholder" in resp.text
+
+
+async def test_script_tag_title_escaped_in_alt_attribute(client, queries_stub):
+    edition_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(
+            title_name='<script>alert(1)</script>',
+            edition_id=edition_id,
+            poster_key=f"{edition_id}.jpg",
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'alt="<script>' not in resp.text
+    assert "alt=\"&lt;script&gt;" in resp.text
+
+
+async def test_poster_route_returns_image_bytes(client, storage_stub):
+    edition_id = uuid.uuid4()
+    storage_stub.poster_bytes[f"{edition_id}.jpg"] = b"\xff\xd8\xfffakejpeg"
+
+    async with client:
+        resp = await client.get(f"/poster/{edition_id}")
+
+    assert resp.status_code == 200
+    assert resp.content == b"\xff\xd8\xfffakejpeg"
+    assert resp.headers["content-type"] == "image/jpeg"
+    assert "max-age" in resp.headers["cache-control"]
+
+
+async def test_poster_route_404_for_non_uuid(client):
+    async with client:
+        resp = await client.get("/poster/not-a-uuid")
+
+    assert resp.status_code == 404
+
+
+async def test_poster_route_404_when_object_missing(client):
+    async with client:
+        resp = await client.get(f"/poster/{uuid.uuid4()}")
+
+    assert resp.status_code == 404
+
+
+# --- Task 3: preparing/failed states, the fragment route, dismiss -------
+
+
+async def test_fragment_route_returns_only_row_markup(client, queries_stub):
+    title_id = uuid.uuid4()
+    row = _row(title_id=title_id, title_name="Fragment Clip")
+    queries_stub.row_by_id[title_id] = row
+
+    async with client:
+        resp = await client.get(f"/library/{title_id}/row")
+
+    assert resp.status_code == 200
+    assert "<html" not in resp.text
+    assert "<head" not in resp.text
+    assert "<body" not in resp.text
+    assert resp.text.count("<li ") == 1
+    assert "Fragment Clip" in resp.text
+
+
+async def test_waiting_row_reports_count_ahead_from_database(client, queries_stub):
+    title_id = uuid.uuid4()
+    row = _row(title_id=title_id, title_status="preparing", started_at=None)
+    queries_stub.rows = [row]
+    queries_stub.preparing_ahead_by_id[title_id] = 1
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "1 ahead of you" in resp.text
+
+
+async def test_working_and_waiting_rows_have_different_state_text(client, queries_stub):
+    waiting_id = uuid.uuid4()
+    working_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(title_id=waiting_id, title_status="preparing", started_at=None),
+        _row(title_id=working_id, title_status="preparing", started_at="2026-08-22T00:00:00Z"),
+    ]
+    queries_stub.preparing_ahead_by_id[waiting_id] = 0
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "Waiting" in resp.text
+    assert "Working" in resp.text
+
+
+async def test_failed_row_has_reason_prefix_no_copy_no_thumbnail(client, queries_stub):
+    queries_stub.rows = [
+        _row(title_status="failed", failure_reason="failed.reason.upload")
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "Adding failed" in resp.text
+    assert "data-copy-text" not in resp.text
+    assert "library-row__thumb" not in resp.text
+    assert "Dismiss" in resp.text
+
+
+async def test_dismiss_deletes_objects_before_rows_and_frees_slug(client, queries_stub, storage_stub):
+    title_id = uuid.uuid4()
+    edition_id = uuid.uuid4()
+    queries_stub.failed_keys_by_id[title_id] = [f"{edition_id}.mp4", f"{edition_id}.jpg"]
+
+    async with client:
+        resp = await client.post(f"/library/{title_id}/dismiss")
+
+    assert resp.status_code in (200, 302)
+    assert set(storage_stub.deleted) == {f"{edition_id}.mp4", f"{edition_id}.jpg"}
+    assert queries_stub.dismiss_calls == [title_id]
+
+
+async def test_dismiss_refuses_an_active_title(client, queries_stub, monkeypatch):
+    title_id = uuid.uuid4()
+
+    async def _refuse(conn, tid):
+        raise ValueError("not failed")
+
+    monkeypatch.setattr(queries, "failed_title_object_keys", _refuse)
+
+    async with client:
+        resp = await client.post(f"/library/{title_id}/dismiss")
+
+    assert resp.status_code == 400
+    assert queries_stub.dismiss_calls == []
+
+
+# --- No client library, no vendored/CDN code -----------------------------
+
+
+def test_app_js_has_a_poll_timer_and_stays_short():
+    text = (REPO_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    assert "setTimeout" in text
+    assert len(text.splitlines()) < 80
+
+
+def test_no_htmx_or_cdn_references():
+    # Case-sensitive, matching the plan's own grep criterion exactly --
+    # the module docstrings say "no HTMX" (capitalized, documentation
+    # prose) on purpose; the lowercase token is the one that must never
+    # appear as a vendored/CDN reference.
+    targets = [REPO_ROOT / "static" / "app.js"]
+    targets += list((REPO_ROOT / "orchestrator" / "web" / "templates").rglob("*.html"))
+    for target in targets:
+        text = target.read_text(encoding="utf-8")
+        assert "htmx" not in text
+        assert "unpkg" not in text
+        assert "jsdelivr" not in text
