@@ -828,3 +828,65 @@ async def test_the_storage_calls_run_off_the_event_loop_thread(
     assert poster.status_code == 200
     assert ran_on["usage"] != loop_thread
     assert ran_on["poster"] != loop_thread
+
+
+# --- Cross-origin write refusal ------------------------------------------
+
+
+async def test_a_destructive_post_from_another_site_is_refused(client, queries_stub, storage_stub):
+    """A page open in another tab can cross-origin-POST these routes with a
+    plain form -- no CORS permission is needed to *send* one, and these
+    routes matter for their side effects, not their bodies.
+    """
+    title_id = uuid.uuid4()
+    edition_id = uuid.uuid4()
+    queries_stub.failed_keys_by_id[title_id] = [f"{edition_id}.mp4"]
+
+    async with client:
+        resp = await client.post(
+            f"/library/{title_id}/dismiss",
+            headers={"Origin": "http://evil.example"},
+        )
+
+    assert resp.status_code == 403
+    assert storage_stub.deleted == []
+    assert queries_stub.dismiss_calls == []
+
+
+async def test_the_interfaces_own_forms_still_post(client, queries_stub, storage_stub):
+    title_id = uuid.uuid4()
+    edition_id = uuid.uuid4()
+    queries_stub.failed_keys_by_id[title_id] = [f"{edition_id}.mp4"]
+
+    async with client:
+        resp = await client.post(
+            f"/library/{title_id}/dismiss",
+            headers={"Origin": "http://testserver"},
+        )
+
+    assert resp.status_code in (200, 302)
+    assert queries_stub.dismiss_calls == [title_id]
+
+
+async def test_a_request_with_no_origin_is_allowed(client, queries_stub, storage_stub):
+    """curl and the CLI send no Origin, and anything with network access to
+    this port can already act by the same decision that leaves it
+    unauthenticated -- refusing them would break tooling without closing
+    anything a browser can do.
+    """
+    title_id = uuid.uuid4()
+    edition_id = uuid.uuid4()
+    queries_stub.failed_keys_by_id[title_id] = [f"{edition_id}.mp4"]
+
+    async with client:
+        resp = await client.post(f"/library/{title_id}/dismiss")
+
+    assert resp.status_code in (200, 302)
+    assert queries_stub.dismiss_calls == [title_id]
+
+
+async def test_a_read_from_another_site_is_still_served(client, queries_stub):
+    async with client:
+        resp = await client.get("/library", headers={"Origin": "http://evil.example"})
+
+    assert resp.status_code == 200

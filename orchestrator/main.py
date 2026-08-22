@@ -6,15 +6,21 @@ for the lifetime of the process. Also the share-browsing interface (D-57
 onward): /static/ assets and the share router. The add worker (D-49/D-50)
 is a second lifespan-scoped background task, started and cancelled exactly
 the way the reaper task already is -- see orchestrator.media.queue.
+
+The one piece of middleware here is the cross-origin write refusal; its
+own docstring carries the threat model and the reasons for what it does
+not attempt.
 """
 import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import asyncpg
 from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from orchestrator.config import get_settings
@@ -126,6 +132,61 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="mytube-orchestrator", lifespan=lifespan)
+
+UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+@app.middleware("http")
+async def reject_cross_origin_writes(request, call_next):
+    """Refuse a state-changing request whose `Origin` is some other site.
+
+    Every action on this interface is a plain form POST with no token, on
+    an origin the operator's browser can reach. That the port is
+    unauthenticated by decision is a statement about *reachability* -- it
+    does not follow that a page the operator happens to have open in
+    another tab should be able to enqueue adds or fire the delete routes.
+    A cross-origin form POST needs no CORS permission to be *sent*; only
+    the response is hidden from the attacker, and these routes are
+    interesting for their side effects, not their bodies.
+
+    An `Origin` check is the whole mitigation, deliberately. A token
+    threaded through six templates plus the session state to validate it
+    against buys nothing extra here: there is one operator, no accounts,
+    and no login to fixate. Browsers attach `Origin` to every
+    cross-origin POST, which is exactly and only the traffic this needs to
+    stop.
+
+    Two things it does not do, both on purpose:
+
+    * A request with no `Origin` at all is allowed. That is curl, the CLI,
+      and non-browser clients -- and anything with network access to this
+      port can already do as it likes, by the same decision that leaves
+      the port unauthenticated. Refusing them would break the tooling
+      without closing anything.
+    * Only the host is compared, not the scheme. The threat is a
+      *different site*, and an attacker cannot make their page's host
+      match this one. Comparing schemes as well would turn a future
+      https-terminating proxy in front of this port into a blanket 403 on
+      every action, which is a worse failure than the one it prevents.
+    """
+    if request.method in UNSAFE_METHODS:
+        origin = request.headers.get("origin")
+        if origin:
+            origin_host = urlsplit(origin).netloc
+            if origin_host != request.headers.get("host"):
+                logger.warning(
+                    "refused a %s to %s from a foreign origin (%s)",
+                    request.method,
+                    request.url.path,
+                    origin,
+                )
+                return PlainTextResponse(
+                    "This request came from another site and was refused.",
+                    status_code=403,
+                )
+    return await call_next(request)
+
+
 app.include_router(resolve_router)
 app.include_router(share_router)
 app.include_router(titles_router)
