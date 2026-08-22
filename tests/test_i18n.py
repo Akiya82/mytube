@@ -1,7 +1,11 @@
-"""Both locale catalogs carry the same key set, no value leaks a planning
-identifier (requirement/decision IDs, phase numbers -- see .claude/CLAUDE.md
-"Planning traces never reach the user"), and every `t("...")` key a
-template references actually exists in both catalogs.
+"""Both locale catalogs carry the same key set, and every key the
+templates and the worker reference actually exists in both.
+
+Planning identifiers in catalog values are checked by
+`test_no_planning_traces.py` instead -- it owns the full identifier
+pattern and now walks the catalogs and the templates as well as the
+Python, so a second narrower copy of the same check here could only drift
+out of agreement with it.
 """
 import json
 import re
@@ -10,10 +14,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOCALES_DIR = REPO_ROOT / "orchestrator" / "locales"
 TEMPLATES_DIR = REPO_ROOT / "orchestrator" / "web" / "templates"
-
-_PLANNING_ID_PATTERN = re.compile(
-    r"(D-[0-9]{2}|ASIS-[0-9]{2}|UI-[0-9]{2}|ADDR-[0-9]{2}|phase [0-9])"
-)
 _TEMPLATE_KEY_PATTERN = re.compile(r"""t\(\s*["']([^"']+)["']""")
 # A reason key as it appears in source: quoted, so the same identifier
 # mentioned in a docstring or a comment is not collected.
@@ -26,12 +26,6 @@ def _load(lang: str) -> dict[str, str]:
 
 def test_catalogs_have_identical_key_sets():
     assert _load("en").keys() == _load("ru").keys()
-
-
-def test_no_catalog_value_carries_a_planning_identifier():
-    for lang in ("en", "ru"):
-        for key, value in _load(lang).items():
-            assert not _PLANNING_ID_PATTERN.search(value), (lang, key, value)
 
 
 def test_every_template_translation_key_exists_in_both_catalogs():
