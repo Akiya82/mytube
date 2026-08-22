@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import warning %}
+
+{% block title %}{{ t("library.rename.heading") }} - MyTube{% endblock %}
+
+{% block heading %}{{ t("library.rename.heading") }}{% endblock %}
+
+{% block content %}
+{% if done %}
+  {% if similar %}
+    <div class="banner banner--info" role="status">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t("add.slug_similar").format(slug=similar | join(", ")) }}</p>
+      </div>
+    </div>
+  {% endif %}
+  <div class="banner banner--info" role="status">
+    <div class="banner__text">
+      <p class="banner__body">{{ t("library.rename.old_still_works") }}</p>
+      <p class="banner__body">
+        {{ public_base_url }}/v/{{ old_slug }} &rarr; {{ public_base_url }}/v/{{ new_slug }}
+      </p>
+    </div>
+  </div>
+  <a class="btn btn--secondary" href="/library">{{ t("nav.library") }}</a>
+{% else %}
+  <p class="form-field__label">{{ t("add.field.slug") }}: {{ public_base_url }}/v/{{ slug }}</p>
+
+  {% if slug_plan is not none and slug_plan.is_tombstone %}
+    <div class="banner banner--warning" role="alert">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t("add.tombstone_warning") }}</p>
+      </div>
+    </div>
+  {% endif %}
+
+  <form class="add-form" method="post" action="/library/{{ title_id }}/rename">
+    <div class="form-field">
+      <label class="form-field__label" for="rename-name">{{ t("add.field.name") }}</label>
+      <input class="form-field__input" type="text" id="rename-name" name="name" value="{{ name_value }}">
+    </div>
+    {% if slug_plan is not none and slug_plan.is_tombstone %}
+      <input type="hidden" name="confirm_reuse" value="true">
+      <button type="submit" class="btn btn--primary">{{ t("add.cta.reuse_slug") }}</button>
+    {% else %}
+      <button type="submit" class="btn btn--primary">{{ t("library.rename.cta") }}</button>
+    {% endif %}
+  </form>
+{% endif %}
+{% endblock %}

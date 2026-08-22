@@ -7,7 +7,7 @@
   both produce byte-identical markup for the same row so a row can never
   look different depending on how it was fetched.
 #}
-<li class="library-row{% if row.title_status == 'failed' %} library-row--failed{% endif %}" data-title-id="{{ row.title_id }}" data-row-status="{{ row.title_status }}">
+<li class="library-row{% if row.title_status == 'failed' %} library-row--failed{% endif %}" data-title-id="{{ row.title_id }}" data-row-status="{{ row.title_status }}"{% if row.title_status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
 {% if row.title_status == "failed" %}
   {# No thumbnail slot at all on a failed row (02-UI-SPEC.md States ->
      Failed): a failed add is heading for dismissal, not a future
@@ -22,7 +22,7 @@
     </form>
   </div>
 {% else %}
-  {% if row.title_status == "active" and row.poster_key %}
+  {% if row.title_status in ("active", "pending_delete") and row.poster_key %}
     <img class="library-row__thumb" src="/poster/{{ row.edition_id }}" alt="{{ row.title_name }}" width="128" height="72" loading="lazy">
   {% else %}
     {# Preparing always shows the placeholder even if a poster key
@@ -49,13 +49,15 @@
           data-copy-done-label="{{ t('library.cta.copy_link_done') }}"
         >{{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}</button>
       </p>
-      <p class="library-row__detail">
-        {{ row.size_bytes | filesizeformat_binary }}
-        &middot; {{ row.duration_seconds | duration_hms }}
-        &middot; {{ row.width }}&times;{{ row.height }}
-        &middot; {{ row.audio_language or t("add.track.language_unknown") }}{% if row.audio_title %} - {{ row.audio_title }}{% endif %}
-        &middot; {% if row.audio_reencoded %}{{ t("library.detail.audio_reencoded") }}{% else %}{{ t("library.detail.audio_untouched") }}{% endif %}
-      </p>
+    {% elif row.title_status == "pending_delete" %}
+      {# Where the status chip normally sits (02-UI-SPEC.md States ->
+         Delete -> countdown): the mm:ss placeholder is server-rendered so
+         the row never has a blank moment before JS runs, and app.js ticks
+         it from data-deadline on the <li> above -- a reload always shows
+         the true remaining time, never a restarted clock. #}
+      <span class="chip chip--deleting" data-countdown-template="{{ t('library.delete.countdown') }}">
+        {{ t("library.delete.countdown").format(mm="--", ss="--") }}
+      </span>
     {% elif row.title_status == "preparing" %}
       <span class="chip chip--preparing">
         {% if row.started_at %}
@@ -71,6 +73,35 @@
         {{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}
       </button>
     {% endif %}
+
+    {% if row.title_status in ("active", "pending_delete") %}
+      <p class="library-row__detail">
+        {{ row.size_bytes | filesizeformat_binary }}
+        &middot; {{ row.duration_seconds | duration_hms }}
+        &middot; {{ row.width }}&times;{{ row.height }}
+        &middot; {{ row.audio_language or t("add.track.language_unknown") }}{% if row.audio_title %} - {{ row.audio_title }}{% endif %}
+        &middot; {% if row.audio_reencoded %}{{ t("library.detail.audio_reencoded") }}{% else %}{{ t("library.detail.audio_untouched") }}{% endif %}
+      </p>
+    {% endif %}
   </div>
+
+  {% if row.title_status == "active" %}
+    <div class="library-row__actions">
+      <a class="btn btn--ghost" href="/library/{{ row.title_id }}/rename">{{ t("library.cta.rename") }}</a>
+      <form method="post" action="/library/{{ row.title_id }}/delete">
+        <button type="submit" class="btn btn--destructive">{{ t("library.cta.delete") }}</button>
+      </form>
+      <a class="btn btn--ghost" href="/check/{{ row.slug }}">{{ t("library.cta.check") }}</a>
+    </div>
+  {% elif row.title_status == "pending_delete" %}
+    <div class="library-row__actions">
+      <form method="post" action="/library/{{ row.title_id }}/undo" data-confirm="{{ t('library.delete.confirm_undo') }}">
+        <button type="submit" class="btn btn--secondary">{{ t("library.cta.undo") }}</button>
+      </form>
+      <form method="post" action="/library/{{ row.title_id }}/purge" data-confirm="{{ t('library.delete.confirm_purge') }}">
+        <button type="submit" class="btn btn--destructive">{{ t("library.cta.purge_now") }}</button>
+      </form>
+    </div>
+  {% endif %}
 {% endif %}
 </li>

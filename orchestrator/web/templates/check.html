@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title_name }} - MyTube{% endblock %}
+
+{% block heading %}{{ title_name }}{% endblock %}
+
+{% block content %}
+<p class="check-page__intro">{{ t("check.body") }}</p>
+
+{% if is_active %}
+  <video class="check-page__video" controls src="{{ address }}"></video>
+  <p class="check-page__hairpin">{{ t("check.hairpin_note").format(address=address) }}</p>
+{% else %}
+  <p class="check-page__inactive">{{ t("check.inactive") }}</p>
+{% endif %}
+
+<p class="check-page__address">{{ address }}</p>
+<button
+  type="button"
+  class="btn btn--ghost"
+  data-copy-text="{{ address }}"
+  data-copy-done-label="{{ t('library.cta.copy_link_done') }}"
+>{{ t("check.cta.copy_link") }}</button>
+{% endblock %}

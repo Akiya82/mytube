@@ -22,6 +22,16 @@ seconds by `static/app.js` for an in-progress title), `GET
 /poster/{edition_id}` (the poster frame, served through the orchestrator
 rather than edge -- see that route's own docstring for why), and `POST
 /library/{id}/dismiss` (hard-deletes a failed title and frees its slug).
+
+This plan adds the three actions the row partial's states were already
+built for: `GET`/`POST /library/{id}/rename` (drives the same
+`plan_slug`/`rename_slug` pair the CLI's own `_rename` uses, so the old
+address stays in slug_history exactly as it always has), `POST
+/library/{id}/delete`, `/undo` and `/purge` (the grace window `reaper.py`
+already runs, finally reachable from both ends), and `GET /check/{slug}`
+(Screen 4 -- a video element pointed at the public address, not a direct
+storage URL, so this page proves the whole delivery chain rather than just
+that a file exists somewhere).
 """
 import uuid
 from pathlib import Path
@@ -36,6 +46,7 @@ from orchestrator.media.add import SlugPlan, plan_slug
 from orchestrator.media.compat import ProbeError, audio_tracks, probe
 from orchestrator.media.queue import AddJob
 from orchestrator.media.share import ShareEscape, safe_join
+from orchestrator.reaper import reap_once
 from orchestrator.slugs import SlugError
 from orchestrator.storage import delete_object, get_object_bytes, storage_usage
 from orchestrator.web.routes_share import _unreachable_response
@@ -129,6 +140,113 @@ async def add_confirm_route(
     await request.app.state.add_queue.enqueue(job)
 
     return RedirectResponse("/library", status_code=302)
+
+
+async def _rename_target_row(conn, title_id):
+    """The one Library row a rename can act on -- reusing `queries.library_row`
+    rather than a new query, since it already has everything the rename
+    form needs (title name, current slug). Only an 'active' title may be
+    renamed (T-02-10): a title mid-flight, already failed, or already
+    counting down to deletion has no address worth correcting.
+    """
+    row = await queries.library_row(conn, title_id)
+    if row is None or row["title_status"] != "active":
+        return None
+    return row
+
+
+@router.get("/library/{title_id}/rename")
+async def rename_form_route(title_id: str, request: Request):
+    try:
+        parsed = uuid.UUID(title_id)
+    except ValueError:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await _rename_target_row(conn, parsed)
+    if row is None:
+        return Response(status_code=404)
+
+    return render(
+        request,
+        "rename_form.html",
+        done=False,
+        title_id=parsed,
+        slug=row["slug"],
+        name_value=row["title_name"],
+        slug_plan=None,
+    )
+
+
+@router.post("/library/{title_id}/rename")
+async def rename_confirm_route(
+    title_id: str,
+    request: Request,
+    name: str = Form(...),
+    confirm_reuse: str = Form("false"),
+):
+    """Wraps the exact same `plan_slug` / `rename_slug` pair
+    `cli/__main__.py`'s `_rename` already calls (D-63) -- nothing about
+    slug_history changes here, `rename_slug` alone still owns that. The one
+    behavior `plan_slug` adds beyond the CLI's own rename (which never
+    checked for a tombstone at all, see `_rename`) is D-64: a rename onto a
+    tombstoned slug now gets the same explicit-confirmation gate the add
+    form's `confirm_reuse` already gives the CLI's `--reuse-slug` flag,
+    rather than silently getting suffixed away by collision handling.
+    """
+    try:
+        parsed = uuid.UUID(title_id)
+    except ValueError:
+        return Response(status_code=404)
+
+    clean_name = name.strip()
+    if not clean_name:
+        return Response(status_code=400)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await _rename_target_row(conn, parsed)
+        if row is None:
+            return Response(status_code=404)
+        old_slug = row["slug"]
+
+        async with conn.transaction():
+            # Same advisory lock as the add route, taken before the slug
+            # plan is read -- see create_title_with_edition's docstring
+            # for the race this closes.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1)", queries.SLUG_CLAIM_LOCK_KEY
+            )
+            try:
+                slug_plan: SlugPlan = await plan_slug(conn, clean_name)
+            except SlugError:
+                return Response(status_code=400)
+
+            if slug_plan.is_tombstone and confirm_reuse != "true":
+                # Mirrors the add form's own gate: show the warning and a
+                # "Reuse this address" confirm control, write nothing yet.
+                return render(
+                    request,
+                    "rename_form.html",
+                    done=False,
+                    title_id=parsed,
+                    slug=old_slug,
+                    name_value=clean_name,
+                    slug_plan=slug_plan,
+                )
+
+            await queries.rename_slug(conn, old_slug, slug_plan.chosen)
+
+    return render(
+        request,
+        "rename_form.html",
+        done=True,
+        title_id=parsed,
+        old_slug=old_slug,
+        new_slug=slug_plan.chosen,
+        similar=slug_plan.similar,
+    )
 
 
 def _working_estimate_text(settings, source_path: str | None) -> str:
@@ -280,3 +398,110 @@ async def dismiss_route(title_id: str, request: Request):
         await queries.delete_failed_title(conn, parsed)
 
     return RedirectResponse("/library", status_code=302)
+
+
+@router.post("/library/{title_id}/delete")
+async def delete_route(title_id: str, request: Request):
+    """Start the grace window (D-13, D-62): `GET /v/{slug}` answers 410
+    immediately, unchanged from phase 1. Only an 'active' title can be
+    marked for deletion -- the same guard rename uses, for the same
+    reason (T-02-10): a title that is not active has no live address to
+    protect a mouse slip against.
+    """
+    try:
+        parsed = uuid.UUID(title_id)
+    except ValueError:
+        return Response(status_code=404)
+
+    settings = get_settings()
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.library_row(conn, parsed)
+        if row is None or row["title_status"] != "active":
+            return Response(status_code=404)
+        await queries.mark_for_delete(conn, parsed, settings.delete_grace_seconds)
+
+    return RedirectResponse("/library", status_code=302)
+
+
+@router.post("/library/{title_id}/undo")
+async def undo_route(title_id: str, request: Request):
+    """D-62's cancel: only a title currently pending deletion may be
+    undone (T-02-10) -- a stale page cannot revive a title that was
+    already purged or was never marked for deletion in the first place.
+    """
+    try:
+        parsed = uuid.UUID(title_id)
+    except ValueError:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.library_row(conn, parsed)
+        if row is None:
+            return Response(status_code=404)
+        if row["title_status"] != "pending_delete":
+            return Response(status_code=400)
+        await queries.cancel_delete(conn, parsed)
+
+    return RedirectResponse("/library", status_code=302)
+
+
+@router.post("/library/{title_id}/purge")
+async def purge_route(title_id: str, request: Request):
+    """D-62's skip-the-wait: reuses `mark_for_delete` with a zero-second
+    window rather than a second deletion path (so it can never drift from
+    the one the reaper already runs), then awaits one `reap_once` cycle
+    inline so the object is actually gone -- and the title actually
+    'deleted' -- before this response returns, rather than sometime within
+    the next 30-second poll. Only a title already pending deletion may be
+    purged (T-02-10): purge is reached from the countdown UI, which only
+    ever shows for a title already in that state.
+    """
+    try:
+        parsed = uuid.UUID(title_id)
+    except ValueError:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.library_row(conn, parsed)
+        if row is None:
+            return Response(status_code=404)
+        if row["title_status"] != "pending_delete":
+            return Response(status_code=400)
+        await queries.mark_for_delete(conn, parsed, 0)
+
+    await reap_once(pool)
+
+    return RedirectResponse("/library", status_code=302)
+
+
+@router.get("/check/{slug}")
+async def check_page_route(slug: str, request: Request):
+    """Screen 4 (D-65): a `<video>` pointed at the public address for this
+    exact slug, never a direct storage URL (T-02-12) -- the point is to
+    prove the whole delivery chain (resolve, sign, redirect, range-serve),
+    not that an object exists somewhere. A slug that does not resolve at
+    all is a 404; a slug that resolves to a non-active title renders the
+    same page with the video element omitted, since the address is real
+    but does not currently play.
+    """
+    settings = get_settings()
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        resolved = await queries.resolve_slug(conn, slug)
+        if resolved is None:
+            return Response(status_code=404)
+        row = await queries.library_row(conn, resolved["title_id"])
+
+    title_name = row["title_name"] if row is not None else slug
+    address = f"{settings.public_base_url}/v/{slug}"
+
+    return render(
+        request,
+        "check.html",
+        title_name=title_name,
+        address=address,
+        is_active=resolved["status"] == "active",
+    )

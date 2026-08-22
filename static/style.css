@@ -512,11 +512,42 @@ button:focus-visible {
 
 .library-row__actions {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
 }
 
 .chip--preparing {
   background: var(--status-preparing-bg);
   color: var(--status-preparing-text);
+}
+
+.chip--deleting {
+  background: var(--status-failed-bg);
+  color: var(--status-failed-text);
+}
+
+/* Check page (Screen 4) -- video, address, copy button, hairpin-NAT note.
+   Deliberately minimal: no related list, no comments, no recommendations. */
+.check-page__video {
+  width: 100%;
+  max-width: 640px;
+  border-radius: 4px;
+  background: #000;
+}
+
+.check-page__intro,
+.check-page__address,
+.check-page__hairpin,
+.check-page__inactive {
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+  max-width: 640px;
+}
+
+.check-page__address {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
 /* Accessible-but-invisible label text (the missing-thumbnail placeholder's

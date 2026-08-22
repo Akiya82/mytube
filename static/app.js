@@ -45,3 +45,32 @@ function pollLibraryRow(row) {
 document
   .querySelectorAll('.library-row[data-row-status="preparing"]')
   .forEach((row) => setTimeout(() => pollLibraryRow(row), 4000));
+
+// Delete/undo/purge confirmation (D-62): a native confirm() dialog, the
+// deliberately minimal mechanism -- keyboard- and screen-reader-operable
+// for free, no custom modal. A form carrying data-confirm blocks its own
+// submit unless the operator accepts the dialog.
+document.addEventListener("submit", (event) => {
+  const message = event.target.getAttribute("data-confirm");
+  if (message && !confirm(message)) {
+    event.preventDefault();
+  }
+});
+
+// Delete countdown tick (D-62): computed every second from the
+// server-rendered absolute data-deadline (ms since epoch) on the row --
+// never polled from the server, so a reload shows the true remaining time
+// instead of restarting the clock.
+function tickCountdown(row) {
+  const chip = row.querySelector(".chip--deleting");
+  if (!chip) return;
+  const remaining = Math.max(0, Math.round((Number(row.getAttribute("data-deadline")) - Date.now()) / 1000));
+  const mm = String(Math.floor(remaining / 60)).padStart(2, "0");
+  const ss = String(remaining % 60).padStart(2, "0");
+  chip.textContent = chip.getAttribute("data-countdown-template").replace("{mm}", mm).replace("{ss}", ss);
+  if (remaining > 0) setTimeout(() => tickCountdown(row), 1000);
+}
+
+document
+  .querySelectorAll('.library-row[data-row-status="pending_delete"]')
+  .forEach((row) => tickCountdown(row));
