@@ -6,6 +6,7 @@ shape test_resolve.py and test_share.py already use -- no real Postgres or
 subprocess in this file, quick-loop only.
 """
 import json
+import threading
 from pathlib import Path
 
 import httpx
@@ -268,6 +269,42 @@ async def test_a_dot_dot_path_is_canonicalized_before_it_becomes_an_identity(
     assert resp.status_code == 200
     assert asked_for == [["a-video.mp4"]]
     assert 'action="/add/a-video.mp4"' in resp.text
+
+
+async def test_the_blocking_share_calls_run_off_the_event_loop_thread(
+    web_client, monkeypatch
+):
+    """`ffprobe` is a subprocess with a 30-second timeout and the atom scan
+    walks headers over a network mount with no timeout at all. Called bare,
+    they hold the one event loop that also answers `GET /v/{slug}` and
+    `/healthz`, so opening the add form for a slow file stops video
+    resolution for every viewer -- during synchronized viewing, which is
+    the product.
+
+    Asserted on the thread rather than on elapsed time: a timing test of a
+    blocked event loop cannot measure the block from inside the same loop,
+    and "ran somewhere other than the loop thread" is the rule itself.
+    """
+    loop_thread = threading.get_ident()
+    ran_on = {}
+
+    def recording_probe(path):
+        ran_on["probe"] = threading.get_ident()
+        return _fixture("compatible.json")
+
+    def recording_moov(path):
+        ran_on["moov"] = threading.get_ident()
+        return False
+
+    monkeypatch.setattr(routes_share, "probe", recording_probe)
+    monkeypatch.setattr(routes_share, "moov_before_mdat", recording_moov)
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert resp.status_code == 200
+    assert ran_on["probe"] != loop_thread
+    assert ran_on["moov"] != loop_thread
 
 
 # --- the slug field, similar-slug warning, tombstone reuse ---------------

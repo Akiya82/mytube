@@ -4,6 +4,11 @@ Runs inside the same FastAPI process as everything else -- a title crossing
 its `delete_at` needs no dedicated compose service, the orchestrator is
 already running continuously.
 
+Every object delete goes through `asyncio.to_thread`: this loop shares its
+event loop with every HTTP request in the process, and `purge_route` awaits
+`reap_once` inline, so a bare delete stalls `GET /v/{slug}` and `/healthz`
+for as long as storage takes to answer.
+
 Never touches the slug history table: a deleted title's slug stays a
 tombstone and keeps answering 410 forever (D-10) -- a dead link is honest,
 a link that quietly starts playing something else is not.
@@ -34,7 +39,7 @@ async def reap_once(pool: asyncpg.Pool) -> None:
             failed = False
             for object_key in keys:
                 try:
-                    delete_object(object_key)
+                    await asyncio.to_thread(delete_object, object_key)
                 except Exception:
                     failed = True
                     logger.exception(

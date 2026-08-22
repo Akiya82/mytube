@@ -10,7 +10,17 @@ The file branch of `share_listing_route` is where `ffprobe` runs (D-56):
 once, when the add form opens, and never while drawing a listing. The
 directory branch never imports or calls anything from
 `orchestrator.media.compat` for exactly that reason.
+
+**Nothing synchronous is called bare from this module either** -- the rule
+`orchestrator.media.queue`'s docstring states, for the same reason and on
+the same event loop. `ffprobe` is a subprocess with a 30-second timeout,
+the atom scan walks headers over a network mount with no timeout at all,
+and a directory scan is one round trip per entry: run bare, one slow file
+on the share freezes video resolution and `/healthz` for every viewer
+while the add form draws. Every filesystem and subprocess call here goes
+through `asyncio.to_thread`.
 """
+import asyncio
 import shutil
 from pathlib import Path
 from urllib.parse import quote
@@ -62,6 +72,23 @@ def _breadcrumb(rel_path: str) -> list[dict]:
     return crumbs
 
 
+async def _resolve_share_path(root: Path, rel: str) -> tuple[Path, str, bool]:
+    """Validate `rel` against the mount root and answer the three facts
+    every share route needs from it -- the resolved target, its canonical
+    share-relative path, and whether it is a file -- in one thread hop
+    rather than three separate stat round trips on the event loop.
+
+    Raises `ShareEscape` exactly as `safe_join` does; the caller renders
+    the "cannot reach the share" state from it.
+    """
+
+    def _work() -> tuple[Path, str, bool]:
+        target = safe_join(root, rel)
+        return target, relative_to_root(root, target), target.is_file()
+
+    return await asyncio.to_thread(_work)
+
+
 def _unreachable_response(request: Request, status_code: int):
     return render(
         request,
@@ -82,14 +109,14 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
     entry_name = target.name
 
     try:
-        probe_json = probe(target)
+        probe_json = await asyncio.to_thread(probe, target)
     except ProbeError:
         probe_json = None
 
     verdict = None
     if probe_json is not None:
         try:
-            moov_first = moov_before_mdat(target)
+            moov_first = await asyncio.to_thread(moov_before_mdat, target)
         except OSError:
             # The probe above already proved the file is readable media;
             # a byte-level read failing here would be a race with the
@@ -119,14 +146,16 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
     reuse_confirmed = request.query_params.get("confirm_reuse") == "1"
 
     try:
-        size_bytes = target.stat().st_size
+        size_bytes = await asyncio.to_thread(lambda: target.stat().st_size)
     except OSError:
         size_bytes = 0
     if verdict is not None and verdict.size_bytes:
         size_bytes = verdict.size_bytes
 
     already_correct = verdict.already_correct if verdict is not None else False
-    free_bytes = shutil.disk_usage(settings.work_dir).free
+    free_bytes = await asyncio.to_thread(
+        lambda: shutil.disk_usage(settings.work_dir).free
+    )
     not_enough_space = free_bytes < required_free_bytes(
         size_bytes, already_correct=already_correct
     )
@@ -172,22 +201,21 @@ async def share_listing_route(request: Request, path: str = ""):
     settings = get_settings()
     root = Path(settings.share_root)
 
+    # `rel_path` is canonical from here on, never the raw request segment:
+    # an edition's source_path is an identity, and `Movies/../a.mkv`
+    # naming the same file as `a.mkv` under a second string is what makes
+    # the "already added" chip stop matching (and puts `..` in a
+    # breadcrumb).
     try:
-        target = safe_join(root, path)
+        target, rel_path, is_file = await _resolve_share_path(root, path)
     except ShareEscape:
         return _unreachable_response(request, status_code=400)
 
-    # Canonical from here on, never the raw request segment: an edition's
-    # source_path is an identity, and `Movies/../a.mkv` naming the same
-    # file as `a.mkv` under a second string is what makes the
-    # "already added" chip stop matching (and puts `..` in a breadcrumb).
-    rel_path = relative_to_root(root, target)
-
-    if target.is_file():
+    if is_file:
         return await _render_add_form(request, target, rel_path)
 
     try:
-        entries = list_dir(target, root)
+        entries = await asyncio.to_thread(list_dir, target, root)
     except ShareUnavailable:
         return _unreachable_response(request, status_code=503)
 

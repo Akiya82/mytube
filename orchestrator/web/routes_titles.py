@@ -32,7 +32,15 @@ already runs, finally reachable from both ends), and `GET /check/{slug}`
 (Screen 4 -- a video element pointed at the public address, not a direct
 storage URL, so this page proves the whole delivery chain rather than just
 that a file exists somewhere).
+
+Every blocking call here -- the share probe, the source stat behind the
+Working estimate, the bucket listing behind the usage figure, the poster
+GET, and the object deletes -- goes through `asyncio.to_thread`, for the
+reason `orchestrator.media.queue`'s docstring states in full: they share
+an event loop with `GET /v/{slug}` and `/healthz`, and a bucket
+enumeration on a cold cache run bare stops both for its whole duration.
 """
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -45,11 +53,11 @@ from orchestrator.db import queries
 from orchestrator.media.add import SlugPlan, plan_slug
 from orchestrator.media.compat import ProbeError, audio_tracks, probe
 from orchestrator.media.queue import AddJob
-from orchestrator.media.share import ShareEscape, relative_to_root, safe_join
+from orchestrator.media.share import ShareEscape, safe_join
 from orchestrator.reaper import reap_once
 from orchestrator.slugs import SlugError
 from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
-from orchestrator.web.routes_share import _unreachable_response
+from orchestrator.web.routes_share import _resolve_share_path, _unreachable_response
 from orchestrator.web.templates import humanize_seconds, render
 
 router = APIRouter()
@@ -67,18 +75,16 @@ async def add_confirm_route(
     settings = get_settings()
     root = Path(settings.share_root)
 
+    # `rel_path` is the identity the "already added" chip and the
+    # duplicate-detection query both key on -- derived from the validated
+    # target, never the raw request segment (see share.relative_to_root).
     try:
-        target = safe_join(root, path)
+        target, rel_path, is_file = await _resolve_share_path(root, path)
     except ShareEscape:
         return _unreachable_response(request, status_code=400)
 
-    if not target.is_file():
+    if not is_file:
         return _unreachable_response(request, status_code=400)
-
-    # The identity the "already added" chip and the duplicate-detection
-    # query both key on -- derived from the validated target, never the
-    # raw request segment (see share.relative_to_root).
-    rel_path = relative_to_root(root, target)
 
     clean_name = name.strip()
     if not clean_name:
@@ -93,7 +99,7 @@ async def add_confirm_route(
     # `audio_index` ends up as an ffmpeg stream selector, so it is checked
     # against the file as it is right now, not as it was when the form drew.
     try:
-        probe_json = probe(target)
+        probe_json = await asyncio.to_thread(probe, target)
     except ProbeError:
         return _unreachable_response(request, status_code=400)
 
@@ -291,7 +297,9 @@ async def _row_context(conn, settings, row) -> dict:
                 conn, data["title_id"]
             )
         else:
-            data["estimate_text"] = _working_estimate_text(settings, data.get("source_path"))
+            data["estimate_text"] = await asyncio.to_thread(
+                _working_estimate_text, settings, data.get("source_path")
+            )
     return data
 
 
@@ -307,7 +315,7 @@ async def library_route(request: Request):
     # The reconciliation costs one catalog query and no extra bucket
     # enumeration -- usage.listing is the same sixty-second-cached listing
     # the used/free figure already reads (storage.storage_usage()).
-    usage = storage_usage()
+    usage = await asyncio.to_thread(storage_usage)
     reconciliation = reconcile(usage.listing, referenced)
 
     return render(
@@ -365,7 +373,7 @@ async def poster_route(edition_id: str):
         return Response(status_code=404)
 
     try:
-        data = get_object_bytes(f"{parsed}.jpg")
+        data = await asyncio.to_thread(get_object_bytes, f"{parsed}.jpg")
     except ClientError:
         return Response(status_code=404)
 
@@ -411,7 +419,7 @@ async def dismiss_route(title_id: str, request: Request):
             return Response(status_code=400)
 
         for key in keys:
-            delete_object(key)
+            await asyncio.to_thread(delete_object, key)
 
         await queries.delete_failed_title(conn, parsed)
 

@@ -779,3 +779,42 @@ def test_routes_titles_never_writes_slug_history_directly():
     text = (REPO_ROOT / "orchestrator" / "web" / "routes_titles.py").read_text(encoding="utf-8")
     assert text.count("INSERT INTO slug_history") == 0
     assert text.count("reap_once") >= 1
+
+
+async def test_the_storage_calls_run_off_the_event_loop_thread(
+    client, queries_stub, storage_stub, monkeypatch
+):
+    """The bucket listing behind the usage figure and the poster GET share
+    an event loop with `GET /v/{slug}` and `/healthz`. Run bare, a cold
+    enumeration stops both for its whole duration -- and the library page
+    is the screen the operator leaves open.
+
+    Asserted on the thread rather than on elapsed time: a timing test of a
+    blocked event loop cannot measure the block from inside the same loop.
+    """
+    import threading
+
+    loop_thread = threading.get_ident()
+    ran_on = {}
+
+    def recording_usage():
+        ran_on["usage"] = threading.get_ident()
+        return storage_stub.usage
+
+    edition_id = uuid.uuid4()
+
+    def recording_get(key):
+        ran_on["poster"] = threading.get_ident()
+        return b"jpeg-bytes"
+
+    monkeypatch.setattr(routes_titles, "storage_usage", recording_usage)
+    monkeypatch.setattr(routes_titles, "get_object_bytes", recording_get)
+
+    async with client:
+        library = await client.get("/library")
+        poster = await client.get(f"/poster/{edition_id}")
+
+    assert library.status_code == 200
+    assert poster.status_code == 200
+    assert ran_on["usage"] != loop_thread
+    assert ran_on["poster"] != loop_thread
