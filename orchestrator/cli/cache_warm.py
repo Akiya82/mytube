@@ -101,9 +101,9 @@ def cache_warm(
     if limited_by_file_length:
         typer.echo(
             f"файл длиннее предела прогрева ({warm_bytes} байт) -- прогрет только "
-            "начальный отрезок; зона кэша всё равно меньше файла, а inactive "
-            "выкинет прогретое после окончания прогрева (D-24), греть дальше "
-            "бессмысленно (вердикт M5)"
+            "начальный отрезок; зона кэша всё равно меньше файла целиком, а "
+            "inactive вытеснит прогретое раньше, чем начнётся просмотр, так что "
+            "греть дальше бессмысленно"
         )
     # Hand the operator the exact --since value instead of telling them to take a
     # timestamp themselves. nginx logs whole seconds, so a warm that finishes in

@@ -50,7 +50,7 @@ def add(
     slug: str = typer.Option(None, "--slug", help="Явный слаг вместо производного от названия"),
     reuse_slug: bool = typer.Option(
         False, "--reuse-slug",
-        help="Подтвердить переиспользование слага удалённого тайтла (D-10)",
+        help="Подтвердить переиспользование слага удалённого тайтла",
     ),
 ) -> None:
     asyncio.run(_add(file, name, slug, reuse_slug))
@@ -84,7 +84,7 @@ async def _add(file: Path, name: str, explicit_slug: str | None, reuse: bool) ->
             # the whole point is to get this specific address back (D-10).
             typer.echo(
                 f"Внимание: слаг {slug_plan.chosen!r} переиспользован -- прежний адрес "
-                "мог разойтись по мирам с другим видео (D-10)."
+                "мог разойтись по мирам с другим видео."
             )
         elif slug_plan.chosen != slug_plan.candidate:
             typer.echo(f"Слаг {slug_plan.candidate!r} занят, использован {slug_plan.chosen!r}")
@@ -169,16 +169,16 @@ async def _remove(slug: str) -> None:
 
 @app.command("cache-warm")
 def cache_warm_command(
-    slug: str = typer.Argument(..., help="Слаг тайтла, который прогреваем перед сеансом (D-27)"),
+    slug: str = typer.Argument(..., help="Слаг тайтла, который прогреваем перед сеансом просмотра"),
     base_url: str = typer.Option(
-        DEFAULT_BASE_URL, "--base-url", help="Адрес edge, обычно внутренний (D-36)"
+        DEFAULT_BASE_URL, "--base-url", help="Адрес edge; внутри контейнера обычно внутренний"
     ),
     chunk_size: int = typer.Option(
         None, "--chunk-size", help="Размер шага в байтах; по умолчанию MYTUBE_SLICE_SIZE"
     ),
     bytes: int = typer.Option(
         None, "--bytes",
-        help="Предел прогрева в байтах (вердикт M5); по умолчанию MYTUBE_WARM_BYTES "
+        help="Предел прогрева в байтах; по умолчанию MYTUBE_WARM_BYTES "
         "или половина зоны кэша",
     ),
 ) -> None:
