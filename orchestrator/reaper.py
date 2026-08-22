@@ -26,7 +26,12 @@ async def reap_once(pool: asyncpg.Pool) -> None:
         due = await queries.due_for_reaping(conn)
         for row in due:
             title_id = row["title_id"]
-            for object_key in row["object_keys"] or []:
+            # D-72: a poster left behind when its video goes is the same
+            # orphan class this project has already accumulated once with
+            # video objects alone -- deleted here, same per-object
+            # exception isolation, so one bad key never stops the rest.
+            keys = list(row["object_keys"] or []) + list(row["poster_keys"] or [])
+            for object_key in keys:
                 try:
                     delete_object(object_key)
                 except Exception:

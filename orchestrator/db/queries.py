@@ -475,7 +475,8 @@ _LIBRARY_ROW_COLUMNS = """
     e.id AS edition_id, e.size_bytes AS size_bytes,
     e.duration_seconds AS duration_seconds, e.width AS width, e.height AS height,
     e.audio_language AS audio_language, e.audio_title AS audio_title,
-    e.audio_reencoded AS audio_reencoded, e.poster_key AS poster_key
+    e.audio_reencoded AS audio_reencoded, e.poster_key AS poster_key,
+    e.source_path AS source_path
 """
 
 _LIBRARY_ROW_FROM = """
@@ -519,7 +520,55 @@ async def cancel_delete(conn: asyncpg.Connection, title_id) -> None:
     )
 
 
-async def delete_failed_title(conn: asyncpg.Connection, title_id) -> list[str]:
+def _refuse_unless_failed(title) -> None:
+    if title is None:
+        raise LookupError("title not found")
+    if title["status"] != "failed":
+        raise ValueError(
+            f"refusing to hard-delete title: status is {title['status']!r}, "
+            "not 'failed' -- only a failed add was never published and is "
+            "safe to erase outright"
+        )
+
+
+async def failed_title_object_keys(conn: asyncpg.Connection, title_id) -> list[str]:
+    """The object keys (video, and poster when set) a 'failed' title's
+    dismiss button is about to orphan -- read-only, deletes nothing.
+
+    Split from `delete_failed_title` (below) precisely so the caller can
+    delete these objects from storage *before* asking that function to
+    destroy the rows that are the only record of the keys (T-02-08): a
+    caller that read the keys, deleted the objects, and only then called
+    `delete_failed_title` survives a crash between those two steps with
+    the row still there to retry against; a caller that deleted the rows
+    first and crashed before deleting the objects loses the keys forever.
+    Refuses the same way `delete_failed_title` does, and for the same
+    reason -- a caller must not learn a live title's object keys through
+    the door meant for a title nothing ever published.
+    """
+    title = await conn.fetchrow("SELECT status FROM titles WHERE id = $1", title_id)
+    _refuse_unless_failed(title)
+
+    editions = await conn.fetch(
+        """
+        SELECT e.object_key AS object_key, e.poster_key AS poster_key
+        FROM editions e
+        JOIN episodes ep ON ep.id = e.episode_id
+        JOIN seasons s ON s.id = ep.season_id
+        WHERE s.title_id = $1
+        """,
+        title_id,
+    )
+    keys: list[str] = []
+    for row in editions:
+        if row["object_key"]:
+            keys.append(row["object_key"])
+        if row["poster_key"]:
+            keys.append(row["poster_key"])
+    return keys
+
+
+async def delete_failed_title(conn: asyncpg.Connection, title_id) -> None:
     """Hard-delete every row for a title that is 'failed' -- edition,
     episode, season, title, and its slug_history rows, in FK-dependency
     order. Refuses (raises ValueError) for any other status: nothing was
@@ -527,45 +576,17 @@ async def delete_failed_title(conn: asyncpg.Connection, title_id) -> list[str]:
     rather than tombstoned, but the same call against a live title would
     destroy history that other people's links depend on.
 
-    **Returns the object keys it is about to orphan** -- the video key and
-    the poster key, when each is non-null -- collected before the rows go.
-    This return value is not decoration: it is the only remaining way to
-    find those objects. A failed add can leave a fully uploaded object
-    behind (the upload succeeded and a later step did not), and the row
-    holding its key is exactly what this function destroys. Return them
-    and the caller can delete them first; return nothing and the object is
-    unreachable forever, which is precisely the orphan class this phase
-    exists to close.
+    **Call only after every key `failed_title_object_keys` returned for
+    this same title has already been removed from storage** -- see that
+    function's docstring for why the order is load-bearing, not
+    stylistic. This function itself never touches storage (queries.py is
+    not the module that talks to S3); it only ever removes catalog rows.
     """
     async with conn.transaction():
         title = await conn.fetchrow(
             "SELECT status FROM titles WHERE id = $1 FOR UPDATE", title_id
         )
-        if title is None:
-            raise LookupError(f"title {title_id!r} not found")
-        if title["status"] != "failed":
-            raise ValueError(
-                f"refusing to hard-delete title {title_id!r}: status is "
-                f"{title['status']!r}, not 'failed' -- only a failed add "
-                "was never published and is safe to erase outright"
-            )
-
-        editions = await conn.fetch(
-            """
-            SELECT e.object_key AS object_key, e.poster_key AS poster_key
-            FROM editions e
-            JOIN episodes ep ON ep.id = e.episode_id
-            JOIN seasons s ON s.id = ep.season_id
-            WHERE s.title_id = $1
-            """,
-            title_id,
-        )
-        keys: list[str] = []
-        for row in editions:
-            if row["object_key"]:
-                keys.append(row["object_key"])
-            if row["poster_key"]:
-                keys.append(row["poster_key"])
+        _refuse_unless_failed(title)
 
         # episodes.default_edition_id -> editions.id must be cleared before
         # editions can be dropped -- the same FK cycle 0001's module
@@ -598,8 +619,6 @@ async def delete_failed_title(conn: asyncpg.Connection, title_id) -> list[str]:
         await conn.execute("DELETE FROM seasons WHERE title_id = $1", title_id)
         await conn.execute("DELETE FROM slug_history WHERE title_id = $1", title_id)
         await conn.execute("DELETE FROM titles WHERE id = $1", title_id)
-
-    return keys
 
 
 async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:

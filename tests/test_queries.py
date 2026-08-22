@@ -151,7 +151,7 @@ async def test_preparing_rows_at_startup_splits_queued_and_started(raw_conn):
     assert queued_id not in started_ids
 
 
-async def test_delete_failed_title_removes_every_row_returns_both_keys(raw_conn):
+async def test_failed_title_object_keys_returns_both_keys_without_deleting_anything(raw_conn):
     edition_id = uuid.uuid4()
     title_id = await queries.create_title_with_edition(
         raw_conn, "Doomed Failed Title", "doomed-failed-title-slug", edition_id,
@@ -159,9 +159,45 @@ async def test_delete_failed_title_removes_every_row_returns_both_keys(raw_conn)
     )
     await queries.set_edition_poster(raw_conn, edition_id, f"{edition_id}-poster.jpg")
 
-    keys = await queries.delete_failed_title(raw_conn, title_id)
+    keys = await queries.failed_title_object_keys(raw_conn, title_id)
 
     assert set(keys) == {f"{edition_id}.mp4", f"{edition_id}-poster.jpg"}
+
+    # Read-only: the row this plan (02-05) relies on for a crash-safe
+    # dismiss (delete objects, using these keys, before the rows go) must
+    # still exist after asking for the keys.
+    still_there = await raw_conn.fetchrow("SELECT id FROM titles WHERE id = $1", title_id)
+    assert still_there is not None
+
+
+async def test_failed_title_object_keys_returns_only_video_key_when_poster_is_null(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Doomed No Poster", "doomed-no-poster-slug", edition_id,
+        f"{edition_id}.mp4", status="failed",
+    )
+
+    keys = await queries.failed_title_object_keys(raw_conn, title_id)
+
+    assert keys == [f"{edition_id}.mp4"]
+
+
+async def test_failed_title_object_keys_refuses_an_active_title(raw_conn):
+    title_id = await _create_title(raw_conn, "Very Much Active Keys", "very-much-active-keys-slug")
+
+    with pytest.raises(ValueError):
+        await queries.failed_title_object_keys(raw_conn, title_id)
+
+
+async def test_delete_failed_title_removes_every_row(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Doomed Failed Title Rows", "doomed-failed-title-rows-slug", edition_id,
+        f"{edition_id}.mp4", status="failed",
+    )
+    await queries.set_edition_poster(raw_conn, edition_id, f"{edition_id}-poster.jpg")
+
+    await queries.delete_failed_title(raw_conn, title_id)
 
     remaining_title = await raw_conn.fetchrow("SELECT id FROM titles WHERE id = $1", title_id)
     remaining_edition = await raw_conn.fetchrow(
@@ -173,18 +209,6 @@ async def test_delete_failed_title_removes_every_row_returns_both_keys(raw_conn)
     assert remaining_title is None
     assert remaining_edition is None
     assert remaining_slug_history == []
-
-
-async def test_delete_failed_title_returns_only_video_key_when_poster_is_null(raw_conn):
-    edition_id = uuid.uuid4()
-    title_id = await queries.create_title_with_edition(
-        raw_conn, "Doomed No Poster", "doomed-no-poster-slug", edition_id,
-        f"{edition_id}.mp4", status="failed",
-    )
-
-    keys = await queries.delete_failed_title(raw_conn, title_id)
-
-    assert keys == [f"{edition_id}.mp4"]
 
 
 async def test_delete_failed_title_leaves_an_active_title_untouched(raw_conn):

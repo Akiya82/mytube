@@ -87,6 +87,25 @@ async def test_reaper_deletes_object_and_finishes_delete_after_grace_expires(
     assert history[0]["title_id"] == title_id
 
 
+async def test_reaper_deletes_poster_key_alongside_video_key(raw_conn, deleted_objects):
+    edition_id = uuid.uuid4()
+    object_key = f"{edition_id}.mp4"
+    poster_key = f"{edition_id}.jpg"
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Reaper Poster Target", "reaper-poster-target-slug", edition_id, object_key
+    )
+    await queries.set_edition_poster(raw_conn, edition_id, poster_key)
+    await queries.mark_for_delete(raw_conn, title_id, grace_seconds=0)
+
+    await reaper.reap_once(_SinglePoolLike(raw_conn))
+
+    assert object_key in deleted_objects
+    assert poster_key in deleted_objects
+
+    row_after = await queries.resolve_slug(raw_conn, "reaper-poster-target-slug")
+    assert row_after["status"] == "deleted"
+
+
 async def test_reaper_does_not_touch_titles_before_grace_expires(raw_conn, deleted_objects):
     title_id, object_key = await _create_title(
         raw_conn, "Reaper Not Yet", "reaper-not-yet-slug"
