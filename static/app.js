@@ -30,16 +30,26 @@ document.addEventListener("click", (event) => {
 function pollLibraryRow(row) {
   const titleId = row.getAttribute("data-title-id");
   fetch(`/library/${titleId}/row`)
-    .then((res) => res.text())
+    .then((res) => (res.ok ? res.text() : null))
     .then((html) => {
       const template = document.createElement("template");
-      template.innerHTML = html.trim();
+      template.innerHTML = html === null ? "" : html.trim();
       const fresh = template.content.firstElementChild;
+      if (!fresh) {
+        // 404 or an empty body: the row was dismissed or purged from
+        // another tab. replaceWith stringifies its argument, so the null
+        // firstElementChild would leave a text node reading "null" here.
+        row.remove();
+        return;
+      }
       row.replaceWith(fresh);
       if (fresh.getAttribute("data-row-status") === "preparing") {
         setTimeout(() => pollLibraryRow(fresh), 4000);
       }
-    });
+    })
+    // One dropped request must not silently end the poll -- the row would
+    // sit on "Working..." until a manual reload.
+    .catch(() => setTimeout(() => pollLibraryRow(row), 4000));
 }
 
 document
