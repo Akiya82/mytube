@@ -87,8 +87,8 @@ print(s.get('codec_name'), s.get('profile'), s.get('level'), s.get('pix_fmt'))
   python3 "$(dirname "$0")/check_faststart.py" "$output"
 }
 
-build_clip "видео удалено" "$OUTPUT_DIR/deleted.mp4"
-build_clip "такой ссылки нет" "$OUTPUT_DIR/not-found.mp4"
-build_clip "сервис недоступен" "$OUTPUT_DIR/unavailable.mp4"
+build_clip "this video was deleted" "$OUTPUT_DIR/deleted.mp4"
+build_clip "no such link" "$OUTPUT_DIR/not-found.mp4"
+build_clip "service unavailable" "$OUTPUT_DIR/unavailable.mp4"
 
 echo "OK: три ролика собраны и проверены в $OUTPUT_DIR"
