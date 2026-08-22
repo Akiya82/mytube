@@ -168,8 +168,29 @@ def _post_data(clip: dict, *, name: str, slug: str, confirm_reuse: str = "false"
 
 
 async def test_post_add_returns_redirect_with_preparing_row_and_null_started_at(
-    client, raw_conn, clips
+    client, raw_conn, clips, monkeypatch
 ):
+    """The claim under test -- "the row is written and the response
+    returns before the background work does anything" -- is a real
+    design property (D-49), but asserting it by racing a wall-clock
+    check against the worker task after `await client.post(...)` returns
+    is not reliable: asyncio gives the worker task turns to run during
+    that same `await`, and on a fast enough machine it can call
+    `mark_title_started` before this test's own next line runs. Gate the
+    worker deterministically instead -- block it before it touches
+    anything, so what this test observes is genuinely "immediately after
+    the transaction commits and the route returns", not "whatever the
+    scheduler happened to interleave this run".
+    """
+    worker_may_proceed = asyncio.Event()
+    real_process_add = queue_module.process_add
+
+    async def gated_process_add(pool, job):
+        await worker_may_proceed.wait()
+        await real_process_add(pool, job)
+
+    monkeypatch.setattr(queue_module, "process_add", gated_process_add)
+
     clip = clips["already_correct"]
     resp = await client.post(
         f"/add/{clip['path'].name}",
@@ -186,6 +207,8 @@ async def test_post_add_returns_redirect_with_preparing_row_and_null_started_at(
     assert row is not None
     assert row["status"] == "preparing"
     assert row["started_at"] is None
+
+    worker_may_proceed.set()
 
 
 async def test_worker_drains_to_active_upload_called_and_v_slug_redirects(
