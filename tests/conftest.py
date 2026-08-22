@@ -25,10 +25,37 @@ def settings(monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_ENDPOINT", "http://storage:8333")
     monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
+    monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
 
     from orchestrator.config import Settings
 
     return Settings()
+
+
+@pytest.fixture
+def share_root(tmp_path):
+    """A stand-in mount root: two folders, three files, one file named with
+    markup. This machine has no CIFS client and
+    `orchestrator.media.share` cannot tell the difference -- that is the
+    point. Reused by this plan's tests and by later plans.
+    """
+    root = tmp_path / "share"
+    root.mkdir()
+    (root / "Movies").mkdir()
+    (root / "Zzz Folder").mkdir()
+    (root / "a-video.mp4").write_bytes(b"stub video bytes")
+    (root / "notes.txt").write_text("hello", encoding="utf-8")
+    # Markup-flavored name proving list_dir sanitizes nothing (the template
+    # escapes). The literal `<script>...</script>` form used by the route-
+    # level escaping test in test_share.py cannot be created as a real file
+    # on this host: NTFS rejects `<`, `>` and `"` in filenames outright
+    # (`[Errno 22] Invalid argument`), unlike the CIFS/NFS shares this
+    # module targets in production. `&` and `'` are legal here and exercise
+    # the same unescaped-passthrough behavior at the listing layer; the
+    # route-level HTML-escaping test builds its dangerous filename directly
+    # (see test_share.py), bypassing the filesystem instead of fighting it.
+    (root / "Director's Cut & Extra (2024).mkv").write_bytes(b"stub video bytes")
+    return root
 
 
 @pytest.fixture(scope="session")
@@ -66,6 +93,7 @@ def migrated_db_url(postgres_url) -> str:
         "MYTUBE_S3_ENDPOINT": "http://storage:8333",
         "MYTUBE_S3_KEY": "test-key",
         "MYTUBE_S3_SECRET": "test-secret",
+        "MYTUBE_PUBLIC_BASE_URL": "https://mytube.example",
     }
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],

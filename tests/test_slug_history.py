@@ -168,6 +168,7 @@ async def test_migration_downgrade_and_upgrade_round_trip(migrated_db_url):
         "MYTUBE_S3_ENDPOINT": "http://storage:8333",
         "MYTUBE_S3_KEY": "test-key",
         "MYTUBE_S3_SECRET": "test-secret",
+        "MYTUBE_PUBLIC_BASE_URL": "https://mytube.example",
     }
 
     subprocess.run(

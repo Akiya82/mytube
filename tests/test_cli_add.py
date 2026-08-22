@@ -22,6 +22,7 @@ def _cli_env(migrated_db_url, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_ENDPOINT", "http://storage:8333")
     monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
+    monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
