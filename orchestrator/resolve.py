@@ -26,18 +26,21 @@ def external_base_url(request: Request) -> str:
     or a domain change) and the redirect has to stay on whichever one the
     request actually came in on.
 
-    Trusting `X-Forwarded-Host`/`X-Forwarded-Proto` here is safe because of
-    *this deployment's specific topology*, not as a blanket policy: the
-    orchestrator (`api`) publishes no port and lives only on compose's
-    internal networks (edge_net/db_net/storage_net) -- the only thing able
-    to reach this code at all is `edge`, and edge's own
-    src/edge/nginx.conf.template unconditionally sets
+    Trusting `X-Forwarded-Host`/`X-Forwarded-Proto` here rested on `api`
+    publishing no port; that stopped being true once the interface arrived
+    (D-57 onward) -- `api` now publishes a host port, defaulting to
+    loopback. A client that can reach that port directly can set the
+    forwarded headers itself and receive a redirect naming a host of its
+    choosing, which hands that client a signed URL pointing at a host that
+    does not have the bytes: a self-inflicted redirect with no third party
+    harmed, on a tool with one operator on a LAN (T-02-03, accepted rather
+    than unnoticed). Through `edge`, this is still exactly as safe as
+    before: `edge`'s own src/edge/nginx.conf.template unconditionally sets
     `X-Forwarded-Host: $host` / `X-Forwarded-Proto: $scheme` on every
-    request it proxies to `/v/` and `/refresh/`. A client can put anything
-    it wants in those headers when it talks to edge; edge overwrites them
-    before the request ever reaches here, so the header value on arrival is
-    always edge's own. If `api` were ever exposed directly (bypassing
-    edge), this trust would have to become an explicit allowlist instead.
+    request it proxies to `/v/` and `/refresh/`, overwriting whatever a
+    client sent, so the header value on arrival through that path is always
+    edge's own. The moment the interface is reachable from beyond the LAN,
+    the forwarded headers need an allowlist instead of this trust.
     """
     host = request.headers.get("x-forwarded-host") or request.headers.get("host")
     proto = request.headers.get("x-forwarded-proto", "https")

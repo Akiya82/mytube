@@ -2,9 +2,13 @@
 
 See src/.env.example for every field this class expects.
 """
+import logging
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -21,7 +25,49 @@ class Settings(BaseSettings):
     delete_grace_seconds: int = 300  # D-13
     blob_access_log: str = "/var/log/nginx/blob_access.log"
 
+    # D-57: the address the copy button builds links against. Required, no
+    # default -- the service refuses to start without it, the same way it
+    # already refuses without secure_link_secret, because a bare hostname
+    # here produces a copied link that silently does not work in a player.
+    public_base_url: str
+    # D-54: the read-only bind mount of the one CIFS/NFS share this phase browses.
+    share_root: str = "/share"
+    # D-52/D-53: ephemeral ffmpeg scratch space -- a plain container-layer
+    # directory, wiped on recreate, never a named volume (see Dockerfile).
+    work_dir: str = "/work"
+    # D-51: the size-based time estimate shown next to the add button.
+    add_estimate_mb_per_second: float = 20.0
+    # D-67: 0 means "no quota enforced", used only for the usage display for now.
+    storage_quota_bytes: int = 0
+    # Mirrors MYTUBE_UI_BIND so the process can see what compose bound the
+    # interface's host port to (see docker-compose.yml, api.ports).
+    ui_bind: str = "127.0.0.1"
+
+    @field_validator("public_base_url")
+    @classmethod
+    def _validate_public_base_url(cls, value: str) -> str:
+        value = value.strip()
+        if not (value.startswith("http://") or value.startswith("https://")):
+            raise ValueError(
+                "MYTUBE_PUBLIC_BASE_URL must start with http:// or https:// "
+                f"(got {value!r}) -- a bare hostname produces a copied link "
+                "that silently does not work in a player."
+            )
+        return value.rstrip("/")
+
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    # Not a mitigation -- every route on this port is unauthenticated,
+    # including the ones that delete (T-02-16). Logged so an operator who
+    # widens MYTUBE_UI_BIND per SETUP.md sees what they just did in the
+    # same place they will be reading logs anyway.
+    if settings.ui_bind not in ("127.0.0.1", "localhost", "::1"):
+        logger.warning(
+            "MYTUBE_UI_BIND=%s: the interface is reachable from the network, "
+            "and every route on it -- including the ones that delete -- is "
+            "unauthenticated.",
+            settings.ui_bind,
+        )
+    return settings

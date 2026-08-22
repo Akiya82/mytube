@@ -5,12 +5,27 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
+# ffmpeg/ffprobe, copied by digest (not a moving tag) from a static-binary
+# image with no shell — pinned and verified in
+# docs/experiments/08-ffmpeg-in-image.md. Placed above the source COPY
+# lines so an orchestrator source edit never invalidates this layer.
+COPY --from=mwader/static-ffmpeg:9.0@sha256:f1e16a2f8fd9c4470fcccf4de56655c58b4ef7f2e6a5fcefb0e636e124363b36 /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=mwader/static-ffmpeg:9.0@sha256:f1e16a2f8fd9c4470fcccf4de56655c58b4ef7f2e6a5fcefb0e636e124363b36 /ffprobe /usr/local/bin/ffprobe
+
 COPY pyproject.toml ./
 COPY orchestrator ./orchestrator
+COPY static ./static
 COPY alembic.ini ./
 COPY migrations ./migrations
 
 RUN pip install --no-cache-dir .
+
+# Ephemeral scratch space for ffmpeg output (D-52's free-space preflight,
+# D-53's "leaves nothing behind"). Deliberately a plain directory in the
+# container layer, never a named volume or bind mount — a container
+# recreate wipes it, which is half of how an interrupted add leaves
+# nothing behind.
+RUN mkdir -p /work
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
