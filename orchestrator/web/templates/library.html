@@ -13,20 +13,7 @@
 {% else %}
   <ul class="library-list">
     {% for row in rows %}
-      <li class="library-row" data-title-id="{{ row.title_id }}">
-        <div class="library-row__body">
-          <h2 class="library-row__title">{{ row.title_name }}</h2>
-          {% if row.title_status == "active" %}
-            <p class="library-row__address">{{ public_base_url }}/v/{{ row.slug }}</p>
-          {% elif row.title_status == "preparing" %}
-            <span class="chip chip--preparing">
-              {% if row.started_at %}{{ t("library.status.working").format(estimate="") }}{% else %}{{ t("library.status.queued").format(n="") }}{% endif %}
-            </span>
-          {% elif row.title_status == "failed" %}
-            <span class="chip chip--failed">{{ t("failed.reason_prefix").format(reason=t(row.failure_reason or "failed.reason.upload")) }}</span>
-          {% endif %}
-        </div>
-      </li>
+      {% include "partials/library_row.html" %}
     {% endfor %}
   </ul>
 {% endif %}

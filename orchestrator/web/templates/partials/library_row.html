@@ -1,0 +1,76 @@
+{% from "partials/icons.html" import copy as copy_icon, film_placeholder %}
+{#
+  One Library row, in all four of its states (D-60, 02-UI-SPEC.md Screen 3
+  and States). This exact fragment is also what GET /library/{id}/row
+  returns for the 4-second poll (D-49) -- library.html includes it via
+  {% include %} inside its loop, the poll route renders it standalone, and
+  both produce byte-identical markup for the same row so a row can never
+  look different depending on how it was fetched.
+#}
+<li class="library-row{% if row.title_status == 'failed' %} library-row--failed{% endif %}" data-title-id="{{ row.title_id }}" data-row-status="{{ row.title_status }}">
+{% if row.title_status == "failed" %}
+  {# No thumbnail slot at all on a failed row (02-UI-SPEC.md States ->
+     Failed): a failed add is heading for dismissal, not a future
+     thumbnail, and the reclaimed width goes to the reason text. #}
+  <div class="library-row__body">
+    <h2 class="library-row__title">{{ row.title_name }}</h2>
+    <p class="library-row__reason">{{ t("failed.reason_prefix").format(reason=t(row.failure_reason or "failed.reason.upload")) }}</p>
+  </div>
+  <div class="library-row__actions">
+    <form method="post" action="/library/{{ row.title_id }}/dismiss">
+      <button type="submit" class="btn btn--ghost">{{ t("library.cta.dismiss") }}</button>
+    </form>
+  </div>
+{% else %}
+  {% if row.title_status == "active" and row.poster_key %}
+    <img class="library-row__thumb" src="/poster/{{ row.edition_id }}" alt="{{ row.title_name }}" width="128" height="72" loading="lazy">
+  {% else %}
+    {# Preparing always shows the placeholder even if a poster key
+       already exists (D-72) -- a poster for a file not yet confirmed to
+       remux and upload successfully is a promise the row cannot keep. #}
+    <div class="library-row__thumb library-row__thumb--placeholder">
+      {{ film_placeholder(cls="library-row__thumb-icon") }}
+      <span class="visually-hidden">{{ t("library.thumbnail.placeholder_label") }}</span>
+    </div>
+  {% endif %}
+
+  <div class="library-row__body">
+    <h2 class="library-row__title">{{ row.title_name }}</h2>
+
+    {% if row.title_status == "active" %}
+      {# The absence of a status chip on a finished row IS the done
+         signal (02-UI-SPEC.md Color, Active/done row). #}
+      <p class="library-row__address">
+        {{ public_base_url }}/v/{{ row.slug }}
+        <button
+          type="button"
+          class="btn btn--ghost library-row__copy"
+          data-copy-text="{{ public_base_url }}/v/{{ row.slug }}"
+          data-copy-done-label="{{ t('library.cta.copy_link_done') }}"
+        >{{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}</button>
+      </p>
+      <p class="library-row__detail">
+        {{ row.size_bytes | filesizeformat_binary }}
+        &middot; {{ row.duration_seconds | duration_hms }}
+        &middot; {{ row.width }}&times;{{ row.height }}
+        &middot; {{ row.audio_language or t("add.track.language_unknown") }}{% if row.audio_title %} - {{ row.audio_title }}{% endif %}
+        &middot; {% if row.audio_reencoded %}{{ t("library.detail.audio_reencoded") }}{% else %}{{ t("library.detail.audio_untouched") }}{% endif %}
+      </p>
+    {% elif row.title_status == "preparing" %}
+      <span class="chip chip--preparing">
+        {% if row.started_at %}
+          {{ t("library.status.working").format(estimate=row.estimate_text or "") }}
+        {% else %}
+          {{ t("library.status.queued").format(n=row.preparing_ahead) }}
+        {% endif %}
+      </span>
+      {# A disabled placeholder where the copy button will be -- so the
+         row does not change height once it finishes (02-UI-SPEC.md
+         States -> Preparing). #}
+      <button type="button" class="btn btn--ghost library-row__copy" disabled aria-disabled="true">
+        {{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}
+      </button>
+    {% endif %}
+  </div>
+{% endif %}
+</li>

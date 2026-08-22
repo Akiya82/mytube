@@ -423,7 +423,8 @@ button:focus-visible {
   cursor: not-allowed;
 }
 
-/* Library (Screen 3), plain form -- thumbnail/technical detail arrive later */
+/* Library (Screen 3) -- thumbnail, technical detail, preparing/failed
+   states (02-UI-SPEC.md Screen 3 and States). */
 .library-list {
   list-style: none;
   margin: 0;
@@ -434,20 +435,83 @@ button:focus-visible {
 }
 
 .library-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  min-height: 104px;
   padding: var(--space-md);
   background: var(--surface-secondary);
   border: 1px solid var(--surface-secondary-border);
   border-radius: 4px;
 }
 
+/* Failed row: destructive left border and tint, no thumbnail reserved
+   (D-61) -- shorter than the 104px active/preparing rows, which is
+   acceptable here because the border and tint already read as a
+   different kind of row, not a peer that happens to be shorter. */
+.library-row--failed {
+  min-height: 0;
+  border-left: 4px solid var(--destructive);
+  background: var(--status-failed-bg);
+}
+
+.library-row__thumb {
+  flex-shrink: 0;
+  width: 128px;
+  height: 72px;
+  border: 1px solid var(--surface-secondary-border);
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.library-row__thumb--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--status-neutral-bg);
+  color: var(--status-neutral-text);
+}
+
+.library-row__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
 .library-row__title {
-  margin: 0 0 var(--space-xs);
+  font-size: var(--text-heading-size);
+  font-weight: var(--text-heading-weight);
+  line-height: var(--text-heading-line);
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .library-row__address {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
   font-size: var(--text-label-size);
   color: var(--text-muted);
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.library-row__detail {
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.library-row__reason {
+  color: var(--status-failed-text);
+  margin: 0;
+}
+
+.library-row__actions {
+  flex-shrink: 0;
 }
 
 .chip--preparing {
@@ -455,7 +519,16 @@ button:focus-visible {
   color: var(--status-preparing-text);
 }
 
-.chip--failed {
-  background: var(--status-failed-bg);
-  color: var(--status-failed-text);
+/* Accessible-but-invisible label text (the missing-thumbnail placeholder's
+   "No preview available", read by a screen reader, seen by no one). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

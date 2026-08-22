@@ -14,10 +14,19 @@
       <a class="site-nav__link" href="/library">{{ t("nav.library") }}</a>
     </nav>
 
-    {# The real used/free figures land in a later plan (D-67) -- this slot
-       exists now, empty, so the header layout does not shift when it is
-       filled in. #}
-    <div class="site-header__storage" aria-live="polite"></div>
+    <div class="site-header__storage" aria-live="polite">
+      {% if storage_usage is defined %}
+        {% if storage_usage.free_bytes is not none %}
+          {{ t("storage.usage").format(used=storage_usage.total_bytes | filesizeformat_binary, free=storage_usage.free_bytes | filesizeformat_binary) }}
+        {% else %}
+          {# D-67: the external S3 endpoint has no quota API to ask "how much
+             is left" -- only "how much is used" is knowable without a
+             configured MYTUBE_STORAGE_QUOTA_BYTES. A made-up free figure
+             would be worse than showing the one true number. #}
+          {{ t("storage.usage_used_only").format(used=storage_usage.total_bytes | filesizeformat_binary) }}
+        {% endif %}
+      {% endif %}
+    </div>
 
     <div class="lang-switch">
       <a
