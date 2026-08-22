@@ -20,6 +20,7 @@ from orchestrator.cli.cache_report import cache_report as _cache_report
 from orchestrator.cli.cache_warm import DEFAULT_BASE_URL, cache_warm as _cache_warm
 from orchestrator.config import get_settings
 from orchestrator.db import queries
+from orchestrator.media.add import plan_slug
 from orchestrator.slugs import SlugError, normalize_slug, pick_unique_slug
 from orchestrator.storage import put_object_from_file
 
@@ -57,51 +58,50 @@ def add(
 async def _add(file: Path, name: str, explicit_slug: str | None, reuse: bool) -> None:
     conn = await _connect()
     try:
-        candidate = _candidate_slug(explicit_slug, name)
+        # plan_slug (orchestrator/media/add.py) is the extracted version of
+        # what this function used to compute inline -- the web add form
+        # calls the exact same sequence, in the exact same order, so the
+        # two never drift. The tombstone-then-reuse decision below and its
+        # printed messages are unchanged from before the extraction.
+        try:
+            slug_plan = await plan_slug(conn, name, explicit_slug)
+        except SlugError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1)
 
-        # The tombstone check MUST run on the raw candidate before any
-        # auto-suffixing: taken_slugs() (used below by pick_unique_slug)
-        # includes tombstoned slugs on purpose, so if this check ran after
-        # suffixing, a tombstoned candidate would just get quietly bumped
-        # to "-2" and --reuse-slug's confirmation gate would never fire
-        # (found by test_add_on_tombstoned_slug_without_flag_refuses,
-        # Rule 1).
-        existing = await queries.resolve_slug(conn, candidate)
-        is_tombstone = existing is not None and existing["status"] != "active"
-
-        if is_tombstone and not reuse:
+        if slug_plan.is_tombstone and not reuse:
             typer.echo(
-                f"Слаг {candidate!r} принадлежит удалённому тайтлу -- адрес "
+                f"Слаг {slug_plan.candidate!r} принадлежит удалённому тайтлу -- адрес "
                 "мог разойтись по мирам. Повторите с --reuse-slug для "
                 "явного подтверждения.",
                 err=True,
             )
             raise typer.Exit(1)
 
-        if is_tombstone:
+        if slug_plan.is_tombstone:
             # --reuse-slug: use the exact requested slug, no suffixing --
             # the whole point is to get this specific address back (D-10).
-            chosen, similar = candidate, []
             typer.echo(
-                f"Внимание: слаг {chosen!r} переиспользован -- прежний адрес "
+                f"Внимание: слаг {slug_plan.chosen!r} переиспользован -- прежний адрес "
                 "мог разойтись по мирам с другим видео (D-10)."
             )
-        else:
-            taken = await queries.taken_slugs(conn)
-            chosen, similar = pick_unique_slug(candidate, taken)
-            if chosen != candidate:
-                typer.echo(f"Слаг {candidate!r} занят, использован {chosen!r}")
+        elif slug_plan.chosen != slug_plan.candidate:
+            typer.echo(f"Слаг {slug_plan.candidate!r} занят, использован {slug_plan.chosen!r}")
 
-        if similar:
-            typer.echo(f"Предупреждение: похожий слаг уже занят: {', '.join(similar)}")
+        if slug_plan.similar:
+            typer.echo(
+                f"Предупреждение: похожий слаг уже занят: {', '.join(slug_plan.similar)}"
+            )
 
         edition_id = uuid.uuid4()
         object_key = f"{edition_id}.mp4"
         put_object_from_file(str(file), object_key)
 
-        await queries.create_title_with_edition(conn, name, chosen, edition_id, object_key)
+        await queries.create_title_with_edition(
+            conn, name, slug_plan.chosen, edition_id, object_key
+        )
 
-        typer.echo(f"/v/{chosen}")
+        typer.echo(f"/v/{slug_plan.chosen}")
     finally:
         await conn.close()
 

@@ -35,11 +35,19 @@
     {% for entry in entries %}
       <li class="share-row{% if entry.is_dir %} share-row--folder{% else %} share-row--file{% endif %}">
         <a class="share-row__link" href="{{ entry.href }}">
-          <span class="share-row__name">{{ entry.name }}</span>
+          <span class="share-row__meta">
+            <span class="share-row__name">{{ entry.name }}</span>
+            {% if entry.already_added %}
+              <span class="chip">{{ t("share.badge.already_added") }}</span>
+            {% endif %}
+          </span>
           {% if not entry.is_dir %}
             <span class="share-row__size">{{ entry.size | filesizeformat_binary }}</span>
           {% endif %}
         </a>
+        {% if entry.already_added %}
+          <a class="share-row__existing-link" href="/v/{{ entry.already_added.slug }}">{{ t("share.cta.view_existing") }}</a>
+        {% endif %}
       </li>
     {% endfor %}
   </ul>

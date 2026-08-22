@@ -126,7 +126,14 @@ async def test_add_on_tombstoned_slug_with_flag_reuses_and_keeps_history(
 
     out = capsys.readouterr().out
     assert "переиспользован" in out
-    assert "/v/cli-tombstone-reuse-slug" in out
+    # Anchored to end of line, not a substring match: /v/x is a substring
+    # of /v/x-2, so a plain "in out" check cannot tell a clean reuse from
+    # the auto-suffixed collision the tombstone branch exists to prevent
+    # (see plan_slug's own docstring on why this exact regression is easy
+    # for an extraction to reintroduce silently).
+    lines = out.splitlines()
+    assert "/v/cli-tombstone-reuse-slug" in lines
+    assert "Предупреждение" not in out
 
     resolved = await queries.resolve_slug(raw_conn, "cli-tombstone-reuse-slug")
     assert resolved["title_id"] != old_title_id

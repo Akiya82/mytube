@@ -129,12 +129,42 @@ def _web_env(share_root, monkeypatch):
     get_settings.cache_clear()
 
 
+class _DummyConn:
+    pass
+
+
+class _DummyAcquireCtx:
+    async def __aenter__(self):
+        return _DummyConn()
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _DummyPool:
+    def acquire(self):
+        return _DummyAcquireCtx()
+
+    async def close(self):
+        pass
+
+
 @pytest.fixture
-def web_client(_web_env):
-    """No lifespan, no real DB pool -- routes_share.py never touches
-    `request.app.state.db_pool`, so there is nothing to fake here (unlike
-    test_resolve.py's `_DummyPool`).
+def web_client(_web_env, monkeypatch):
+    """Since plan 03 the directory-listing branch also calls
+    `queries.editions_by_source_paths` (the already-added chip, D-48), so
+    `request.app.state.db_pool` now needs to exist -- same `_DummyPool`
+    shape test_resolve.py already uses. The query itself is monkeypatched
+    to "nothing already added", matching this fixture share's fixture data
+    (which was never added through any of these tests).
     """
+    from orchestrator.db import queries
+
+    async def _no_editions_already_added(conn, paths):
+        return []
+
+    monkeypatch.setattr(queries, "editions_by_source_paths", _no_editions_already_added)
+    app.state.db_pool = _DummyPool()
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 

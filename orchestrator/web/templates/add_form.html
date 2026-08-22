@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import warning %}
+
+{% block title %}{{ entry_name }} - MyTube{% endblock %}
+
+{% block heading %}{{ t("add.heading") }}{% endblock %}
+
+{% block content %}
+{% if already_added %}
+  <div class="banner banner--info" role="status">
+    {{ warning(cls="banner__icon") }}
+    <div class="banner__text">
+      <p class="banner__body">{{ t("share.already_added.body").format(title=already_added.title_name) }}</p>
+      <a class="banner__link" href="/v/{{ already_added.slug }}">{{ t("share.cta.view_existing") }}</a>
+    </div>
+  </div>
+{% endif %}
+
+<form class="add-form" method="post" action="{{ form_action }}">
+  <div class="form-field">
+    <label class="form-field__label" for="add-name">{{ t("add.field.name") }}</label>
+    <input class="form-field__input" type="text" id="add-name" name="name" value="{{ entry_name }}">
+  </div>
+
+  <div class="form-field">
+    <label class="form-field__label" for="add-slug">{{ t("add.field.slug") }}</label>
+    <input class="form-field__input" type="text" id="add-slug" name="slug" value="{{ slug_plan.chosen }}">
+  </div>
+
+  {% if slug_plan.is_tombstone %}
+    <div class="banner banner--warning" role="alert">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t("add.tombstone_warning") }}</p>
+        {% if not reuse_confirmed %}
+          <a class="btn btn--secondary" href="{{ reuse_href }}">{{ t("add.cta.reuse_slug") }}</a>
+        {% endif %}
+      </div>
+    </div>
+    <input type="hidden" name="confirm_reuse" value="{{ 'true' if reuse_confirmed else 'false' }}">
+  {% elif slug_plan.similar %}
+    <div class="banner banner--info" role="status">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t("add.slug_similar").format(slug=slug_plan.similar | join(", ")) }}</p>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if probe_failed %}
+    <div class="banner banner--error" role="alert">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t("reason.unreadable") }}</p>
+      </div>
+    </div>
+  {% elif verdict.eligible %}
+    <p class="audio-note">
+      {% if verdict.audio_needs_reencode %}{{ t("add.audio_note") }}{% else %}{{ t("add.audio_note_passthrough") }}{% endif %}
+    </p>
+  {% else %}
+    <div class="banner banner--error" role="alert">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t(verdict.reason_key).format(**verdict.reason_params) }}</p>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if verdict is not none and verdict.eligible %}
+    <fieldset class="form-field radio-group">
+      <legend class="form-field__label">{{ t("add.field.audio") }}</legend>
+      {% for track in verdict.tracks %}
+        <label class="radio-group__option">
+          <input type="radio" name="audio_track" value="{{ track.index }}"{% if track.index == verdict.default_track_index %} checked{% endif %}>
+          <span>{{ track.language or t("add.track.language_unknown") }}{% if track.title %} - {{ track.title }}{% endif %}</span>
+        </label>
+      {% endfor %}
+    </fieldset>
+  {% endif %}
+
+  <p class="cost-line">{{ t("add.estimate").format(size=size_bytes | filesizeformat_binary, time=estimate_seconds | humanize_seconds) }}</p>
+  {% if not_enough_space %}
+    <div class="banner banner--error" role="alert">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t("reason.storage_full") }}</p>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="add-form__actions">
+    {% if verdict is not none and verdict.eligible %}
+      <button type="submit" name="add" value="1" class="btn btn--primary"{% if not can_add %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.primary") }}</button>
+    {% endif %}
+    <button type="button" class="btn btn--secondary" disabled aria-disabled="true">{{ t("add.cta.convert_disabled") }}</button>
+    <p class="add-form__convert-caption">{{ t("add.cta.convert_caption") }}</p>
+  </div>
+</form>
+{% endblock %}
