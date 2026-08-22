@@ -45,7 +45,7 @@ from orchestrator.db import queries
 from orchestrator.media.add import SlugPlan, plan_slug
 from orchestrator.media.compat import ProbeError, audio_tracks, probe
 from orchestrator.media.queue import AddJob
-from orchestrator.media.share import ShareEscape, safe_join
+from orchestrator.media.share import ShareEscape, relative_to_root, safe_join
 from orchestrator.reaper import reap_once
 from orchestrator.slugs import SlugError
 from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
@@ -74,6 +74,11 @@ async def add_confirm_route(
 
     if not target.is_file():
         return _unreachable_response(request, status_code=400)
+
+    # The identity the "already added" chip and the duplicate-detection
+    # query both key on -- derived from the validated target, never the
+    # raw request segment (see share.relative_to_root).
+    rel_path = relative_to_root(root, target)
 
     clean_name = name.strip()
     if not clean_name:
@@ -129,7 +134,7 @@ async def add_confirm_route(
                 edition_id,
                 object_key,
                 status="preparing",
-                source_path=path,
+                source_path=rel_path,
                 audio_stream_index=audio_index,
                 audio_channels=selected.channels,
             )

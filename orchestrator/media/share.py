@@ -72,6 +72,26 @@ def safe_join(root: Path, rel: str) -> Path:
     return resolved
 
 
+def relative_to_root(root: Path, target: Path) -> str:
+    """The canonical share-relative path of a target `safe_join` already
+    validated -- the one spelling of a file, whatever spelling the request
+    used to reach it.
+
+    Identity comparisons key on this string: `list_dir` builds entry paths
+    the same canonical way, and an edition's stored `source_path` is what
+    the "already added" chip and the duplicate-detection query match
+    against. Storing the raw request segment instead lets
+    `Movies/../a.mkv` and `a.mkv` name the same file under two different
+    strings, and the duplicate is never noticed again.
+
+    The root itself relativizes to `.`, which is not a path segment --
+    returned as the empty string, the same value the routes use for "the
+    top of the share".
+    """
+    rel = target.relative_to(root.resolve()).as_posix()
+    return "" if rel == "." else rel
+
+
 def list_dir(path: Path, root: Path) -> list[ShareEntry]:
     """One directory scan over `path`, directories before files, each group
     sorted case-insensitively by name.

@@ -208,8 +208,9 @@ async def test_script_tag_filename_renders_escaped_everywhere(web_client, monkey
     `share_root`) -- same workaround test_share.py's route-level escaping
     test already uses: point the route at a real file's bytes, but report
     a dangerous name for it, bypassing the filesystem instead of fighting
-    it. `is_file`/`stat` delegate to the real underlying path; only `.name`
-    (what the route reads and the template renders) is swapped.
+    it. `is_file`/`stat`/`relative_to` delegate to the real underlying
+    path; only `.name` (what the route reads and the template renders) is
+    swapped.
     """
     monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
 
@@ -225,6 +226,9 @@ async def test_script_tag_filename_renders_escaped_everywhere(web_client, monkey
         def stat(self):
             return self._real.stat()
 
+        def relative_to(self, other):
+            return self._real.relative_to(other)
+
     real_safe_join = routes_share.safe_join
 
     def _dangerous_safe_join(root, rel):
@@ -237,6 +241,33 @@ async def test_script_tag_filename_renders_escaped_everywhere(web_client, monkey
 
     assert "<script>alert(1)</script>" not in resp.text
     assert resp.text.count("&lt;script&gt;alert(1)&lt;/script&gt;") >= 1
+
+
+async def test_a_dot_dot_path_is_canonicalized_before_it_becomes_an_identity(
+    web_client, monkeypatch, db_stub
+):
+    """`Movies/../a-video.mp4` and `a-video.mp4` are the same file, and the
+    duplicate-detection query keys on the string. If the raw request
+    segment reaches the catalog, the same source can be added twice with
+    no "already added" chip ever appearing again -- and the breadcrumb
+    renders a `..` crumb.
+    """
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+
+    asked_for = []
+
+    async def _editions_by_source_paths(conn, paths):
+        asked_for.append(list(paths))
+        return []
+
+    monkeypatch.setattr(queries, "editions_by_source_paths", _editions_by_source_paths)
+
+    async with web_client:
+        resp = await web_client.get("/add/Movies/%2E%2E/a-video.mp4")
+
+    assert resp.status_code == 200
+    assert asked_for == [["a-video.mp4"]]
+    assert 'action="/add/a-video.mp4"' in resp.text
 
 
 # --- the slug field, similar-slug warning, tombstone reuse ---------------

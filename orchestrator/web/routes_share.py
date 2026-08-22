@@ -22,7 +22,13 @@ from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media.add import SlugPlan, plan_slug, required_free_bytes
 from orchestrator.media.compat import ProbeError, analyze, moov_before_mdat, probe
-from orchestrator.media.share import ShareEscape, ShareUnavailable, list_dir, safe_join
+from orchestrator.media.share import (
+    ShareEscape,
+    ShareUnavailable,
+    list_dir,
+    relative_to_root,
+    safe_join,
+)
 from orchestrator.slugs import SlugError
 from orchestrator.web.templates import LOCALES, render
 
@@ -171,8 +177,14 @@ async def share_listing_route(request: Request, path: str = ""):
     except ShareEscape:
         return _unreachable_response(request, status_code=400)
 
+    # Canonical from here on, never the raw request segment: an edition's
+    # source_path is an identity, and `Movies/../a.mkv` naming the same
+    # file as `a.mkv` under a second string is what makes the
+    # "already added" chip stop matching (and puts `..` in a breadcrumb).
+    rel_path = relative_to_root(root, target)
+
     if target.is_file():
-        return await _render_add_form(request, target, path)
+        return await _render_add_form(request, target, rel_path)
 
     try:
         entries = list_dir(target, root)
@@ -203,7 +215,7 @@ async def share_listing_route(request: Request, path: str = ""):
         "share_listing.html",
         share_unreachable=False,
         entries=rows,
-        breadcrumb=_breadcrumb(path.strip("/")),
+        breadcrumb=_breadcrumb(rel_path),
     )
 
 
