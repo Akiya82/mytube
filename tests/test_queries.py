@@ -9,6 +9,7 @@ import asyncpg
 import pytest
 
 from orchestrator.db import queries
+from orchestrator.storage import reconcile
 from orchestrator.slugs import pick_unique_slug
 
 pytestmark = pytest.mark.integration
@@ -251,6 +252,43 @@ async def test_referenced_objects_returns_the_serving_slug_alongside_each_key(ra
     assert video_row["kind"] == "video"
     assert video_row["slug"] == "referenced-title-slug"
     assert video_row["title_status"] == "active"
+
+
+async def test_referenced_objects_drops_a_title_once_its_objects_are_gone(raw_conn):
+    """The reaper deletes a title's objects and then calls finish_delete.
+    If those keys stayed in the referenced set, reconcile would report them
+    missing from the bucket forever -- the header would show a permanently
+    growing "addresses broken" count and storage-audit would exit non-zero
+    for the rest of the install's life, over deletions that worked exactly
+    as asked. The one signal that means "a live address points at nothing"
+    has to keep meaning that.
+    """
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Reaped Title", "reaped-title-slug", edition_id,
+        f"{edition_id}.mp4",
+    )
+    await queries.set_edition_poster(raw_conn, edition_id, f"{edition_id}.jpg")
+
+    # Still referenced while the deletion is undoable: the objects are
+    # untouched until the grace period expires, so a bucket without them
+    # really would be a broken address.
+    await queries.mark_for_delete(raw_conn, title_id, grace_seconds=3600)
+    pending_keys = {r["key"] for r in await queries.referenced_objects(raw_conn)}
+    assert f"{edition_id}.mp4" in pending_keys
+    assert f"{edition_id}.jpg" in pending_keys
+
+    await queries.finish_delete(raw_conn, title_id)
+
+    rows = await queries.referenced_objects(raw_conn)
+    assert f"{edition_id}.mp4" not in {r["key"] for r in rows}
+    assert f"{edition_id}.jpg" not in {r["key"] for r in rows}
+
+    # An empty bucket for this title is now the correct, quiet outcome:
+    # nothing missing, and nothing unreferenced either.
+    result = reconcile({}, [r for r in rows if str(edition_id) in r["key"]])
+    assert result.missing == []
+    assert result.unreferenced == []
 
 
 async def test_cancel_delete_returns_title_to_active(raw_conn):

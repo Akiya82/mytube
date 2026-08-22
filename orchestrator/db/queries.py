@@ -622,9 +622,9 @@ async def delete_failed_title(conn: asyncpg.Connection, title_id) -> None:
 
 
 async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
-    """Every object_key and every non-null poster_key in the catalog, each
-    row carrying `key`, `kind` ('video' or 'poster'), `title_name`, `slug`
-    (the title's current slug) and `title_status`.
+    """Every object_key and every non-null poster_key a *live* title still
+    points at, each row carrying `key`, `kind` ('video' or 'poster'),
+    `title_name`, `slug` (the title's current slug) and `title_status`.
 
     Not a bare set of keys: the reconciliation report has to name a
     missing object by the /v/{slug} address it breaks, because that is the
@@ -632,6 +632,17 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     set of keys can say a file is gone; it cannot say which link is dead.
     The set form an audit also wants is one comprehension away from this,
     so the richer query is strictly the cheaper choice.
+
+    Titles already reaped are excluded, and the exclusion is load-bearing.
+    A reaped title keeps its edition rows -- only `titles.status` flips --
+    but the reaper removed the objects those rows name, on purpose, before
+    flipping it. Counting them as referenced would make reconcile report
+    every completed deletion as a broken address, permanently and
+    cumulatively, until the one signal that means "a live address points
+    at nothing" is noise the operator has learned to scroll past. A title
+    still in `pending_delete` stays in the set: its objects are untouched
+    while the deletion can still be undone, so a bucket missing them
+    genuinely is a broken address.
     """
     return await conn.fetch(
         """
@@ -642,6 +653,7 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
         JOIN seasons s ON s.id = ep.season_id
         JOIN titles t ON t.id = s.title_id
         LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
+        WHERE t.status != 'deleted'
         UNION ALL
         SELECT e.poster_key AS key, 'poster' AS kind,
                t.name AS title_name, sh.slug AS slug, t.status AS title_status
@@ -650,6 +662,6 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
         JOIN seasons s ON s.id = ep.season_id
         JOIN titles t ON t.id = s.title_id
         LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
-        WHERE e.poster_key IS NOT NULL
+        WHERE e.poster_key IS NOT NULL AND t.status != 'deleted'
         """
     )
