@@ -422,3 +422,40 @@ button:focus-visible {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Library (Screen 3), plain form -- thumbnail/technical detail arrive later */
+.library-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.library-row {
+  padding: var(--space-md);
+  background: var(--surface-secondary);
+  border: 1px solid var(--surface-secondary-border);
+  border-radius: 4px;
+}
+
+.library-row__title {
+  margin: 0 0 var(--space-xs);
+}
+
+.library-row__address {
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.chip--preparing {
+  background: var(--status-preparing-bg);
+  color: var(--status-preparing-text);
+}
+
+.chip--failed {
+  background: var(--status-failed-bg);
+  color: var(--status-failed-text);
+}
