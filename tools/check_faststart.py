@@ -57,15 +57,35 @@ def main():
 
 
 def demo():
-    """Самопроверка без файла на диске: та же логика сравнения индексов,
-    которую compat.moov_before_mdat применяет к настоящей таблице атомов,
-    прогнанная здесь на синтетических данных -- проект уже использует этот
-    приём как лёгкую замену полноценному тесту для чистой логики.
+    """Self-check against the real `compat.moov_before_mdat`, on two
+    minimal atom tables this function writes itself -- one faststart, one
+    not.
+
+    It used to compare two hardcoded integers (`assert 1 < 2`) and import
+    nothing from the module it claimed to be checking. An assertion that
+    cannot fail is worse than no assertion, because it reads as coverage.
     """
-    good_moov_index, good_mdat_index = 1, 2
-    bad_moov_index, bad_mdat_index = 2, 1
-    assert good_moov_index < good_mdat_index
-    assert bad_moov_index > bad_mdat_index
+    import struct
+    import tempfile
+
+    def atom_file(order):
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            for atom_type in order:
+                # An 8-byte header declaring an 8-byte box: header only,
+                # no payload. read_top_level_atoms needs nothing more.
+                f.write(struct.pack(">I4s", 8, atom_type))
+            return Path(f.name)
+
+    faststart = atom_file([b"ftyp", b"moov", b"mdat"])
+    not_faststart = atom_file([b"ftyp", b"mdat", b"moov"])
+    no_moov = atom_file([b"ftyp", b"mdat"])
+    try:
+        assert moov_before_mdat(faststart)
+        assert not moov_before_mdat(not_faststart)
+        assert not moov_before_mdat(no_moov)
+    finally:
+        for path in (faststart, not_faststart, no_moov):
+            path.unlink()
 
 
 if __name__ == "__main__":
