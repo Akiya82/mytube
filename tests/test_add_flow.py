@@ -825,3 +825,56 @@ async def test_a_source_path_that_escapes_the_share_fails_the_row_instead_of_str
     )
     assert title["status"] == "failed"
     assert title["failure_reason"] == "reason.unreadable"
+
+
+async def test_the_recorded_size_is_the_uploaded_object_not_the_source(
+    client, raw_conn, clips, storage_spy, monkeypatch
+):
+    """`editions.size_bytes` is a catalog fact about the stored object, and
+    the library row shows it as the video's size. In the remux branch the
+    uploaded file is ffmpeg's output -- a different container layout, and
+    materially different once the audio has been re-encoded -- so recording
+    the source's size makes the figure wrong for every remuxed edition.
+    """
+    import os
+
+    sizes = {}
+
+    def sizing_put(path, key, content_type="video/mp4"):
+        sizes[key] = os.stat(path).st_size
+        storage_spy["put"].append((path, key, content_type))
+
+    monkeypatch.setattr(queue_module, "put_object_from_file", sizing_put)
+
+    clip = clips["needs_reencode"]
+    resp = await client.post(
+        f"/add/{clip['path'].name}",
+        data=_post_data(clip, name="Sized Clip", slug="sized-clip"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+    async def is_active():
+        row = await raw_conn.fetchrow(
+            "SELECT status FROM titles WHERE name = $1", "Sized Clip"
+        )
+        return row is not None and row["status"] == "active"
+
+    await _wait_until(is_active)
+
+    edition = await raw_conn.fetchrow(
+        """
+        SELECT e.object_key, e.size_bytes FROM editions e
+        JOIN episodes ep ON ep.id = e.episode_id
+        JOIN seasons s ON s.id = ep.season_id
+        JOIN titles t ON t.id = s.title_id
+        WHERE t.name = $1
+        """,
+        "Sized Clip",
+    )
+    uploaded_size = sizes[edition["object_key"]]
+
+    assert edition["size_bytes"] == uploaded_size
+    # And the bug is real on this clip rather than hidden by a coincidence:
+    # the remuxed artifact is genuinely a different size from the source.
+    assert uploaded_size != clip["path"].stat().st_size

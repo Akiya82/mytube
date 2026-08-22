@@ -189,7 +189,9 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
     5. If already correct (D-44), upload the source file straight from
        the share -- ffmpeg never touches the video at all. Otherwise
        build the remux command, run it, upload the result, and remove the
-       scratch file whether the upload succeeded or not.
+       scratch file whether the upload succeeded or not. Either way the
+       size recorded on the edition is stat'ed from the artifact that was
+       actually uploaded, which in the remux branch is not the source.
     6. Extract the poster in its own try/except: a poster that will not
        extract must not fail an add that otherwise worked.
     7. Record the technical detail on the edition and flip the title to
@@ -245,6 +247,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         started_at = time.monotonic()
         try:
             if verdict.already_correct:
+                uploaded_path = source
                 await _upload(source, job.object_key)
             else:
                 cmd = remux.build_remux_command(
@@ -257,7 +260,17 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 await asyncio.to_thread(
                     remux.run_ffmpeg, cmd, timeout=REMUX_TIMEOUT_SECONDS
                 )
+                uploaded_path = scratch_video
                 await _upload(scratch_video, job.object_key)
+
+            # `editions.size_bytes` is a fact about the stored object, and
+            # in the remux branch that is ffmpeg's output, not the source:
+            # a different container layout, and materially different
+            # whenever the audio was re-encoded. Taken here, before the
+            # finally below removes the scratch file.
+            uploaded_size = await asyncio.to_thread(
+                lambda: os.stat(uploaded_path).st_size
+            )
         finally:
             if await asyncio.to_thread(scratch_video.exists):
                 await asyncio.to_thread(scratch_video.unlink)
@@ -292,7 +305,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
             await queries.set_edition_technical(
                 conn,
                 job.edition_id,
-                size_bytes=source_size,
+                size_bytes=uploaded_size,
                 duration_seconds=verdict.duration_seconds or 0.0,
                 width=verdict.width or 0,
                 height=verdict.height or 0,
