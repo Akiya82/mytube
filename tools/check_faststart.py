@@ -1,42 +1,34 @@
 #!/usr/bin/env python3
 """Машинная проверка faststart: moov обязан идти раньше mdat в MP4.
 
-Читает таблицу top-level атомов (без внешних зависимостей) и печатает их порядок.
-Без +faststart moov лежит в конце файла, и плеер выкачивает весь файл до первого кадра.
+Без +faststart moov лежит в конце файла, и плеер выкачивает весь файл до
+первого кадра.
+
+Тонкая обёртка: сама логика (`orchestrator.media.compat.moov_before_mdat`)
+теперь живёт там, потому что она нужна и внутри работающего контейнера
+(D-44 — решение "уже готов, ffmpeg не запускаем" принимается на рантайме),
+а не только здесь, при разработке. Два места, одна логика — дублировать её
+было бы граблей.
+
+Этот скрипт при этом обязан продолжать работать под python хоста, где нет
+виртуального окружения проекта и `orchestrator` не установлен как пакет --
+`tools/make_control_clip.sh` и `tools/make_error_clips.sh` вызывают его
+именно так. Поэтому перед импортом корень репозитория подставляется в
+sys.path вручную, а `orchestrator.media.compat` намеренно не тянет ничего
+стороннего на уровне модуля (см. её докстринг).
 
 Usage: check_faststart.py <mp4_path>
 Exit code: 0 если moov раньше mdat, 1 иначе (или при ошибке чтения).
 """
-import struct
 import sys
+from pathlib import Path
 
+# Хостовый python не видит пакет orchestrator (он ставится editable только
+# внутри venv/образа) -- подставляем корень репозитория в sys.path перед
+# импортом, а не полагаемся на PYTHONPATH или установку пакета.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-def read_top_level_atoms(path):
-    atoms = []
-    with open(path, "rb") as f:
-        while True:
-            header = f.read(8)
-            if len(header) < 8:
-                break
-            size, atom_type = struct.unpack(">I4s", header)
-            atom_type = atom_type.decode("ascii", errors="replace")
-            header_len = 8
-            if size == 1:
-                # 64-битный largesize сразу после заголовка
-                largesize_bytes = f.read(8)
-                if len(largesize_bytes) < 8:
-                    break
-                size = struct.unpack(">Q", largesize_bytes)[0]
-                header_len = 16
-            atoms.append(atom_type)
-            if size == 0:
-                # атом занимает всё до конца файла — последний в таблице
-                break
-            if size < header_len:
-                break  # битый атом, дальше читать нечего
-            skip = size - header_len
-            f.seek(skip, 1)
-    return atoms
+from orchestrator.media.compat import moov_before_mdat  # noqa: E402
 
 
 def main():
@@ -46,25 +38,16 @@ def main():
 
     path = sys.argv[1]
     try:
-        atoms = read_top_level_atoms(path)
+        ok = moov_before_mdat(path)
     except OSError as exc:
         print(f"ERROR: не удалось прочитать '{path}': {exc}", file=sys.stderr)
         return 1
 
-    print("Порядок top-level атомов: " + " ".join(atoms))
-
-    if "moov" not in atoms or "mdat" not in atoms:
+    if not ok:
         print(
-            "ERROR: не найден moov и/или mdat в top-level атомах — файл не похож на валидный MP4.",
-            file=sys.stderr,
-        )
-        return 1
-
-    if atoms.index("moov") > atoms.index("mdat"):
-        print(
-            "ERROR: moov лежит после mdat — файл не faststart. "
-            "Плеер выкачает весь файл до первого кадра. "
-            "Пересоберите с -movflags +faststart.",
+            "ERROR: moov не идёт раньше mdat (или один из них отсутствует в "
+            "top-level атомах) — файл не faststart. Плеер выкачает весь файл "
+            "до первого кадра. Пересоберите с -movflags +faststart.",
             file=sys.stderr,
         )
         return 1
@@ -74,11 +57,15 @@ def main():
 
 
 def demo():
-    """Самопроверка логики без файла на диске: синтетические таблицы атомов."""
-    good = ["ftyp", "moov", "mdat"]
-    bad = ["ftyp", "mdat", "moov"]
-    assert good.index("moov") < good.index("mdat")
-    assert bad.index("moov") > bad.index("mdat")
+    """Самопроверка без файла на диске: та же логика сравнения индексов,
+    которую compat.moov_before_mdat применяет к настоящей таблице атомов,
+    прогнанная здесь на синтетических данных -- проект уже использует этот
+    приём как лёгкую замену полноценному тесту для чистой логики.
+    """
+    good_moov_index, good_mdat_index = 1, 2
+    bad_moov_index, bad_mdat_index = 2, 1
+    assert good_moov_index < good_mdat_index
+    assert bad_moov_index > bad_mdat_index
 
 
 if __name__ == "__main__":
