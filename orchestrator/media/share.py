@@ -7,7 +7,9 @@ sits under the mount root. That is the whole control -- a blacklist that
 hunts for a parent-directory marker is the known-wrong answer here, since it
 misses percent-encodings, symlinks, and platform quirks that resolve-then-
 contain handles for free, including a symlink inside the root that points
-outside it (the check runs after resolution, not before).
+outside it (the check runs after resolution, not before). `list_dir` runs
+the same containment check per entry and skips what fails it, so merely
+seeing such a link never costs the operator the whole folder.
 
 `list_dir` does not filter by file extension. An allowlist would quietly
 hide a container the operator knows is a video, which is worse than showing
@@ -84,11 +86,26 @@ def list_dir(path: Path, root: Path) -> list[ShareEntry]:
     dirs: list[ShareEntry] = []
     files: list[ShareEntry] = []
     try:
+        base_rel = Path(path).resolve().relative_to(root_resolved)
         with os.scandir(path) as it:
             for entry in it:
                 st = entry.stat()
-                entry_path = Path(entry.path).resolve()
-                rel_path = entry_path.relative_to(root_resolved).as_posix()
+                try:
+                    Path(entry.path).resolve().relative_to(root_resolved)
+                except ValueError:
+                    # A symlink whose target sits outside the mount. It is
+                    # not reachable through safe_join anyway, so listing it
+                    # could only produce a row that refuses to open --
+                    # and relative_to raises ValueError, not OSError, so
+                    # without this it escapes the handler below and fails
+                    # the entire folder instead of the one entry.
+                    continue
+                # Built from the entry name, never from the resolved
+                # target: a symlink pointing elsewhere inside the root has
+                # to link to where it appears, or the row navigates to a
+                # different file than the one it names and the
+                # already-added lookup keys on the wrong path.
+                rel_path = (base_rel / entry.name).as_posix()
                 item = ShareEntry(
                     name=entry.name,
                     is_dir=entry.is_dir(),

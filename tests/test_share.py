@@ -54,6 +54,45 @@ def test_safe_join_rejects_symlink_escape(share_root, tmp_path):
         safe_join(share_root, "escape-link/secret.txt")
 
 
+def test_list_dir_skips_a_symlink_pointing_outside_the_root(share_root, tmp_path):
+    """The other half of the escape the resolve-then-contain design covers.
+    safe_join rejects a traversal *through* such a link; list_dir has to
+    survive merely *seeing* one, because relative_to raises ValueError --
+    not OSError -- and would take the whole folder listing down with it.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("nope", encoding="utf-8")
+
+    link = share_root / "escape-link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("host has no permission to create symlinks")
+
+    entries = list_dir(share_root, share_root)
+
+    assert "escape-link" not in [e.name for e in entries]
+    assert "Movies" in [e.name for e in entries]
+
+
+def test_list_dir_links_an_inside_symlink_by_its_own_name(share_root):
+    """A symlink to another location inside the root is listable, but its
+    rel_path has to be where it appears, not where it points -- otherwise
+    the row's link navigates somewhere other than the name shown, and the
+    "already added" chip keys on the wrong path.
+    """
+    link = share_root / "shortcut.mkv"
+    try:
+        link.symlink_to(share_root / "a-video.mp4")
+    except OSError:
+        pytest.skip("host has no permission to create symlinks")
+
+    entry = next(e for e in list_dir(share_root, share_root) if e.name == "shortcut.mkv")
+
+    assert entry.rel_path == "shortcut.mkv"
+
+
 def test_list_dir_returns_directories_before_files_case_insensitive(share_root):
     entries = list_dir(share_root, share_root)
 
