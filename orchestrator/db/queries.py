@@ -347,6 +347,13 @@ async def job_row(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
     (preparing_rows_at_startup's queued list) and by the add route, so
     both build a job from the same one place instead of two shapes that
     can drift apart.
+
+    `poster_key` rides along too: it is not part of `AddJob`'s own shape
+    (a job never needs to know its own not-yet-extracted poster key), but
+    the startup sweep's cleanup of a genuinely interrupted row (D-53)
+    needs both the video and the poster key from the exact same query --
+    a second query for the poster alone would be one more place the two
+    facts could read a different edition_id than each other.
     """
     return await conn.fetchrow(
         """
@@ -355,7 +362,8 @@ async def job_row(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
             e.object_key AS object_key,
             e.source_path AS source_path,
             e.audio_stream_index AS audio_stream_index,
-            e.audio_channels AS audio_channels
+            e.audio_channels AS audio_channels,
+            e.poster_key AS poster_key
         FROM editions e
         JOIN episodes ep ON ep.id = e.episode_id
         JOIN seasons s ON s.id = ep.season_id
