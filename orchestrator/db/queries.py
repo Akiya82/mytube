@@ -354,6 +354,12 @@ async def job_row(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
     needs both the video and the poster key from the exact same query --
     a second query for the poster alone would be one more place the two
     facts could read a different edition_id than each other.
+
+    Reads the first episode's *default* edition, ordered and limited,
+    rather than whichever edition row the join happened to return first.
+    Same rule the library queries and `resolve_slug` follow, so a title
+    that grows a second episode keeps answering instead of quietly picking
+    a different edition here than the interface is showing.
     """
     return await conn.fetchrow(
         """
@@ -364,10 +370,17 @@ async def job_row(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
             e.audio_stream_index AS audio_stream_index,
             e.audio_channels AS audio_channels,
             e.poster_key AS poster_key
-        FROM editions e
-        JOIN episodes ep ON ep.id = e.episode_id
-        JOIN seasons s ON s.id = ep.season_id
-        WHERE s.title_id = $1
+        FROM titles t
+        JOIN LATERAL (
+            SELECT ep.default_edition_id
+            FROM episodes ep
+            JOIN seasons s ON s.id = ep.season_id
+            WHERE s.title_id = t.id
+            ORDER BY s.number, ep.number
+            LIMIT 1
+        ) first_ep ON true
+        JOIN editions e ON e.id = first_ep.default_edition_id
+        WHERE t.id = $1
         """,
         title_id,
     )
@@ -479,12 +492,27 @@ _LIBRARY_ROW_COLUMNS = """
     e.source_path AS source_path
 """
 
+# One row per title, guaranteed by the join rather than by the caller
+# happening to have written only one episode. Plain joins down to episodes
+# multiply the title row once per episode: `library_rows` would render the
+# same title twice and `library_row` (a fetchrow) would pick an arbitrary
+# one of them. The schema has always allowed a second episode -- seasons
+# and episodes are what those tables are for -- so the single-episode
+# assumption belongs in the query, stated, rather than in nothing at all.
+# Same LEFT JOIN LATERAL shape resolve_slug already uses, for the same
+# reason and with the same ordering.
 _LIBRARY_ROW_FROM = """
     FROM titles t
     LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
-    LEFT JOIN seasons s ON s.title_id = t.id
-    LEFT JOIN episodes ep ON ep.season_id = s.id
-    LEFT JOIN editions e ON e.id = ep.default_edition_id
+    LEFT JOIN LATERAL (
+        SELECT ep.default_edition_id
+        FROM episodes ep
+        JOIN seasons s ON s.id = ep.season_id
+        WHERE s.title_id = t.id
+        ORDER BY s.number, ep.number
+        LIMIT 1
+    ) first_ep ON true
+    LEFT JOIN editions e ON e.id = first_ep.default_edition_id
 """
 
 

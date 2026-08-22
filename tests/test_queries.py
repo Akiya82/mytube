@@ -415,3 +415,71 @@ async def test_concurrent_create_with_same_candidate_gets_two_different_slugs(mi
 
     assert slug_a != slug_b
     assert {slug_a, slug_b} == {"racer", "racer-2"}
+
+
+async def _add_second_episode(conn, title_id) -> uuid.UUID:
+    """A second season/episode/edition under an existing title -- what the
+    schema has always allowed and the next phase actually writes.
+    """
+    season_id = await conn.fetchval(
+        "INSERT INTO seasons (title_id, number) VALUES ($1, 2) RETURNING id", title_id
+    )
+    episode_id = await conn.fetchval(
+        "INSERT INTO episodes (season_id, number) VALUES ($1, 1) RETURNING id", season_id
+    )
+    edition_id = uuid.uuid4()
+    await conn.execute(
+        "INSERT INTO editions (id, episode_id, object_key) VALUES ($1, $2, $3)",
+        edition_id,
+        episode_id,
+        f"{edition_id}.mp4",
+    )
+    await conn.execute(
+        "UPDATE episodes SET default_edition_id = $2 WHERE id = $1", episode_id, edition_id
+    )
+    return edition_id
+
+
+async def test_a_second_episode_does_not_duplicate_the_library_row(raw_conn):
+    """Joined plainly, a title with two episodes yields two rows: the
+    Library renders the title twice and the single-row poll picks an
+    arbitrary one of them.
+    """
+    first_edition = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn,
+        "Two Episode Title",
+        "two-episode-title",
+        first_edition,
+        f"{first_edition}.mp4",
+    )
+    await _add_second_episode(raw_conn, title_id)
+
+    rows = await queries.library_rows(raw_conn)
+    mine = [row for row in rows if row["title_id"] == title_id]
+    assert len(mine) == 1
+    assert mine[0]["edition_id"] == first_edition
+
+    row = await queries.library_row(raw_conn, title_id)
+    assert row["edition_id"] == first_edition
+
+
+async def test_job_row_takes_the_first_episodes_default_edition(raw_conn):
+    first_edition = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn,
+        "Two Episode Job",
+        "two-episode-job",
+        first_edition,
+        f"{first_edition}.mp4",
+        status="preparing",
+        source_path="Movies/first.mkv",
+        audio_stream_index=1,
+        audio_channels=2,
+    )
+    second_edition = await _add_second_episode(raw_conn, title_id)
+
+    row = await queries.job_row(raw_conn, title_id)
+
+    assert row["edition_id"] == first_edition
+    assert row["edition_id"] != second_edition
