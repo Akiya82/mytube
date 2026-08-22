@@ -141,5 +141,16 @@ is not being treated as one — it is being written down so the record states pl
 
 ## Owner confirmation
 
-_Recorded once the owner responds to the checkpoint below — see the next task in this
-plan._
+**Date:** 2026-08-22
+**Outcome:** approved, no substitutions.
+
+The owner opened all three registry pages listed above — the Docker Hub page for
+`mwader/static-ffmpeg`, the PyPI project page for `jinja2`, and the PyPI project page for
+`python-multipart` — checked the repositories and versions against what this document
+records, and confirmed all three as pinned:
+
+1. `mwader/static-ffmpeg:9.0@sha256:f1e16a2f8fd9c4470fcccf4de56655c58b4ef7f2e6a5fcefb0e636e124363b36` (`linux/amd64`)
+2. `jinja2` `3.1.6`
+3. `python-multipart` `0.0.32`
+
+Plan 02 may install these three artifacts as recorded.
