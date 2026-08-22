@@ -227,6 +227,22 @@ def _default_track_index(tracks: list[AudioTrack]) -> int | None:
     return tracks[0].index if tracks else None
 
 
+def _maybe_number(value, cast):
+    """`format.duration` and `format.size` as ffprobe actually reports
+    them: either a numeric string, or absent, or the literal string "N/A"
+    on a container that does not carry the field -- MPEG-TS, some MKV
+    rips, a file still being written. probe() succeeds on all of those, so
+    a cast that raises here escapes every ProbeError handler the add form
+    has and surfaces as a traceback. Both fields are optional on `Verdict`
+    and every consumer already handles None, so an unparsable value simply
+    becomes None.
+    """
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _video_stream(probe_json: dict) -> dict | None:
     return next(
         (s for s in probe_json["streams"] if s.get("codec_type") == "video"), None
@@ -308,8 +324,6 @@ def analyze(
     )
 
     fmt = probe_json.get("format", {})
-    duration = fmt.get("duration")
-    size = fmt.get("size")
 
     return Verdict(
         eligible=eligible,
@@ -319,8 +333,8 @@ def analyze(
         default_track_index=default_index,
         already_correct=already_correct,
         audio_needs_reencode=audio_needs_reencode,
-        duration_seconds=float(duration) if duration is not None else None,
+        duration_seconds=_maybe_number(fmt.get("duration"), float),
         width=video.get("width") if video else None,
         height=video.get("height") if video else None,
-        size_bytes=int(size) if size is not None else None,
+        size_bytes=_maybe_number(fmt.get("size"), int),
     )

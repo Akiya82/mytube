@@ -135,6 +135,35 @@ def test_level_above_41_is_not_eligible_with_no_params():
     assert verdict.reason_params == {}
 
 
+def test_na_duration_and_size_become_none_rather_than_raising():
+    """ffprobe writes the literal string "N/A" into format.duration and
+    format.size for plenty of ordinary containers (MPEG-TS, some MKV rips,
+    a file still being written). probe() succeeds on those, so a float()
+    blowing up here escapes every ProbeError handler the add form has and
+    reaches the operator as a traceback instead of a verdict.
+    """
+    data = _load("compatible.json")
+    data["format"]["duration"] = "N/A"
+    data["format"]["size"] = "N/A"
+
+    verdict = analyze(data)
+
+    assert verdict.duration_seconds is None
+    assert verdict.size_bytes is None
+    assert verdict.eligible is True
+
+
+def test_missing_duration_and_size_keys_become_none():
+    data = _load("compatible.json")
+    data["format"].pop("duration")
+    data["format"].pop("size")
+
+    verdict = analyze(data)
+
+    assert verdict.duration_seconds is None
+    assert verdict.size_bytes is None
+
+
 def test_format_name_matching_splits_on_commas_for_a_real_mp4():
     """compatible.json's format_name is the real comma-separated list
     ffprobe reports for MP4 ("mov,mp4,m4a,3gp,3g2,mj2") -- already_correct
