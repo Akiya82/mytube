@@ -152,15 +152,15 @@ async def _remove(slug: str) -> None:
 
         await queries.mark_for_delete(conn, row["title_id"], settings.delete_grace_seconds)
 
-        # M9: no cancel promise -- there is no fourth CLI command to undo
-        # this in phase 1. The grace window is honestly described as time
-        # until the space is freed, not a chance to change your mind; the
-        # only way to stop it is to bring the stack down before the reaper
-        # runs.
+        # The grace window is now reachable from both ends through the web
+        # interface's library screen: undo restores the title, and delete
+        # now skips the wait. The CLI itself still offers neither -- both
+        # live in the interface, not as a fifth CLI command.
         typer.echo(
             f"/v/{slug} уже отдаёт 410. Через {settings.delete_grace_seconds} "
-            "секунд объект будет физически удалён и место освободится -- "
-            "это не окно отмены, команды отмены в фазе 1 нет."
+            "секунд объект будет физически удалён и место освободится. "
+            "Отменить удаление или удалить сразу же можно в веб-интерфейсе, "
+            "на странице библиотеки."
         )
     finally:
         await conn.close()

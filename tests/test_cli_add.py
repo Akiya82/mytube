@@ -160,7 +160,7 @@ async def test_rename_keeps_old_address_working(source_file, uploaded_objects, c
     assert old["title_id"] == new["title_id"]
 
 
-async def test_remove_output_describes_grace_window_not_a_cancel_option(
+async def test_remove_output_names_undo_and_purge_now_in_the_interface(
     source_file, uploaded_objects, capsys
 ):
     await cli._add(source_file, "CLI Remove Wording", "cli-remove-wording", False)
@@ -170,6 +170,8 @@ async def test_remove_output_describes_grace_window_not_a_cancel_option(
     out = capsys.readouterr().out
 
     assert "освободится" in out
-    assert "не окно отмены" in out
-    assert "можно отменить" not in out
-    assert "можно передумать" not in out
+    # Inverted from phase 1: the grace window is now an undo window, and
+    # the CLI has to say so rather than deny it exists.
+    assert "не окно отмены" not in out
+    assert "Отменить удаление" in out
+    assert "веб-интерфейсе" in out
