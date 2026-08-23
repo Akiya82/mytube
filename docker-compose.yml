@@ -82,17 +82,12 @@ services:
       timeout: 3s
       retries: 20
       start_period: 10s
-    ports:
-      - "${MYTUBE_UI_BIND:-127.0.0.1}:${MYTUBE_UI_PORT:-8081}:8000"
     networks:
       - edge_net
       - storage_net
       - db_net
-    # api now publishes a host port for the interface (D-57 onward): the
-    # web UI this phase adds. The public reverse proxy the owner already
-    # runs points at edge, never here — this port is LAN-only by default
-    # (loopback bind) and widening it to a LAN address is a deliberate
-    # act the operator performs in .env, not the out-of-the-box shape.
+    # No ports published — reachable only from edge_net. The admin
+    # hostname on the edge (MYTUBE_ADMIN_FQDN) is the only route in.
 
   edge:
     image: nginx:1.27-alpine

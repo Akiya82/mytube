@@ -2,13 +2,10 @@
 
 See src/.env.example for every field this class expects.
 """
-import logging
 from functools import lru_cache
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -39,9 +36,6 @@ class Settings(BaseSettings):
     add_estimate_mb_per_second: float = 20.0
     # D-67: 0 means "no quota enforced", used only for the usage display for now.
     storage_quota_bytes: int = 0
-    # Mirrors MYTUBE_UI_BIND so the process can see what compose bound the
-    # interface's host port to (see docker-compose.yml, api.ports).
-    ui_bind: str = "127.0.0.1"
 
     @field_validator("public_base_url")
     @classmethod
@@ -58,16 +52,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    settings = Settings()
-    # Not a mitigation -- every route on this port is unauthenticated,
-    # including the ones that delete (T-02-16). Logged so an operator who
-    # widens MYTUBE_UI_BIND per SETUP.md sees what they just did in the
-    # same place they will be reading logs anyway.
-    if settings.ui_bind not in ("127.0.0.1", "localhost", "::1"):
-        logger.warning(
-            "MYTUBE_UI_BIND=%s: the interface is reachable from the network, "
-            "and every route on it -- including the ones that delete -- is "
-            "unauthenticated.",
-            settings.ui_bind,
-        )
-    return settings
+    return Settings()
