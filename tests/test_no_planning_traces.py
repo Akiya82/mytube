@@ -62,13 +62,15 @@ _JINJA_COMMENT = re.compile(r"\{#.*?#\}", re.DOTALL)
 # reader could see is lost by not checking it.
 _SVG_GEOMETRY = re.compile(r'\s(?:d|viewBox|points|transform)="[^"]*"')
 
-# Requirement IDs (see .planning/REQUIREMENTS.md prefixes), decision IDs
-# (D-NN), verdict references (T-NN-XX, MNN/mNN, BNN), and phase/plan/task/
-# criterion numbers in either language -- the exact list CLAUDE.md names.
+# Requirement IDs (see .planning/REQUIREMENTS.md prefixes -- AUTH- is this
+# phase's own, operator authentication), decision IDs (D-NN), verdict
+# references (T-NN-XX, MNN/mNN, BNN), and phase/plan/task/criterion numbers
+# in either language -- the exact list CLAUDE.md names.
 _ID_PATTERN = re.compile(
     r"("
     r"D-[0-9]{2}"
     r"|ASIS-[0-9]{2}|ADDR-[0-9]{2}|DELIV-[0-9]{2}|DIST-[0-9]{2}"
+    r"|AUTH-[0-9]{2}"
     r"|CAT-[0-9]{2}|UI-[0-9]{2}|CONV-[0-9]{2}|PLST-[0-9]{2}|WORK-[0-9]{2}"
     r"|T-[0-9]{2}-[A-Za-z]+"
     r"|\b[Mm][0-9]{1,2}\b|\bB[0-9]{1,2}\b"
