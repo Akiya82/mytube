@@ -220,6 +220,9 @@ $ docker compose exec api python -m orchestrator.cli cache-warm kontrolnyi-rolik
 прогрето кусков: 89, прогрето байт: 92330979 из 92330979, зона кэша: 512m, время: 0.3с
 ```
 
+This line reports 89 chunks warmed, 92330979 of 92330979 bytes, a 512m
+cache zone, in 0.3s.
+
 (Warmed the entire 88 MiB clip in one pass — it is smaller than the default
 warm limit of half the 512 MiB cache zone, so the M5 file-longer-than-limit
 path is not exercised here; that path has its own unit-test coverage in
@@ -237,6 +240,10 @@ $ docker compose exec api python -m orchestrator.cli cache-report --since "$SINC
 $ echo $?
 0
 ```
+
+This report reads 199 log lines, parses 89 of them, finds 89 unique chunks
+at a 100.0% HIT ratio, and zero chunks with more than one request to
+storage (a D-28 violation).
 
 D-28 holds on a single, reproducible session against real decodable video:
 after warming, zero chunks went to storage more than once, exit code `0`.

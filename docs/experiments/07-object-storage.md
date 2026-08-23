@@ -1,4 +1,4 @@
-# Эксперимент 7: выбор объектного хранилища (DIST-02)
+# Experiment 7: choosing the object storage backend (DIST-02)
 
 **English abstract:** Compared Garage and SeaweedFS as the self-hosted S3
 backend, both driven through the same nginx `slice` setup, on two required
@@ -8,103 +8,106 @@ Range criterion; SeaweedFS passed both. Verdict: SeaweedFS
 (`chrislusf/seaweedfs:3.97`), the image/tag/parameters this document
 records being what the stack actually runs.
 
-**Дата прогона:** 2026-08-21
-**Стенд:** `src/tools/experiment07_storage.sh`
-**Окружение:** Docker Desktop 29.7.2 (Windows 11, Git Bash), сеть `mytube-exp07`, все объекты стенда временные (см. `## Уборка` внизу)
+**Run date:** 2026-08-21
+**Rig:** `src/tools/experiment07_storage.sh`
+**Environment:** Docker Desktop 29.7.2 (Windows 11, Git Bash), network `mytube-exp07`, every rig object is temporary (see `## Cleanup` below)
 
-## Задача
+## Task
 
-Апстрим `minio/minio` заархивирован, официальные образы Community Edition не
-публикуются с октября 2025. D-17 предписывает сравнить **Garage** и
-**SeaweedFS** через один и тот же nginx со `slice`, а не выбирать по
-умолчанию. Итог этого документа — конкретный образ, тег и параметры,
-которые план 03 подставляет в `docker-compose.yml` без повторного
-обсуждения.
+Upstream `minio/minio` is archived, and official Community Edition images
+have not been published since October 2025. D-17 requires comparing
+**Garage** and **SeaweedFS** through the same nginx with `slice`, rather
+than picking one by default. This document's outcome is a concrete image,
+tag and parameter set, dropped straight into `docker-compose.yml` without
+re-opening the discussion.
 
-## Версии образов (фиксированные теги, не `latest`)
+## Image versions (pinned tags, not `latest`)
 
-| Кандидат | Образ | Тег | Размер |
+| Candidate | Image | Tag | Size |
 |---|---|---|---|
-| Garage | `dxflrs/garage` | `v2.3.0` | 27.2 МиБ |
-| SeaweedFS | `chrislusf/seaweedfs` | `3.97` | 63.4 МиБ |
+| Garage | `dxflrs/garage` | `v2.3.0` | 27.2 MiB |
+| SeaweedFS | `chrislusf/seaweedfs` | `3.97` | 63.4 MiB |
 
-S3-клиент стенда — `amazon/aws-cli:2.27.50` (фиксированный тег), запускаемый
-контейнером в сети `mytube-exp07`; `nginx:1.27-alpine` — та же версия, что
-пойдёт в `docker-compose.yml` фазы 1.
+The rig's S3 client is `amazon/aws-cli:2.27.50` (a pinned tag), run as a
+container on the `mytube-exp07` network; `nginx:1.27-alpine` is the same
+version that goes into this delivery work's `docker-compose.yml`.
 
-## Правило выбора (по плану)
+## Selection rule (per the plan)
 
-Два условия обязательны — кандидат, проваливший любое из них, выбывает:
+Two conditions are mandatory — a candidate that fails either one is
+disqualified:
 
-1. **Range через `slice` дал совпадающий sha256.**
-2. **Анонимный неподписанный Range-GET изнутри сети даёт `206`** (D-38).
+1. **Range through `slice` produced a matching sha256.**
+2. **An anonymous, unsigned Range GET from inside the network returns
+   `206`** (D-38).
 
-Дальше — предпочтения: (3) меньший TTFB на холодном куске, (4) меньший образ.
-Если оба кандидата проваливают любое обязательное условие — fallback на пин
-`minio/minio:RELEASE.2025-04-22T22-12-26Z`.
+Beyond that — preferences: (3) lower TTFB on a cold chunk, (4) smaller
+image. If both candidates fail any mandatory condition, the fallback is
+the pinned `minio/minio:RELEASE.2025-04-22T22-12-26Z`.
 
-## Таблица результатов
+## Results table
 
-Оба кандидата прогнаны стендом `experiment07_storage.sh` (запуск
-`cd src && bash tools/experiment07_storage.sh`, код возврата `0`).
+Both candidates were run through the `experiment07_storage.sh` rig
+(invoked as `cd src && bash tools/experiment07_storage.sh`, exit code `0`).
 
-| Проверка | Garage `v2.3.0` | SeaweedFS `3.97` |
+| Check | Garage `v2.3.0` | SeaweedFS `3.97` |
 |---|---|---|
-| Недостижим снаружи (curl с хоста на порт кандидата) | **PASS** — `curl -m 3` не установил соединение (exit 28, таймаут) | **PASS** — то же самое (exit 28) |
-| Имя контейнера не резолвится из сети `bridge` | подтверждено (`getent hosts` — NORESOLVE) | подтверждено (`getent hosts` — NORESOLVE) |
-| **Анонимный неподписанный Range-GET изнутри сети** (D-38, обязательное условие 2) | **FAIL** — оба диапазона (`0-1048575` и хвостовой) вернули `403 Forbidden`. Garage не имеет механизма анонимного `GetObject` через S3 API: `PutBucketPolicy` отвечает `NotImplemented`; подкоманды `garage bucket allow/deny` работают только с именованными ключами, не с анонимным принципалом; `garage bucket website` — отдельный HTTP-сервер с Host-based роутингом и `index.html`-семантикой, не путь `GetObject`, которым ходит `slice` | **PASS** — оба диапазона вернули `206 Partial Content` с корректным `Content-Range` |
-| Range с подписью (`s3api get-object --range`) | **PASS** — `206`-эквивалент, корректный `ContentRange: bytes 0-1048575/67108864` | **PASS** — то же самое |
-| Скачивание через nginx `slice` (HTTP-код) | **403** — nginx проксирует `Range` без подписи (OSS-nginx не умеет SigV4), Garage отвечает `403` на первый же slice-подзапрос | **200** |
-| sha256 объекта, скачанного через `slice`, совпал с исходным (**обязательное условие 1**) | **FAIL** — тело ответа `403` (213 байт XML), не объект | **PASS** — побайтовое совпадение |
-| Число строк в access_log на попытке скачать 64 МиБ при `slice 1m` | **1** — nginx проксирует один `Range`-подзапрос, получает `403` и не продолжает нарезку (объект недоступен) | **64** — по одной строке на мегабайтный срез (см. раздел «Формат access_log» ниже про число 64 vs ожидавшихся 65) |
-| `X-Cache-Status`, 1-й / 2-й прогон | не измерено (тело — не объект) | `MISS` / `HIT` — второй прогон подтверждённо отдаётся из кэша |
-| TTFB холодный / прогретый кусок (медиана из 3, секунды) | 0.0019 / 0.0017 — **измерено на ошибке 403**, не на реальной отдаче объекта; в локальной docker-сети без сетевой задержки разница между холодным и прогретым нерепрезентативна | 0.0044 / 0.0015 — тот же нюанс локальной сети применим: оба значения кладутся в единицы миллисекунд, различие холодный/прогретый не показательно на этом стенде |
-| `CreateBucket` через голый S3 API (подписанный запрос) | **PASS**, но только после `garage key allow --create-bucket <key>` — по умолчанию у свежесозданного ключа `Can create buckets: false` | **PASS** сразу, без дополнительного разрешения |
-| Размер образа | 27.2 МиБ | 63.4 МиБ |
+| Unreachable from outside (curl from the host to the candidate's port) | **PASS** — `curl -m 3` did not establish a connection (exit 28, timeout) | **PASS** — same result (exit 28) |
+| Container name does not resolve from the `bridge` network | confirmed (`getent hosts` — NORESOLVE) | confirmed (`getent hosts` — NORESOLVE) |
+| **Anonymous, unsigned Range GET from inside the network** (D-38, mandatory condition 2) | **FAIL** — both ranges (`0-1048575` and a tail range) returned `403 Forbidden`. Garage has no mechanism for anonymous `GetObject` through the S3 API: `PutBucketPolicy` returns `NotImplemented`; the `garage bucket allow/deny` subcommands only work with named keys, not an anonymous principal; `garage bucket website` is a separate HTTP server with Host-based routing and `index.html` semantics, not the `GetObject` path that `slice` uses | **PASS** — both ranges returned `206 Partial Content` with a correct `Content-Range` |
+| Signed Range (`s3api get-object --range`) | **PASS** — the `206` equivalent, a correct `ContentRange: bytes 0-1048575/67108864` | **PASS** — same result |
+| Download through nginx `slice` (HTTP code) | **403** — nginx proxies `Range` without a signature (OSS nginx cannot do SigV4), and Garage answers `403` on the very first slice subrequest | **200** |
+| sha256 of the object downloaded through `slice` matched the original (**mandatory condition 1**) | **FAIL** — the response body is the `403` (213 bytes of XML), not the object | **PASS** — byte-for-byte match |
+| Lines in access_log when attempting to download 64 MiB with `slice 1m` | **1** — nginx proxies one `Range` subrequest, gets `403`, and does not continue slicing (the object is unavailable) | **64** — one line per one-megabyte slice (see the "access_log format" section below for the 64 vs. the expected 65) |
+| `X-Cache-Status`, 1st / 2nd run | not measured (the body is not the object) | `MISS` / `HIT` — the second run is confirmed served from cache |
+| TTFB cold / warm chunk (median of 3, seconds) | 0.0019 / 0.0017 — **measured against the 403 error**, not against a real object being served; on a local docker network with no network latency, the cold-vs-warm difference is not representative | 0.0044 / 0.0015 — the same local-network caveat applies: both values land in single-digit milliseconds, and the cold/warm difference is not meaningful on this rig |
+| `CreateBucket` through the bare S3 API (a signed request) | **PASS**, but only after `garage key allow --create-bucket <key>` — a freshly-created key defaults to `Can create buckets: false` | **PASS** immediately, no extra permission needed |
+| Image size | 27.2 MiB | 63.4 MiB |
 
-**Оба обязательных условия одновременно выполнил только SeaweedFS.** Garage
-проваливает условие 2 (анонимный Range-GET) и как прямое следствие — условие
-1 (nginx не может скачать объект вообще, потому что не умеет подписывать
-запросы к origin). Fallback на pinned MinIO не сработал: у SeaweedFS есть
-кандидат, прошедший оба обязательных условия.
+**Only SeaweedFS met both mandatory conditions at once.** Garage fails
+condition 2 (anonymous Range GET) and, as a direct consequence, condition 1
+too (nginx cannot download the object at all, because it cannot sign
+requests to the origin). The fallback to pinned MinIO was not triggered:
+SeaweedFS is a candidate that passed both mandatory conditions.
 
-## Решение
+## Decision
 
-**Выбран `chrislusf/seaweedfs:3.97`** — единственный кандидат, прошедший оба
-обязательных условия: Range через `slice` отдаёт побайтово совпадающий
-объект, а изнутри сети `mytube-exp07` кандидат отвечает на неподписанный
-Range-GET кодом `206`, что и требует D-38 (OSS-nginx не умеет подписывать
-AWS SigV4, поэтому альтернативы нет — либо кандидат умеет отдавать
-анонимно, либо `slice` не работает вообще).
+**`chrislusf/seaweedfs:3.97` is chosen** — the only candidate that passed
+both mandatory conditions: Range through `slice` serves a byte-for-byte
+matching object, and from inside the `mytube-exp07` network the candidate
+answers an unsigned Range GET with `206`, exactly what D-38 requires (OSS
+nginx cannot sign AWS SigV4, so there is no alternative — either the
+candidate can serve anonymously, or `slice` does not work at all).
 
-Garage дисквалифицирован не из-за Range как такового (Range с подписью у
-него работает корректно), а из-за отсутствия штатного механизма анонимного
-`GetObject`: `PutBucketPolicy` не реализован (`NotImplemented`), а
-единственный публично-читаемый режим (`bucket website`) — это другой HTTP-
-сервер с виртуальным хостингом по `Host`-заголовку и `index.html`-семантикой,
-несовместимый с path-style `GetObject`, через который `slice`-модуль nginx
-проксирует запросы. Это не баг стенда — это архитектурное ограничение
-Garage v2.3.0 относительно анонимного чтения через сам S3 API.
+Garage is disqualified not because of Range as such (signed Range works
+correctly on it), but because it has no built-in mechanism for anonymous
+`GetObject`: `PutBucketPolicy` is unimplemented (`NotImplemented`), and its
+only publicly-readable mode (`bucket website`) is a different HTTP server,
+with virtual hosting by `Host` header and `index.html` semantics,
+incompatible with the path-style `GetObject` that nginx's `slice` module
+proxies requests through. This is not a rig bug — it is an architectural
+limitation of Garage v2.3.0 regarding anonymous reads through the S3 API
+itself.
 
-## Параметры для docker-compose.yml
+## Parameters for docker-compose.yml
 
-**Образ:** `chrislusf/seaweedfs:3.97`
-**Внутренний порт S3-эндпоинта:** `8333`
-**Имя сервиса в compose:** `storage`
+**Image:** `chrislusf/seaweedfs:3.97`
+**Internal S3 endpoint port:** `8333`
+**Service name in compose:** `storage`
 
-**Команда запуска контейнера:**
+**Container start command:**
 
 ```
 server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
 ```
 
-**Необходимые тома:**
-- `/data` — единственный каталог данных SeaweedFS (покрывает и master/filer-
-  метаданные, и volume-данные; отдельного тома под метаданные, в отличие от
-  Garage, не требуется)
-- `/etc/seaweedfs/s3.json` — конфиг identities, монтируется `:ro`
+**Required volumes:**
+- `/data` — SeaweedFS's single data directory (covers both master/filer
+  metadata and volume data; unlike Garage, no separate metadata volume is
+  required)
+- `/etc/seaweedfs/s3.json` — the identities config, mounted `:ro`
 
-**Полный текст файла конфигурации кандидата (`s3.json`):**
+**Full text of the candidate's configuration file (`s3.json`):**
 
 ```json
 {"identities":[
@@ -114,37 +117,41 @@ server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -master.vo
 ]}
 ```
 
-**Важно для плана 03:** значения `accessKey`/`secretKey` в `s3.json` обязаны
-совпадать с `MYTUBE_S3_KEY`/`MYTUBE_S3_SECRET` из `.env` — план 03 должен
-генерировать этот файл шаблонизацией (`envsubst` или аналог) при старте
-контейнера, а не хранить секрет захардкоженным в образе или в репозитории.
-Identity `anonymous` с единственным действием `Read` — штатный и
-**единственный** механизм SeaweedFS для анонимного чтения; он должен
-присутствовать в конфиге с самого первого запуска, включать его отдельным
-шагом после старта не нужно (в отличие от гипотетического сценария с
-Garage, где такого штатного шага вообще нет).
+**Important for the deployment step that follows:** the
+`accessKey`/`secretKey` values in `s3.json` must match
+`MYTUBE_S3_KEY`/`MYTUBE_S3_SECRET` from `.env` — this file must be
+generated by templating (`envsubst` or equivalent) when the container
+starts, not stored hardcoded in the image or in the repository. The
+`anonymous` identity with the single `Read` action is SeaweedFS's built-in
+and **only** mechanism for anonymous reads; it must be present in the
+config from the very first start, there is no separate "enable it after
+start" step (unlike the hypothetical Garage scenario, where no such
+built-in step even exists).
 
-**Точная последовательность bring-up и инициализации бакета `mytube`,
-измеренная на стенде:**
+**The exact bring-up and `mytube` bucket initialisation sequence, as
+measured on the rig:**
 
-1. Сгенерировать `s3.json` (см. выше) из `.env`-значений `MYTUBE_S3_KEY`/`MYTUBE_S3_SECRET`, смонтировать в `/etc/seaweedfs/s3.json:ro`.
-2. Запустить контейнер `storage` командой выше.
-3. Дождаться готовности S3-порта — поллинг изнутри сети (например,
-   `docker exec <storage> ...` или отдельный healthcheck-контейнер),
-   опрашивающий `s3api list-buckets` с учётными данными identity `mytube`,
-   до первого успешного ответа (на стенде готовность наступала за 15–20
-   секунд после старта — идёт поднятие master + volume + filer + S3-шлюза
-   внутри одного процесса).
-4. Завести бакет `mytube` **подписанным** запросом:
-   `aws --endpoint-url http://storage:8333 s3api create-bucket --bucket mytube`
-   (это же может сделать сам оркестратор через `boto3.client("s3").create_bucket(Bucket="mytube")`
-   при старте — `CreateBucket` через голый S3 API подтверждённо работает, см.
-   таблицу выше; отдельная CLI-команда кандидата для этого не нужна, в
-   отличие от Garage).
-5. Класть объекты обычным `put_object`/`upload_file` через `boto3` — без
-   дополнительных шагов.
+1. Generate `s3.json` (see above) from the `.env` values
+   `MYTUBE_S3_KEY`/`MYTUBE_S3_SECRET`, mount it at
+   `/etc/seaweedfs/s3.json:ro`.
+2. Start the `storage` container with the command above.
+3. Wait for the S3 port to become ready — poll from inside the network
+   (for example `docker exec <storage> ...` or a separate healthcheck
+   container), calling `s3api list-buckets` with the `mytube` identity's
+   credentials, until the first successful response (on the rig, readiness
+   arrived 15-20 seconds after start — the master + volume + filer + S3
+   gateway all come up inside one process).
+4. Create the `mytube` bucket with a **signed** request: `aws
+   --endpoint-url http://storage:8333 s3api create-bucket --bucket mytube`
+   (the orchestrator itself can do the same via
+   `boto3.client("s3").create_bucket(Bucket="mytube")` at startup —
+   `CreateBucket` through the bare S3 API is confirmed to work, see the
+   table above; no separate candidate-specific CLI command is needed,
+   unlike with Garage).
+5. Store objects with plain `put_object`/`upload_file` calls through
+   `boto3` — no extra steps.
 
-Пример живого прогона этой последовательности (шаги 3–4), команды и вывод:
+An example of this sequence's live run (steps 3-4), commands and output:
 
 ```
 $ docker exec exp07-seaweedfs sh -c 'true'   # контейнер уже запущен командой из п.2
@@ -157,34 +164,38 @@ $ docker run --rm --network mytube-exp07 \
 }
 ```
 
-**Анонимное чтение изнутри сети (D-38):** включено конфигом `s3.json` с
-самого старта (identity `anonymous`, действие `Read`) — отдельного шага
-«включить после старта» не требуется, в отличие от того, что предполагал
-план для Garage (`PutBucketPolicy`/подкоманды `garage bucket`, которые на
-деле не существуют для этой цели в v2.3.0).
+The captured transcript above shows the bucket-creation call succeeding
+(`"Location": "/mytube"`), with a single inline comment left as it was
+printed in the session.
 
-**`CreateBucket` через голый S3 API:** работает (см. таблицу) — план 03
-может создавать бакет `mytube` при старте стека вызовом
-`boto3.client("s3").create_bucket(...)`, не обязан ходить отдельной CLI-
-командой кандидата.
+**Anonymous reads from inside the network (D-38):** enabled by the
+`s3.json` config from the very start (identity `anonymous`, action
+`Read`) — no separate "enable after start" step is needed, unlike what the
+plan assumed for Garage (`PutBucketPolicy`/`garage bucket` subcommands,
+which in fact do not exist for this purpose in v2.3.0).
 
-**Значения для `.env.example`:**
+**`CreateBucket` through the bare S3 API:** works (see the table) — the
+stack can create the `mytube` bucket at startup with a
+`boto3.client("s3").create_bucket(...)` call, and does not need to run a
+separate candidate-specific CLI command.
+
+**Values for `.env.example`:**
 
 ```
 MYTUBE_S3_ENDPOINT=http://storage:8333
 MYTUBE_S3_BUCKET=mytube
 MYTUBE_S3_REGION=mytube
-MYTUBE_S3_KEY=<сгенерировать: openssl rand -hex 16>
-MYTUBE_S3_SECRET=<сгенерировать: openssl rand -hex 32>
+MYTUBE_S3_KEY=<generate: openssl rand -hex 16>
+MYTUBE_S3_SECRET=<generate: openssl rand -hex 32>
 MYTUBE_S3_UPSTREAM=storage:8333
 ```
 
-`MYTUBE_S3_REGION=mytube` — значение произвольное непустое, SeaweedFS (как и
-Garage) не проверяет регион строго, но клиент и сервер должны использовать
-одно и то же значение для корректной подписи SigV4.
+`MYTUBE_S3_REGION=mytube` — an arbitrary non-empty value; SeaweedFS (like
+Garage) does not strictly validate the region, but client and server must
+use the same value for a correct SigV4 signature.
 
-**Параметры boto3-клиента для плана 03** (подтверждены рабочими на стенде
-через `aws-cli` с тем же `addressing_style`):
+**boto3 client parameters for the deployment step that follows** (confirmed
+working on the rig through `aws-cli` with the same `addressing_style`):
 
 ```python
 import boto3
@@ -200,15 +211,15 @@ s3 = boto3.client(
 )
 ```
 
-Полная проверка Pitfall F (совместимость `boto3`-вызовов с SeaweedFS S3 API
-за пределами `put_object`/`head_object`/`get_object`/`list_objects_v2`,
-которые уже прогнаны через `aws-cli` на этом стенде) идёт в плане 03, где
-появляется реальное Python-окружение (M2) — этот эксперимент сознательно не
-ставит `boto3` на хост.
+The full check of Pitfall F (compatibility of `boto3` calls with the
+SeaweedFS S3 API beyond `put_object`/`head_object`/`get_object`/
+`list_objects_v2`, already exercised through `aws-cli` on this rig) happens
+in the step where a real Python environment first appears (M2) — this
+experiment deliberately does not install `boto3` on the host.
 
-## Формат access_log
+## access_log format
 
-Конфиг edge для этого эксперимента:
+The edge config for this experiment:
 
 ```nginx
 log_format cache_audit '$time_iso8601 $uri $slice_range $upstream_cache_status $status $body_bytes_sent';
@@ -216,8 +227,8 @@ access_log /var/log/nginx/blob_access.log cache_audit;
 log_subrequest on;
 ```
 
-Образец первых строк из живого прогона (64 МиБ объект, `slice 1m`, кандидат
-SeaweedFS):
+Sample of the first lines from the live run (64 MiB object, `slice 1m`,
+SeaweedFS candidate):
 
 ```
 2026-08-20T22:45:12+00:00 /blob/probe.bin bytes=1048576-2097151 MISS 200 2097698
@@ -228,77 +239,80 @@ SeaweedFS):
 2026-08-20T22:45:13+00:00 /blob/probe.bin - MISS 200 67108864
 ```
 
-**Измеренное число строк на полном скачивании 64 МиБ при `slice 1m`: 64**
-(воспроизведено дважды независимыми прогонами стенда — `experiment07_storage.sh`
-дал 64 оба раза, отдельный ручной прогон для этого документа тоже дал 64).
+**Measured line count for a full 64 MiB download with `slice 1m`: 64**
+(reproduced twice by independent rig runs — `experiment07_storage.sh` gave
+64 both times, and a separate manual run for this document also gave 64).
 
-Это **расходится с формулировкой acceptance criteria плана** («64 подзапроса
-плюс одна строка основного запроса, то есть 65»). Реальная причина
-расхождения видна в самих данных: **первый срез (`bytes=0-1048575`) не
-получает отдельной строки лога** — он логируется как часть финальной строки
-основного запроса (последняя строка примера выше: `- MISS 200 67108864`, где
-`slice_range` пуст, `body_bytes_sent` равен полному размеру файла). Из 64
-мегабайтных срезов 63 логируются как отдельные `subrequest`-строки
-(`log_subrequest on` действительно работает — без него была бы **одна**
-строка, а не десятки), и ещё одна строка — основной запрос. Итог: `63 + 1 =
-64`, не `64 + 1 = 65`. Формула плана была основана на предположении «N
-подзапросов плюс основной запрос», не проверенном эмпирически; фактическое
-поведение `ngx_http_slice_module` — первый внутренний редирект сливается с
-основным запросом, а не логируется как отдельный subrequest.
+This **diverges from the plan's acceptance-criteria wording** ("64
+subrequests plus one main-request line, i.e. 65"). The real cause of the
+discrepancy is visible in the data itself: **the first slice
+(`bytes=0-1048575`) does not get its own log line** — it is logged as part
+of the main request's final line (the last line of the example above: `-
+MISS 200 67108864`, where `slice_range` is empty and `body_bytes_sent`
+equals the full file size). Of the 64 one-megabyte slices, 63 are logged as
+separate `subrequest` lines (`log_subrequest on` genuinely works — without
+it there would be **one** line, not dozens), plus one more line for the
+main request. Total: `63 + 1 = 64`, not `64 + 1 = 65`. The plan's formula
+was based on the assumption "N subrequests plus the main request," never
+checked empirically; the actual behaviour of `ngx_http_slice_module` is
+that the first internal redirect merges with the main request rather than
+being logged as a separate subrequest.
 
-**Для парсера `cache-report` в плане 05 это не меняет ничего существенного**:
-цель B2 — подтвердить, что `log_subrequest on` даёт много строк на файл, а
-не одну, и это подтверждено (`64 ≫ 1`). Регулярное выражение, которое план
-05 будет строить по формату `$time_iso8601 $uri $slice_range
-$upstream_cache_status $status $body_bytes_sent`, должно допускать пустой
-`slice_range` (`-`) для строки основного запроса — именно так, как показано
-в образце выше.
+**This changes nothing material for the `cache-report` parser**: the point
+of B2 is to confirm that `log_subrequest on` produces many lines per file
+rather than one, and that is confirmed (`64 ≫ 1`). The regular expression
+built against the format `$time_iso8601 $uri $slice_range
+$upstream_cache_status $status $body_bytes_sent` must accept an empty
+`slice_range` (`-`) for the main request's line — exactly as shown in the
+sample above.
 
-Для Garage (дисквалифицирован по D-38) при попытке скачать тот же объект
-через тот же `slice`-конфиг лог содержит **1** строку — nginx проксирует
-первый `Range`-подзапрос, получает `403` и не продолжает нарезку, поскольку
-объект недоступен целиком.
+For Garage (disqualified per D-38), attempting to download the same object
+through the same `slice` config produces a log with **1** line — nginx
+proxies the first `Range` subrequest, gets a `403`, and does not continue
+slicing, since the object is entirely unavailable.
 
-## Приватность в редакции D-38
+## Privacy under D-38
 
-Приватность хранилища в этой фазе — это **недостижимость снаружи**, а не
-закрытый ACL бакета. Оба измеренных факта:
+Storage privacy here is **unreachability from outside**, not a closed
+bucket ACL. Both measured facts:
 
-1. **Отказ соединения с хоста.** `curl -m 3` с фактического хоста (не из
-   docker-сети) на IP контейнера кандидата и его внутренний S3-порт
-   таймаутит (`curl` exit 28) — соединение не устанавливается, потому что
-   порт не опубликован (`-p`/`ports:` отсутствует в определении сервиса).
-   Проверено для обоих кандидатов.
-2. **`206` изнутри сети.** Из контейнера **внутри** `mytube-exp07`
-   неподписанный Range-GET к SeaweedFS отдаёт `206` с корректным
-   `Content-Range` — без этого edge-nginx (который физически не умеет
-   подписывать AWS SigV4) не смог бы прочитать объект вообще.
+1. **Connection refused from the host.** `curl -m 3` from the real host
+   (not from the docker network) to the candidate container's IP and
+   internal S3 port times out (`curl` exit 28) — the connection is never
+   established, because the port is not published (`-p`/`ports:` is absent
+   from the service definition). Confirmed for both candidates.
+2. **`206` from inside the network.** From a container **inside**
+   `mytube-exp07`, an unsigned Range GET to SeaweedFS returns `206` with a
+   correct `Content-Range` — without this, edge nginx (which physically
+   cannot sign AWS SigV4) would not be able to read the object at all.
 
-Оба факта вместе и есть приватность по D-38: бакет отдаёт анонимно **только**
-изнутри `internal`-сети `storage`, а снаружи к нему нет пути, потому что порт
-не опубликован. Это **не** «анонимный GET вернул не-2xx снаружи» — снаружи
-запрос не проходит вообще, ещё до уровня HTTP-статуса. В `docker-compose.yml`
-плана 03 сервис `storage` обязан жить в сети с `internal: true` и не
-публиковать ни одного порта — если кто-то в будущем «починит» это, добавив
-`ports:`, edge продолжит работать, но приватность исчезнет незаметно.
+Both facts together are what D-38's privacy means: the bucket serves
+anonymously **only** from inside the `internal` `storage` network, and
+there is no path to it from outside, because the port is not published.
+This is **not** "an anonymous GET returned a non-2xx from outside" — from
+outside, the request never gets through at all, well before the
+HTTP-status level. In `docker-compose.yml`, the `storage` service must live
+on a network with `internal: true` and publish no port at all — if someone
+"fixes" this later by adding `ports:`, edge keeps working, but privacy
+disappears silently.
 
-## Боевое MinIO владельца (D-18)
+## The owner's production MinIO (D-18)
 
-Боевое MinIO владельца со старой HLS-библиотекой (`s3.example.com`,
-см. `01-01-SUMMARY.md`) **не затронуто и не адресовано** ни одной командой
-этого эксперимента. Стенд работает исключительно на временных контейнерах
-в изолированной сети `mytube-exp07` (Garage/SeaweedFS/nginx/aws-cli), у
-которых нет никакого сетевого пути к боевому хранилищу владельца. Выбранное
-хранилище (`chrislusf/seaweedfs:3.97`) поднимается **рядом**, в собственном
-`docker-compose.yml` фазы 1 (D-16) — миграция старой HLS-библиотеки не
-входит ни в эту фазу, ни в этот план.
+The owner's production MinIO with the old HLS library (`s3.example.com`,
+see `01-01-SUMMARY.md`) is **not touched and not addressed** by any command
+in this experiment. The rig runs exclusively on temporary containers on an
+isolated `mytube-exp07` network (Garage/SeaweedFS/nginx/aws-cli), none of
+which have any network path to the owner's production storage. The chosen
+storage (`chrislusf/seaweedfs:3.97`) comes up **alongside it**, in this
+delivery work's own `docker-compose.yml` (D-16) — migrating the old HLS
+library is not part of this work.
 
-## Уборка
+## Cleanup
 
-По завершении стенда `docker ps -a --filter name=exp07` и
-`docker volume ls --filter name=exp07` не показывают ни одного объекта —
-подтверждено дважды после независимых прогонов `experiment07_storage.sh` в
-рамках этой сессии. Сеть `mytube-exp07`, контейнеры `exp07-garage`,
-`exp07-seaweedfs`, `exp07-nginx`, тома `exp07-meta`, `exp07-data` и
-временный каталог `src/build/exp07/` удаляются через `trap cleanup EXIT`
-независимо от исхода прогона.
+After the rig finishes, `docker ps -a --filter name=exp07` and `docker
+volume ls --filter name=exp07` show no objects at all — confirmed twice
+after independent `experiment07_storage.sh` runs within this session. The
+`mytube-exp07` network, the `exp07-garage`, `exp07-seaweedfs`, `exp07-nginx`
+containers, the `exp07-meta`, `exp07-data` volumes, and the temporary
+`src/build/exp07/` directory are all removed by `trap cleanup EXIT`,
+regardless of the run's outcome.

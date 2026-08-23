@@ -1,4 +1,4 @@
-# Эксперимент 5: `secure_link` на slice-подзапросах (DELIV-06, D-01/D-02/D-04)
+# Experiment 5: `secure_link` on slice subrequests (DELIV-06, D-01/D-02/D-04)
 
 **English abstract:** Confirmed that nginx's `secure_link` signature check
 runs locally on every slice subrequest, with no per-chunk round trip to the
@@ -8,47 +8,50 @@ likely to break it in practice. Not a gate on the architecture choice itself
 to fail if the real implementation had drifted from the intent. All three
 held.
 
-**Дата прогона:** 2026-08-21
-**Стенд:** `src/tools/smoke_blob.sh`, полный стек `docker-compose.yml` (db, storage, api, edge)
-**nginx:** `nginx/1.27.5` (образ `nginx:1.27-alpine`)
-**Docker:** сервер 29.7.2 (Windows 11, Docker Desktop, Git Bash)
+**Run date:** 2026-08-21
+**Rig:** `src/tools/smoke_blob.sh`, the full `docker-compose.yml` stack (db, storage, api, edge)
+**nginx:** `nginx/1.27.5` (image `nginx:1.27-alpine`)
+**Docker:** server 29.7.2 (Windows 11, Docker Desktop, Git Bash)
 
-## Задача
+## Task
 
-По Pitfall 7 из `PITFALLS.md` изначальный риск (`auth_request` × `slice` — тысячи
-проверок доступа на файл) обезврежен архитектурно ещё на уровне решения D-02:
-проверка подписи идёт локально модулем `ngx_http_secure_link_module` на каждом
-slice-подзапросе, без похода в бэкенд. Этот документ — не блокер выбора
-архитектуры (он уже сделан), а протокол трёх измерений, которые обязаны
-провалиться, если реализация разошлась с намерением:
+Per Pitfall 7 in `PITFALLS.md`, the original risk (`auth_request` × `slice`
+— thousands of access checks per file) was already neutralised
+architecturally at decision D-02: the signature check runs locally, inside
+the `ngx_http_secure_link_module` module, on every slice subrequest, with no
+round trip to the backend. This document is not a gate on the architecture
+choice (that choice is already made) — it is a protocol for three
+measurements that would have had to fail if the implementation had drifted
+from the intent:
 
-1. формат `access_log` при `log_subrequest on` — сколько строк реально
-   попадает в лог на файл (вердикт B2);
-2. что происходит с потоком, если подпись истекает **посреди** скачивания
-   (допущение A1, вердикт M6);
-3. объединение параллельных запросов к одному холодному куску (DELIV-05,
-   вердикт m9).
+1. the `access_log` format under `log_subrequest on` — how many lines
+   actually land in the log per file (verdict B2);
+2. what happens to the stream if the signature expires **mid-download**
+   (assumption A1, verdict M6);
+3. coalescing of parallel requests for the same cold chunk (DELIV-05,
+   verdict m9).
 
-## Шаг 10: формат `access_log` — измеренная правда против исходного критерия плана
+## Step 10: `access_log` format — the measured truth against the plan's original criterion
 
-Полное скачивание объекта 64 МиБ через edge при `slice 1m` (`log_subrequest on`
-включён в `location ~ ^/blob/`) даёт **64 строки**, не **65**, как
-предполагал первоначальный acceptance-критерий плана 01-03.
+A full download of a 64 MiB object through edge with `slice 1m`
+(`log_subrequest on` enabled in `location ~ ^/blob/`) produces **64
+lines**, not **65** as the original acceptance criterion assumed.
 
-Причина расхождения — та же, что уже зафиксирована в `07-object-storage.md`
-(план 01-02, эксперимент 7): **первый срез не получает отдельной строки
-лога** — он логируется как часть финальной строки основного клиентского
-запроса (`slice_range` пуст, `body_bytes_sent` равен полному размеру файла).
-Из 64 мегабайтных срезов 63 логируются как отдельные subrequest-строки,
-плюс одна строка основного запроса: `63 + 1 = 64`, не `64 + 1 = 65`.
+The reason for the discrepancy is the same one already recorded in
+`07-object-storage.md` (experiment 7): **the first slice does not get its
+own log line** — it is logged as part of the final line of the main client
+request (`slice_range` empty, `body_bytes_sent` equal to the full file
+size). Of the 64 one-megabyte slices, 63 are logged as separate subrequest
+lines, plus one line for the main request: `63 + 1 = 64`, not `64 + 1 =
+65`.
 
-Этот же результат воспроизведён третий раз независимо (после экспериментов 7
-в плане 01-02) — теперь на полном боевом стеке (SeaweedFS + edge + api), а не
-на изолированном стенде эксперимента 7. Формула плана была основана на
-предположении «N подзапросов плюс основной запрос», не подтверждённом
-эмпирически на реальном `ngx_http_slice_module`.
+The same result has now been reproduced a third time, independently — this
+time on the full production stack (SeaweedFS + edge + api), not on
+experiment 7's isolated rig. The plan's formula was based on the assumption
+"N subrequests plus the main request," never confirmed empirically against
+the real `ngx_http_slice_module`.
 
-Образец первых строк живого прогона (объект 64 МиБ, `slice 1m`):
+Sample of the first lines from the live run (64 MiB object, `slice 1m`):
 
 ```
 2026-08-20T23:36:11+00:00 /blob/b5d0f175-4bc4-405c-8a2e-415233f6128d.mp4 bytes=1048576-2097151 MISS 206 1048576
@@ -57,97 +60,103 @@ slice-подзапросе, без похода в бэкенд. Этот док
 2026-08-20T23:36:12+00:00 /blob/b5d0f175-4bc4-405c-8a2e-415233f6128d.mp4 - MISS 206 67108864
 ```
 
-Число строк подтверждает, что `log_subrequest on` действительно работает —
-без него была бы **одна** строка на файл, а не 64. Это и есть цель B2:
-подтвердить, что подзапросы попадают в лог, а не удержать конкретное число 65.
+The line count confirms that `log_subrequest on` genuinely works — without
+it there would be **one** line per file, not 64. That is exactly what B2
+set out to confirm: that subrequests land in the log, not to hold onto the
+specific number 65.
 
-**Вердикт:** `log_subrequest on` работает. `cache-report` (план 05) должен
-допускать пустой `slice_range` (`-`) для строки основного запроса и не
-рассчитывать на строгую формулу «N+1» — фактическое число слайс-подзапросов
-на файл при N мегабайтных срезах равно N (не N+1), потому что первый срез
-сливается с основным запросом.
+**Verdict:** `log_subrequest on` works. `cache-report` must accept an empty
+`slice_range` (`-`) for the main request's line and must not rely on the
+strict "N+1" formula — the actual number of slice subrequests per file, for
+N one-megabyte slices, is N (not N+1), because the first slice merges with
+the main request.
 
-## Шаг 11: подпись, истекающая посреди скачивания (допущение A1, вердикт M6)
+## Step 11: a signature expiring mid-download (assumption A1, verdict M6)
 
-Прежняя формулировка критерия («ноль записей 302/403 при валидной подписи»)
-не могла провалиться ни при каком исходе. Настоящая проверка: подписать
-адрес с `exp` через 5 секунд, скачивать 64 МиБ с ограничением скорости
-(`curl --limit-rate 6M`, ожидаемая продолжительность ~10.7 с — заведомо
-дольше 5-секундного TTL), и проверить оба факта одновременно — совпадение
-sha256 **и** отсутствие кодов `302`/`403` среди статусов в логе.
+The earlier phrasing of the criterion ("zero 302/403 entries for a valid
+signature") could not fail under any outcome. The real check: sign an
+address with `exp` five seconds out, download 64 MiB with a rate limit
+(`curl --limit-rate 6M`, expected duration ~10.7s — deliberately longer
+than the 5-second TTL), and verify both facts at once — the sha256 matches
+**and** no `302`/`403` codes appear among the statuses in the log.
 
-**Результат:** sha256 скачанного файла совпал с оригиналом, и **ни один** из
-64 подзапросов не получил `302` или `403` (проверено полем `$status`,
-пятая колонка `cache_audit`, во всех строках свежего лога).
+**Result:** the sha256 of the downloaded file matched the original, and
+**none** of the 64 subrequests got a `302` or `403` (checked via the
+`$status` field, the fifth column of `cache_audit`, across every line of
+the fresh log).
 
-**Почему это работает, а не просто «должно было»:** `secure_link_md5`
-проверяется на **каждом** slice-подзапросе заново, потому что каждый
-subrequest — это отдельный проход через тот же `location ~ ^/blob/`, с теми
-же `$arg_sig`/`$arg_exp` из исходного URL клиента (subrequest наследует
-query string родительского запроса). TTL проверяется через
-`$secure_link_expires` относительно **текущего времени nginx**, а не времени
-первого запроса — поэтому проверка на КАЖДОМ подзапросе идёт против одного и
-того же фиксированного `exp`, зашитого в URL. Если `exp` в прошлом, любой
-subrequest получил бы `$secure_link = "0"` (истекла) и, попади он в
-`$blob_action = refresh`, — `302`, который `slice` подставил бы как тело
-куска в поток, ломая MP4 прямо посреди воспроизведения.
+**Why this works, rather than merely "should have":** `secure_link_md5` is
+re-checked on **every** slice subrequest, because every subrequest is a
+separate pass through the same `location ~ ^/blob/`, carrying the same
+`$arg_sig`/`$arg_exp` from the client's original URL (a subrequest inherits
+the parent request's query string). The TTL is checked via
+`$secure_link_expires` against **nginx's current time**, not the time of
+the first request — so the check on EVERY subrequest runs against the same
+fixed `exp` baked into the URL. Had `exp` been in the past, any subrequest
+would have gotten `$secure_link = "0"` (expired) and, had it hit
+`$blob_action = refresh`, a `302` — which `slice` would have spliced into
+the stream as a chunk's body, breaking the MP4 mid-playback.
 
-**Наблюдение: почему подзапросы не ловят `302`, хотя TTL честно проверяется
-на каждом из них.** `$secure_link_expires`/`secure_link` вычисляются заново
-на КАЖДОМ subrequest (не кешируются с первого) — это не предположение, это
-то же самое поведение, которое делает возможной проверку самой подписи на
-каждом куске (D-01/D-02). При `exp` через 5с и лимите скорости 6 МБ/с
-скачивание 64 МиБ длится ~10.7с по расчёту — то есть бóльшая часть из 64
-подзапросов физически отправляется nginx'ом ПОСЛЕ реального истечения TTL
-по часам сервера. Несмотря на это, ни один subrequest не получил `302`/`403`.
+**Observation: why the subrequests do not get a `302`, even though the TTL
+genuinely is checked on each one.** `$secure_link_expires`/`secure_link` are
+recomputed on EVERY subrequest (not cached from the first) — this is not an
+assumption, it is the same behaviour that makes checking the signature
+itself on every chunk possible in the first place (D-01/D-02). With `exp`
+five seconds out and a rate limit of 6 MB/s, downloading 64 MiB takes
+~10.7s by calculation — meaning most of the 64 subrequests are physically
+sent by nginx AFTER the TTL has genuinely expired by the server clock.
+Despite that, not one subrequest got a `302`/`403`.
 
-Причина: `nginx`'s `secure_link_expires` — время, зашитое в `$arg_exp` из
-URL клиента, но модуль `ngx_http_secure_link_module` в режиме TTL (Pattern 1)
-сравнивает его с временем СТАРТА обработки главного запроса
-(`$msec`/внутренний таймстемп родительского request-контекста, унаследованный
-subrequest'ами), а не с временем каждого отдельного subrequest'а по
-отдельности заново от `time()`. Поэтому все subrequest'ы одного уже принятого
-клиентского запроса разделяют результат TTL-проверки родителя — как только
-клиент прошёл проверку в момент начала скачивания, все внутренние срезы
-ЭТОГО скачивания продолжают проходить, даже если физическое время на
-сервере успело перевалить за `exp` к моменту отправки последних срезов.
+The reason: `secure_link_expires` is the time baked into the client URL's
+`$arg_exp`, but the `ngx_http_secure_link_module` module in TTL mode
+(Pattern 1) compares it against the START time of the main request's
+processing (`$msec`/the parent request context's internal timestamp,
+inherited by subrequests), not against each individual subrequest's own
+time taken freshly from `time()`. So every subrequest of one
+already-accepted client request shares the parent's TTL check result — once
+the client passed the check at the moment the download began, all internal
+slices of THAT download keep passing, even if the server's physical clock
+has moved past `exp` by the time the last slices are sent.
 
-**Практическое следствие для D-04:** протухание подписи ловит только
-**следующий НОВЫЙ** клиентский запрос (например, перемотку или паузу с новым
-запросом от плеера) — не рвёт уже идущий поток. Именно это и требовалось
-проверкой A1: 12-часовой TTL на трёхчасовом фильме не создаёт разрыва
-посреди воспроизведения ни в одном сценарии, включая маловероятный
-«TTL истёк в последнюю минуту фильма».
+**Practical consequence for D-04:** an expired signature is only caught by
+the **next NEW** client request (a seek or a pause producing a fresh
+request from the player, for example) — it does not tear down an
+already-running stream. That is exactly what assumption A1 needed checked:
+a 12-hour TTL on a three-hour film does not produce a mid-playback break
+under any scenario, including the unlikely "TTL expires in the film's last
+minute."
 
-**Вердикт по допущению A1:** ПОДТВЕРЖДЕНО. sha256 совпал, ни один
-subrequest не получил `302`/`403`. Архитектурный риск «12-часовой TTL истёк
-посреди трёхчасового фильма» на практике не материализуется в разрыв
-потока — худший случай при истечении TTL посреди сеанса это следующий
-**новый** запрос (не subrequest уже идущего скачивания) получит `302` на
-`/refresh/`, и плеер переоткроет ссылку (D-04).
+**Verdict on assumption A1:** CONFIRMED. The sha256 matched, no subrequest
+got a `302`/`403`. The architectural risk of "a 12-hour TTL expiring
+mid-three-hour-film" does not materialise as a stream break in practice —
+the worst case when the TTL expires mid-session is that the next **new**
+request (not a subrequest of an already-running download) gets a `302` to
+`/refresh/`, and the player reopens the link (D-04).
 
-## Шаг 12: объединение параллельных запросов (DELIV-05, вердикт m9)
+## Step 12: coalescing of parallel requests (DELIV-05, verdict m9)
 
-Десять параллельных `curl`-запросов к одному и тому же холодному
-мегабайтному куску (после сброса лога и рестарта `edge` для гарантированно
-пустого кэша) дали **ровно один** поход в хранилище (`MISS` в
-`$upstream_cache_status`), остальные девять обслужены из `proxy_cache_lock`.
+Ten parallel `curl` requests for the same cold one-megabyte chunk (after
+clearing the log and restarting `edge` to guarantee an empty cache)
+produced **exactly one** trip to storage (`MISS` in
+`$upstream_cache_status`), with the other nine served from
+`proxy_cache_lock`.
 
-Это первое **автоматическое** подтверждение того, что раньше проверялось
-только созывом живых людей в VRChat — единственная проверка сути всей
-конструкции slice+cache+lock (DELIV-05). `proxy_cache_lock_timeout 20s`
-(выше дефолтных 5с, Pitfall 11) на этом прогоне не потребовался — локальное
-docker-хранилище отвечает быстрее 5с, но значение поднято намеренно на
-случай более медленного диска/сети на боевой машине.
+This is the first **automated** confirmation of something that could
+previously only be checked by gathering live people in VRChat — the one
+check that gets at the substance of the whole slice+cache+lock construction
+(DELIV-05). `proxy_cache_lock_timeout 20s` (above the default 5s, Pitfall
+11) was not needed on this run — the local docker storage responds faster
+than 5s, but the value was raised deliberately in case of a slower
+disk/network on the production machine.
 
-## Итоговая сводка
+## Summary
 
-| Проверка | Результат |
+| Check | Result |
 |---|---|
-| Строк в access_log на 64 МиБ / slice 1m | **64** (не 65 — расхождение с исходным критерием плана задокументировано выше) |
-| Допущение A1 (TTL истекает посреди скачивания) | **PASS** — sha256 совпал, 0 записей 302/403 среди подзапросов |
-| Объединение параллельных запросов (DELIV-05) | **PASS** — 1 origin fetch на 10 параллельных запросов к одному куску |
-| `log_subrequest on` работает | **Подтверждено** (64 ≫ 1) |
+| Lines in access_log for 64 MiB / slice 1m | **64** (not 65 — the discrepancy with the plan's original criterion is documented above) |
+| Assumption A1 (TTL expires mid-download) | **PASS** — sha256 matched, 0 302/403 entries among the subrequests |
+| Coalescing of parallel requests (DELIV-05) | **PASS** — 1 origin fetch for 10 parallel requests to the same chunk |
+| `log_subrequest on` works | **Confirmed** (64 ≫ 1) |
 
-Полный тринадцатишаговый прогон — `bash tools/smoke_blob.sh` из `src/`, все
-шаги зелёные на дату прогона выше.
+The full thirteen-step run — `bash tools/smoke_blob.sh` from `src/` — all
+steps green as of the run date above.
