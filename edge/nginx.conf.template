@@ -187,3 +187,87 @@ server {
         # Content-Type is not something every player forgives.
     }
 }
+# ==== admin surface begins here ====
+#
+# The operator interface gets its own server block, appended here rather than
+# interleaved with the delivery block above.
+#
+# - It stays second in file order on purpose: nginx treats the first `server`
+#   block in a file as the implicit default for any Host that matches no
+#   server_name exactly. Neither block carries a `default_server` marker, and
+#   neither should — leaving the delivery block first keeps its own 404 ->
+#   stub-clip handling as the answer for every Host that isn't the admin one.
+# - server_name below is the operator's own hostname, an exact match rather
+#   than a wildcard or `_`. The whole point of a second hostname is that only
+#   that one name reaches this block.
+# - This block carries none of the delivery block's machinery: no
+#   secure_link, no slice, no cache include, no error_page stub-clip mapping,
+#   no absolute_redirect off. A host that never serves video has no use for
+#   any of it — this surface answers with real HTML and real redirects, not a
+#   stub clip a video player can swallow.
+
+# Rate-limit zone for the two public routes that reach a password hash
+# (login and the one-time setup link). Declared here, above the server block
+# that references it — despite both directives being valid anywhere at the
+# http level (this whole file is already included inside it), nginx resolves
+# a zone name where limit_req is parsed and rejects one it hasn't seen yet.
+#
+# Not a lockout and not an answer to password guessing — that is settled
+# elsewhere as a constant delay and a real-cost hash, deliberately without a
+# lockout, because a lockout lets any passer-by lock the operator out of
+# their own interface by hammering the form with their username. This zone
+# answers a different threat: each verification holds a worker thread and
+# its configured memory for the better part of a second, so an unbounded
+# burst is a resource attack on a process that also answers /v/{slug} for
+# viewers. Ten a minute with a burst of five is far above anything a person
+# types and far below anything that costs the process something.
+limit_req_zone $binary_remote_addr zone=mytube_auth:1m rate=10r/m;
+
+# A log format that never records the query string. The one-time setup link
+# carries its token there, and the default combined format logs $request,
+# which contains it, into a volume the api container also mounts. $uri
+# stands in for $request below. Closing this copy of the token doesn't close
+# every copy: the operator's own reverse proxy keeps its own log and the
+# browser keeps its own history, both outside this repository.
+log_format admin_audit '$time_iso8601 $uri $status $body_bytes_sent';
+
+server {
+    listen 80;
+    server_name ${MYTUBE_ADMIN_FQDN};
+
+    access_log /var/log/nginx/admin_access.log admin_audit;
+
+    # An anonymous endpoint that runs a database query has no reason to be
+    # reachable from the public internet. Docker's own healthcheck reaches
+    # this path on localhost inside the container, which is its only
+    # legitimate caller — refusing it here costs the healthcheck nothing.
+    location = /healthz {
+        return 404;
+    }
+
+    # A refused request gets nginx's own 503 — no error_page mapping here:
+    # this block serves a person with a browser, not a video player that
+    # cannot render a status page.
+    location = /login {
+        limit_req zone=mytube_auth burst=5 nodelay;
+        proxy_set_header X-Forwarded-Host  $http_host;
+        proxy_set_header X-Forwarded-Proto $external_proto;
+        proxy_pass http://orchestrator;
+    }
+
+    location = /setup {
+        limit_req zone=mytube_auth burst=5 nodelay;
+        proxy_set_header X-Forwarded-Host  $http_host;
+        proxy_set_header X-Forwarded-Proto $external_proto;
+        proxy_pass http://orchestrator;
+    }
+
+    # The forwarded host header is load-bearing, not decorative: nginx does
+    # not pass the client's real Host through proxy_pass by default, and the
+    # application's own hostname check reads this header instead.
+    location / {
+        proxy_set_header X-Forwarded-Host  $http_host;
+        proxy_set_header X-Forwarded-Proto $external_proto;
+        proxy_pass http://orchestrator;
+    }
+}

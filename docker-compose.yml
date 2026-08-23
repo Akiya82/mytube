@@ -98,6 +98,16 @@ services:
     image: nginx:1.27-alpine
     shm_size: 1g
     env_file: .env
+    # MYTUBE_ADMIN_FQDN reaches this container only through env_file above,
+    # never as an environment: interpolation, and deliberately carries no
+    # required-value marker here. Compose interpolates the whole file on
+    # every subcommand, not only `up` -- a marker on this service would
+    # make `ps`, `logs`, `exec` and `down` fail together with `up`, taking
+    # away `exec`, the one way to reach the in-container repair path, at
+    # the same moment it stopped working. The loud failure for an absent
+    # hostname belongs to the application instead (orchestrator/config.py),
+    # which names the variable in `docker compose logs api` while every
+    # other compose subcommand keeps working.
     environment:
       NGINX_ENVSUBST_FILTER: "^MYTUBE_"
       # Defaults keep the out-of-the-box path working: this compose brings up

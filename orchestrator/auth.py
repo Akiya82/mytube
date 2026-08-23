@@ -28,6 +28,13 @@ SESSION_RENEW_AFTER_SECONDS = 24 * 3600
 
 SESSION_COOKIE_NAME = "mytube_session"
 
+# Delivery addresses the edge proxies to this process. The edge overwrites
+# the forwarded host on every request it sends here (see
+# edge/nginx.conf.template), so a viewer reaching one of these through the
+# delivery hostname must never be refused by the interface hostname check a
+# later plan adds -- that check is skipped entirely for these prefixes.
+HOST_EXEMPT_PREFIXES: tuple[str, ...] = ("/v/", "/refresh/")
+
 # D-87's constant delay on every failed login attempt. No lockout and no
 # attempt table: a lockout would let any passer-by lock the operator out
 # of their own interface by hammering the form with their username.
