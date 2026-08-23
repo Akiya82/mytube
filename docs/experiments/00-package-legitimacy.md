@@ -1,4 +1,4 @@
-# Легитимность тринадцати PyPI-пакетов фазы 1 (T-01-SC)
+# Legitimacy of the thirteen phase 1 PyPI packages (T-01-SC)
 
 **English abstract:** Verified that all thirteen PyPI packages this phase
 installs are the real, legitimate packages, not typosquats or hallucinated
@@ -7,68 +7,73 @@ suspicious for a reason unrelated to legitimacy (recency of the latest
 release, not package age), so every package was instead confirmed by hand
 against its real pypi.org page. Verdict: all thirteen cleared.
 
-Гейт перед первой установкой зависимостей (план 01-03). Автоматический чекер
-(`gsd-tools query package-legitimacy check --ecosystem pypi`) уже прогнан по
-исходной семёрке в исследовании (`01-RESEARCH.md`, раздел «Package Legitimacy
-Audit») и дал `SUS` по причинам `too-new`/`unknown-downloads` на всех семи —
-это ложное срабатывание (сигнал `too-new` смотрит на дату **последнего**
-релиза, а не на возраст пакета). Ни один пакет не получил `SLOP`. Шесть
-пакетов сверх исходной семёрки (`typer`, `httpx`, `sqlalchemy`,
-`pytest`, `pytest-asyncio`, `testcontainers`) автоматический чекер вообще не
-видел — они добавлены по вердикту m5, потому что реально ставятся планом 03.
-Повторный прогон автоматического чекера бессмыслен — он уже дал ложное
-срабатывание на известных, безопасных пакетах; для всех тринадцати нужна
-только ручная проверка человеком по ссылке на pypi.org.
+Gate before dependencies are first installed. The automated checker
+(`gsd-tools query package-legitimacy check --ecosystem pypi`) already ran
+against the original seven packages during research (`01-RESEARCH.md`,
+"Package Legitimacy Audit" section) and returned `SUS` for
+`too-new`/`unknown-downloads` reasons on all seven — a false positive (the
+`too-new` signal looks at the date of the **latest** release, not the
+package's age). None of the packages received `SLOP`. Six packages beyond
+the original seven (`typer`, `httpx`, `sqlalchemy`, `pytest`,
+`pytest-asyncio`, `testcontainers`) were never seen by the automated checker
+at all — they were added under a documented decision (verdict m5), because
+they are genuinely installed by the dependency-installation step. Re-running
+the automated checker is pointless — it already produced a false positive on
+packages that are known and safe; all thirteen need only the manual check
+against pypi.org, done by a person.
 
-**Таблица ниже — автоматизируемая часть подготовки.** Открыть тринадцать
-страниц и сверить репозиторий с колонкой «ожидаемый репозиторий» — шаг,
-который выполняет владелец; исполнитель эту колонку не заполняет по
-предположению. Заполненные значения в колонке «Подтверждено» проставлены
-по отчёту владельца от 2026-08-21 — см. раздел «Дата сверки и подпись».
+**The table below is the automatable part of the preparation.** Opening the
+thirteen pages and checking the repository against the "expected repository"
+column is a step the owner performs; the executor does not fill in that
+column by assumption. The values filled into the "Confirmed" column were
+entered from the owner's report dated 2026-08-21 — see the "Verification
+date and signature" section below.
 
-## Таблица сверки
+## Verification table
 
-| # | Пакет | Группа | URL на pypi.org | Ожидаемый репозиторий (со страницы PyPI) | Версия / пин | Возраст, сигналы легитимности | Подтверждено |
+| # | Package | Group | pypi.org URL | Expected repository (from the PyPI page) | Version / pin | Age, legitimacy signals | Confirmed |
 |---|-------|--------|------------------|-------------------------------------------|--------------|-------------------------------|---------------|
-| 1 | `fastapi` | runtime | https://pypi.org/project/fastapi/ | github.com/fastapi/fastapi | pyproject.toml пинует диапазон `>=0.141,<0.150`; на дату исследования (2026-08-20) актуальна 0.141.1 (29 июля 2026) | 6+ лет истории, 250+ релизов с 0.1.0 | Да |
-| 2 | `uvicorn` | runtime (`[standard]` экстра) | https://pypi.org/project/uvicorn/ | github.com/Kludex/uvicorn (проект переехал из `encode/uvicorn` — ожидаемо, не признак подмены) | не пинуется в pyproject.toml, ставится `latest` | 8+ лет истории релизов | Да |
-| 3 | `asyncpg` | runtime | https://pypi.org/project/asyncpg/ | github.com/MagicStack/asyncpg | не пинуется в pyproject.toml; STACK.md ориентируется на `^0.31.0` (0.31.0, 24 ноября 2025 — новее не было на дату исследования) | 10+ лет, 39 релизов с 0.5.0 | Да |
-| 4 | `alembic` | runtime | https://pypi.org/project/alembic/ | github.com/sqlalchemy/alembic | не пинуется; на дату исследования актуальна 1.19.1 (8 августа 2026) | 10+ лет истории релизов | Да |
-| 5 | `sqlalchemy` | runtime | https://pypi.org/project/sqlalchemy/ | github.com/sqlalchemy/sqlalchemy | не пинуется; на дату исследования актуальна 2.0.52 (11 августа 2026) | Добавлена по вердикту m5 — `migrations/env.py` (план 04) импортирует её напрямую, поэтому объявляется явной зависимостью, а не тянется транзитивно через `alembic`. Автоматический чекер её не проверял — сверяется только вручную здесь | Да |
-| 6 | `boto3` | runtime | https://pypi.org/project/boto3/ | github.com/boto/boto3 | не пинуется; на дату исследования актуальна 1.43.75 (19 августа 2026) | 10+ лет, тысячи релизов (микро-версии еженедельно) | Да |
-| 7 | `pydantic-settings` | runtime | https://pypi.org/project/pydantic-settings/ | github.com/pydantic/pydantic-settings | не пинуется, ставится `latest` (линейка 2.x) | Активный проект, релизы с 2023 | Да |
-| 8 | `python-slugify` | runtime | https://pypi.org/project/python-slugify/ | github.com/un33k/python-slugify | не пинуется; ставится **базовый пакет без экстры** — см. предупреждение ниже | 12+ лет, 46 релизов с 0.0.1 | Да |
-| 9 | `typer` | runtime | https://pypi.org/project/typer/ | github.com/fastapi/typer | не пинуется, ставится `latest` | Добавлен по вердикту m5 — CLI фазы (`add`, `cache-warm`, `cache-report`), план 03. Автоматический чекер его не видел | Да |
-| 10 | `httpx` | **runtime** (не dev) | https://pypi.org/project/httpx/ | github.com/encode/httpx | не пинуется, ставится `latest` | Добавлен по вердикту m5. Используется командой `cache-warm` (план 05) — она работает в бою, а не только в тестах, поэтому пакет объявлен runtime-зависимостью, а не dev. Автоматический чекер его не видел | Да |
-| 11 | `pytest` | dev | https://pypi.org/project/pytest/ | github.com/pytest-dev/pytest | не пинуется, ставится `latest` | Стандартный тест-раннер, добавлен по вердикту m5 в dev-группу | Да |
-| 12 | `pytest-asyncio` | dev | https://pypi.org/project/pytest-asyncio/ | github.com/pytest-dev/pytest-asyncio | STACK.md ориентируется на `^1.4` (1.4.0, 26 мая 2026) | Добавлен по вердикту m5 | Да |
-| 13 | `testcontainers` | dev (`[postgres]` экстра) | https://pypi.org/project/testcontainers/ | github.com/testcontainers/testcontainers-python | STACK.md ориентируется на `^4.15` (4.15.0, 24 июля 2026) | Добавлен по вердикту m5. Используется для `PostgresContainer` в интеграционных тестах | Да |
+| 1 | `fastapi` | runtime | https://pypi.org/project/fastapi/ | github.com/fastapi/fastapi | pyproject.toml pins the range `>=0.141,<0.150`; as of the research date (2026-08-20) the current release is 0.141.1 (29 July 2026) | 6+ years of history, 250+ releases since 0.1.0 | Yes |
+| 2 | `uvicorn` | runtime (`[standard]` extra) | https://pypi.org/project/uvicorn/ | github.com/Kludex/uvicorn (the project moved from `encode/uvicorn` — expected, not a sign of takeover) | not pinned in pyproject.toml, installed as `latest` | 8+ years of release history | Yes |
+| 3 | `asyncpg` | runtime | https://pypi.org/project/asyncpg/ | github.com/MagicStack/asyncpg | not pinned in pyproject.toml; STACK.md targets `^0.31.0` (0.31.0, 24 November 2025 — nothing newer existed as of the research date) | 10+ years, 39 releases since 0.5.0 | Yes |
+| 4 | `alembic` | runtime | https://pypi.org/project/alembic/ | github.com/sqlalchemy/alembic | not pinned; as of the research date the current release is 1.19.1 (8 August 2026) | 10+ years of release history | Yes |
+| 5 | `sqlalchemy` | runtime | https://pypi.org/project/sqlalchemy/ | github.com/sqlalchemy/sqlalchemy | not pinned; as of the research date the current release is 2.0.52 (11 August 2026) | Added under a documented decision (verdict m5) — `migrations/env.py` imports it directly, so it is declared as an explicit dependency rather than pulled in transitively through `alembic`. The automated checker never audited it — it is checked only by hand, here | Yes |
+| 6 | `boto3` | runtime | https://pypi.org/project/boto3/ | github.com/boto/boto3 | not pinned; as of the research date the current release is 1.43.75 (19 August 2026) | 10+ years, thousands of releases (micro-versions weekly) | Yes |
+| 7 | `pydantic-settings` | runtime | https://pypi.org/project/pydantic-settings/ | github.com/pydantic/pydantic-settings | not pinned, installed as `latest` (2.x line) | Active project, releases since 2023 | Yes |
+| 8 | `python-slugify` | runtime | https://pypi.org/project/python-slugify/ | github.com/un33k/python-slugify | not pinned; the **base package is installed without an extra** — see the warning below | 12+ years, 46 releases since 0.0.1 | Yes |
+| 9 | `typer` | runtime | https://pypi.org/project/typer/ | github.com/fastapi/typer | not pinned, installed as `latest` | Added under a documented decision (verdict m5) — the phase's CLI (`add`, `cache-warm`, `cache-report`). The automated checker never saw it | Yes |
+| 10 | `httpx` | **runtime** (not dev) | https://pypi.org/project/httpx/ | github.com/encode/httpx | not pinned, installed as `latest` | Added under a documented decision (verdict m5). Used by the `cache-warm` command, which runs in production and not only in tests, so the package is declared a runtime dependency rather than dev. The automated checker never saw it | Yes |
+| 11 | `pytest` | dev | https://pypi.org/project/pytest/ | github.com/pytest-dev/pytest | not pinned, installed as `latest` | The standard test runner, added to the dev group under a documented decision (verdict m5) | Yes |
+| 12 | `pytest-asyncio` | dev | https://pypi.org/project/pytest-asyncio/ | github.com/pytest-dev/pytest-asyncio | STACK.md targets `^1.4` (1.4.0, 26 May 2026) | Added under a documented decision (verdict m5) | Yes |
+| 13 | `testcontainers` | dev (`[postgres]` extra) | https://pypi.org/project/testcontainers/ | github.com/testcontainers/testcontainers-python | STACK.md targets `^4.15` (4.15.0, 24 July 2026) | Added under a documented decision (verdict m5). Used for `PostgresContainer` in integration tests | Yes |
 
-## На что смотреть при сверке (для владельца)
+## What to check during verification (for the owner)
 
-Открыть каждую из тринадцати ссылок на pypi.org и убедиться:
-- есть длинная история релизов (годы, не дни);
-- ссылка «Homepage»/«Source» ведёт на репозиторий из колонки «Ожидаемый репозиторий»;
-- в поиске pypi.org рядом нет опечаточного одноимённого пакета с похожим названием
-  (typosquat), который можно перепутать при установке.
+Open each of the thirteen pypi.org links and confirm:
+- there is a long release history (years, not days);
+- the "Homepage"/"Source" link points to the repository named in the
+  "Expected repository" column;
+- pypi.org search does not show a similarly-named typosquat package that
+  could be confused with it during installation.
 
-## Отдельное предупреждение: транслитерация
+## Separate warning: transliteration
 
-Зависимость транслитерации для `python-slugify` — это `text-unidecode`
-(Artistic License), устанавливаемая по умолчанию вместе с базовым пакетом.
-`src/pyproject.toml` (план 03) объявляет **именно базовый `python-slugify`,
-без экстры `[unidecode]`** — та экстра тянет отдельный пакет `Unidecode`
-(GPL), который конфликтует с MIT-лицензией репозитория. Владельцу стоит
-сверить на странице `python-slugify`, что экстра `unidecode` не подмешана
-случайно нигде в дереве зависимостей.
+The transliteration dependency for `python-slugify` is `text-unidecode`
+(Artistic License), installed by default alongside the base package.
+`src/pyproject.toml` declares **the base `python-slugify` package
+specifically, without the `[unidecode]` extra** — that extra pulls in a
+separate `Unidecode` package (GPL), which conflicts with the repository's
+MIT license. The owner should check on the `python-slugify` page that the
+`unidecode` extra has not been pulled in by accident anywhere in the
+dependency tree.
 
-## Дата сверки и подпись
+## Verification date and signature
 
-| Поле | Значение |
+| Field | Value |
 |---|---|
-| Дата сверки | 2026-08-21 |
-| Подпись | Владелец подтвердил: «пакеты сверены» — все тринадцать страниц на pypi.org открыты и проверены вручную перед первой установкой зависимостей, ни один пакет сомнений не вызвал |
+| Verification date | 2026-08-21 |
+| Signature | Owner confirmed: "packages verified" — all thirteen pypi.org pages opened and checked by hand before dependencies were first installed; no package raised any doubt |
 
-**Сверка завершена.** Владелец лично открыл и сверил все тринадцать страниц на
-pypi.org (отчёт владельца, не автоматическая или агентская проверка) — гейт
-T-01-SC закрыт. Установка зависимостей (план 03) может начинаться.
+**Verification complete.** The owner personally opened and checked all
+thirteen pypi.org pages (the owner's own report, not an automated or agent
+check) — gate T-01-SC is closed. Dependency installation may begin.

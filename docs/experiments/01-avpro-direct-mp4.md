@@ -1,4 +1,4 @@
-# Эксперимент 1: прямой MP4 с собственного домена в AVPro (VRChat)
+# Experiment 1: direct MP4 from the owner's own domain in AVPro (VRChat)
 
 **English abstract:** Tested whether a progressive MP4 file, served from the
 owner's own domain, plays directly in VRChat's AVPro video player -- the
@@ -6,42 +6,45 @@ foundational technical bet the entire project rests on. Verdict: **PASS**,
 confirmed on both a direct address and the real production form with a
 signed query string.
 
-Go/no-go всего проекта (ROADMAP критерий 1). Провал ≠ пересмотр замысла — сначала
-перебор причин по списку D-33.
+Go/no-go for the whole project. A failure would not mean rethinking the
+concept — first work through the list of causes (D-33).
 
-## Предпосылки (заполнено автоматически)
+## Preconditions (filled in automatically)
 
-- Контрольный клип собран и машинно проверен по D-34: `src/tools/make_control_clip.sh`
-  → `build/control.mp4`. H.264 High 4.1, `yuv420p`, `+faststart` подтверждены
-  `ffprobe` и `check_faststart.py` (см. коммит Task 1 плана 01-01).
-- Домен и TLS уже существуют и работают (D-19) — владелец выкладывает файл через
-  существующий реверс-прокси.
+- The control clip was built and machine-verified per D-34:
+  `src/tools/make_control_clip.sh` → `build/control.mp4`. H.264 High 4.1,
+  `yuv420p`, `+faststart` confirmed by `ffprobe` and `check_faststart.py`
+  (see the commit for the control-clip build task).
+- The domain and TLS already exist and work (D-19) — the owner serves the
+  file through an existing reverse proxy.
 
-## Отклонение от протокола: стенд
+## Deviation from the protocol: the rig
 
-Протокол предполагал «бинарный файл, отданный реверс-прокси владельца». Владелец
-прогнал эксперимент против **уже работающего продакшен-стенда**: собственного
-MinIO S3-бакета за кэширующим реверс-прокси (`nginx/1.27.5`), а не против голого
-файла на домене. Это осознанная замена, а не отступление от протокола — стенд
-строже требуемого минимума: в цепочке уже стоит кэширующий слой (аналог будущего
-edge-nginx фазы 1, D-20), и результат заодно подтверждает, что Range-запросы
-переживают кэш (см. шаг 3 ниже, `X-Cache: HIT` на партиальном ответе). Если бы
-эксперимент прошёл против голого файла без кэша, это ничего не говорило бы про
-поведение кэширующего слоя; здесь оно проверено бесплатно.
+The protocol called for "a raw file, served by the owner's reverse proxy."
+The owner instead ran the experiment against **an already-running
+production rig**: the owner's own MinIO S3 bucket behind a caching reverse
+proxy (`nginx/1.27.5`), not a bare file on the domain. This is a deliberate
+substitution, not a deviation from the protocol — the rig is stricter than
+the required minimum: a caching layer already sits in the chain (an
+analogue of the edge nginx this delivery work later builds, D-20), and the
+result also confirms that Range requests survive the cache (see step 3
+below, `X-Cache: HIT` on the partial response). Had the experiment run
+against a bare, uncached file, that would have said nothing about the
+caching layer's behaviour; here it was verified for free.
 
-Стенд: `https://s3.example.com/movies/control.mp4` (бакет MinIO за кэширующим
-прокси, `Server: nginx/1.27.5`).
+Rig: `https://s3.example.com/movies/control.mp4` (a MinIO bucket behind the
+caching proxy, `Server: nginx/1.27.5`).
 
-## Протокол
+## Protocol
 
-| Поле | Значение |
+| Field | Value |
 |---|---|
-| Дата | 2026-08-20 (curl-проверки, 21:30–21:31 UTC) / 2026-08-20 (проверка в VRChat, дата и время прогона в VRChat отдельно не зафиксированы владельцем) |
-| Билд VRChat | 2026.3.1 |
-| Мир и плеер | Мир `06_Leaf` от `_hoshino_`, видеоплеер VizVid |
-| Тип инстанса | Invite+ — удовлетворяет требованию протокола (не публичный инстанс) |
+| Date | 2026-08-20 (curl checks, 21:30-21:31 UTC) / 2026-08-20 (VRChat check; the exact date and time of the VRChat run were not separately recorded by the owner) |
+| VRChat build | 2026.3.1 |
+| World and player | World `06_Leaf` by `_hoshino_`, VizVid video player |
+| Instance type | Invite+ — satisfies the protocol's requirement (not a public instance) |
 
-### Шаг 1-2: заголовки (`curl -I`)
+### Steps 1-2: headers (`curl -I`)
 
 ```
 $ curl -I https://s3.example.com/movies/control.mp4
@@ -67,10 +70,10 @@ X-Ratelimit-Remaining: 5554
 X-Xss-Protection: 1; mode=block
 ```
 
-Вердикт шага: `200`, `Content-Type: video/mp4`, `Accept-Ranges: bytes` — все три
-условия выполнены.
+Step verdict: `200`, `Content-Type: video/mp4`, `Accept-Ranges: bytes` — all
+three conditions met.
 
-### Шаг 3: Range-запрос (`curl -r 0-1048575`)
+### Step 3: Range request (`curl -r 0-1048575`)
 
 ```
 $ curl -r 0-1048575 -o test.mp4 -D- https://s3.example.com/movies/control.mp4
@@ -96,14 +99,16 @@ X-Ratelimit-Remaining: 5554
 X-Xss-Protection: 1; mode=block
 ```
 
-Вердикт шага: `206` с корректным `Content-Range: bytes 0-1048575/92330979`.
-Отдельно стоит отметить: ответ отдан с `X-Cache: HIT` — Range-запрос пережил
-кэширующий слой перед бакетом целым, не был обойдён кэшем.
+Step verdict: `206` with a correct `Content-Range: bytes
+0-1048575/92330979`. Worth noting separately: the response came back with
+`X-Cache: HIT` — the Range request survived the caching layer in front of
+the bucket intact, it was not bypassed by the cache.
 
-### Шаг 3a: боевая форма адреса с query-string (M4)
+### Step 3a: the production form of the address, with a query string (M4)
 
-Повтор шага 2 по адресу `https://s3.example.com/movies/control.mp4?exp=1&sig=abc`
-(battle-form адрес по D-06).
+Repeat of step 2 against
+`https://s3.example.com/movies/control.mp4?exp=1&sig=abc` (the
+production-form address per D-06).
 
 ```
 $ curl -I "https://s3.example.com/movies/control.mp4?exp=1&sig=abc"
@@ -115,56 +120,60 @@ Etag: "bd0eb58c855b79e457e2d0f6df6ed544-6"
 Server: nginx/1.27.5
 X-Amz-Request-Id: 18CDA0C18F621F4E
 X-Cache: HIT
-(остальные заголовки идентичны шагу 2)
+(remaining headers identical to step 2)
 ```
 
-Вердикт шага: `200`, поведение идентично адресу без query-string. Строка
-параметров не помешала отдаче.
+Step verdict: `200`, behaviour identical to the address without a query
+string. The parameter string did not interfere with serving the file.
 
-Query-string: **играет** (curl-уровень подтверждён здесь; подтверждение в плеере —
-шаг 6a ниже).
+Query string: **plays** (confirmed at the curl level here; player-level
+confirmation is step 6a below).
 
-### Шаг 4-6: воспроизведение в AVPro
+### Steps 4-6: playback in AVPro
 
-Владелец сообщает: адрес `https://s3.example.com/movies/control.mp4` без
-query-string открыт в плеере AVPro и играет — картинка не чёрная, звук есть.
+The owner reports: the address `https://s3.example.com/movies/control.mp4`
+without a query string was opened in the AVPro player and plays — the
+picture is not black, there is sound.
 
-Наблюдение: играет (со слов владельца; см. «Пробел в доказательствах» — конкретика
-прогона в протоколе не зафиксирована).
+Observation: plays (per the owner's report; see "evidence gap" — the run's
+specifics were not recorded in the protocol).
 
-### Шаг 6a: боевая форма адреса в плеере (M4)
+### Step 6a: the production form of the address in the player (M4)
 
-Владелец сообщает: адрес `https://s3.example.com/movies/control.mp4?exp=1&sig=abc`
-открыт в том же плеере и тоже играет.
+The owner reports: the address
+`https://s3.example.com/movies/control.mp4?exp=1&sig=abc` was opened in the
+same player and also plays.
 
-Наблюдение: играет (со слов владельца; см. «Пробел в доказательствах»).
+Observation: plays (per the owner's report; see "evidence gap").
 
-## Условия прогона в VRChat
+## Conditions of the VRChat run
 
-Прогон выполнен владельцем в билде VRChat 2026.3.1, в мире `06_Leaf` от
-`_hoshino_`, через видеоплеер VizVid, в инстансе типа Invite+ (требование
-протокола «не публичный инстанс» выполнено). Оба адреса — чистый и боевой с
-`?exp=1&sig=abc` — открыты в одном и том же плеере и играют.
+The run was performed by the owner on VRChat build 2026.3.1, in the world
+`06_Leaf` by `_hoshino_`, through the VizVid video player, in an Invite+
+instance (the protocol's "not a public instance" requirement met). Both
+addresses — the plain one and the production one with `?exp=1&sig=abc` —
+were opened in the same player and play.
 
-Граница доказательства: воспроизведение наблюдал человек, программной записи
-прогона нет — в VRChat её и не получить. Вердикт опирается на прямое сообщение
-владельца о наблюдаемом результате. Условия прогона зафиксированы выше и
-воспроизводимы.
+Evidence boundary: a person observed the playback; there is no programmatic
+recording of the run — VRChat offers no way to get one. The verdict rests on
+the owner's direct report of the observed result. The run's conditions are
+recorded above and are reproducible.
 
-## Bonus-наблюдение (вход для эксперимента 5 плана 01-03)
+## Bonus observation (input for experiment 5)
 
-Шаг 2 (без query-string) и шаг 3a (с `?exp=1&sig=abc`) вернули **один и тот же**
-`X-Amz-Request-Id: 18CDA0C18F621F4E` — то есть кэширующий прокси владельца не
-включает query-string в ключ кэша. Для подписанных ссылок это ровно нужное
-поведение: разные подписи одного и того же объекта должны делить одну запись в
-кэше, а не плодить дубликаты по каждой уникальной подписи. Это наблюдение с
-чужого стенда, а не проверенное проектное решение — для собственного edge-nginx
-фазы 1 (D-20, `proxy_cache_key`) поведение нужно подтвердить отдельно в
-эксперименте 5 плана 01-03.
+Step 2 (without a query string) and step 3a (with `?exp=1&sig=abc`) returned
+**the same** `X-Amz-Request-Id: 18CDA0C18F621F4E` — meaning the owner's
+caching proxy does not include the query string in the cache key. For
+signed links this is exactly the behaviour wanted: different signatures for
+the same object should share one cache entry rather than spawning a
+duplicate per unique signature. This is an observation from someone else's
+rig, not a verified decision for this project — for this project's own edge
+nginx (D-20, `proxy_cache_key`) the behaviour needs to be confirmed
+separately, in experiment 5.
 
-## Вердикт: PASS
+## Verdict: PASS
 
-## Отработанные пункты D-33 (заполняется только при FAIL)
+## D-33 checklist items worked through (filled in only on FAIL)
 
-Не применимо — эксперимент прошёл с вердиктом PASS, перебор причин провала не
-требовался.
+Not applicable — the experiment passed with a PASS verdict, no need to work
+through failure causes.

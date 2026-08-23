@@ -1,4 +1,4 @@
-# Эксперимент 3: extensionless + Content-Type (справка, D-06/D-07)
+# Experiment 3: extensionless + Content-Type (reference, D-06/D-07)
 
 **English abstract:** Checked whether an extensionless address serving
 `Content-Type: video/mp4` plays directly in AVPro, as a reference point
@@ -7,27 +7,29 @@ only -- the actual implementation always redirects through a signed
 extensionless address has nowhere to carry the signature without polluting
 the short link. Informational; does not gate anything.
 
-**Результат этого эксперимента справочный и не влияет на реализацию.** Даже если
-файл без расширения с `Content-Type: video/mp4` играет напрямую в AVPro, прямая
-отдача выбрана не будет: подписи (D-01/D-02/D-03) некуда положить, не испачкав
-короткую ссылку. Реализация фазы 1 всегда отдаёт `302` с `/v/{слаг}` на
-`/blob/{edition_id}.mp4` (D-06), вне зависимости от исхода этого эксперимента.
+**This experiment's result is informational and does not affect the
+implementation.** Even if an extensionless file with `Content-Type:
+video/mp4` plays directly in AVPro, direct serving will not be chosen:
+signatures (D-01/D-02/D-03) have nowhere to go without polluting the short
+link. This delivery implementation always returns `302` from `/v/{slug}` to
+`/blob/{edition_id}.mp4` (D-06), regardless of this experiment's outcome.
 
-## Стенд
+## Rig
 
-Тот же стенд, что и в эксперименте 1 (см. `01-avpro-direct-mp4.md`, раздел
-«Отклонение от протокола: стенд») — бакет MinIO владельца за кэширующим
-реверс-прокси (`nginx/1.27.5`), а не голый файл на домене.
+The same rig as experiment 1 (see `01-avpro-direct-mp4.md`, the "Deviation
+from the protocol: the rig" section) — the owner's MinIO bucket behind a
+caching reverse proxy (`nginx/1.27.5`), not a bare file on the domain.
 
-## Протокол
+## Protocol
 
-| Поле | Значение |
+| Field | Value |
 |---|---|
-| Дата | 2026-08-20 (curl-проверка, 21:3x UTC) |
-| Билд VRChat | не применимо к этому шагу — эксперимент не дошёл до плеера (см. «Результат») |
+| Date | 2026-08-20 (curl check, 21:3x UTC) |
+| VRChat build | not applicable to this step — the experiment never reached the player (see "Result") |
 
-Запрошен адрес того же контрольного клипа, но **без расширения** — ключ объекта
-в бакете `movies/control.mp4`, запрошен путь `movies/control` (без `.mp4`).
+The address of the same control clip was requested, but **without an
+extension** — the object's key in the bucket is `movies/control.mp4`, and
+the path requested was `movies/control` (without `.mp4`).
 
 ```
 $ curl -I https://s3.example.com/movies/control
@@ -38,31 +40,34 @@ Server: nginx/1.27.5
 X-Cache: MISS
 ```
 
-## Результат: 404 (не дошло до проверки в AVPro)
+## Result: 404 (never reached an AVPro check)
 
-Наблюдение: сервер вернул `404 Not Found` с XML-телом (`Content-Type: application/xml`) —
-это ответ S3 `NoSuchKey`, а не ответ видео-сервера. Причина ровно техническая, а
-не поведенческая: объект в бакете лежит под ключом `movies/control.mp4`, и по
-пути `movies/control` (без `.mp4`) там **нет объекта вообще**. S3 честно
-отвечает «такого ключа нет».
+Observation: the server returned `404 Not Found` with an XML body
+(`Content-Type: application/xml`) — this is S3's `NoSuchKey` response, not a
+video-server response. The cause is purely technical, not behavioural: the
+object in the bucket sits under the key `movies/control.mp4`, and at the
+path `movies/control` (without `.mp4`) **there is no object at all**. S3 is
+correctly saying "no such key."
 
-Это означает, что эксперимент **не проверил**, тождественно ли себя ведёт AVPro
-с extensionless-адресами — запрос никогда не добрался до видеоданных, поэтому
-дальше проверять было нечего. Результат — не провал эксперимента 3, а
-демонстрация того, что «extensionless» на голом S3-бакете не эквивалентно
-«извлечь расширение и отдать тот же объект» — для этого нужен слой маршрутизации
-(редирект/rewrite), которого на bare-S3-стенде нет.
+This means the experiment **did not check** whether AVPro behaves
+identically with extensionless addresses — the request never reached the
+video data, so there was nothing further to check. The result is not a
+failure of this experiment, it demonstrates that "extensionless" on a bare
+S3 bucket is not equivalent to "strip the extension and serve the same
+object" — that needs a routing layer (redirect/rewrite), which the bare-S3
+rig does not have.
 
-## Вывод
+## Conclusion
 
-Результат справочный и **не относится к реализации фазы 1** (D-06/D-07): в
-проектной архитектуре extensionless-адрес `/v/{слаг}` обслуживает не S3
-напрямую, а **оркестратор**, который резолвит слаг и отвечает `302` на
-`/blob/{edition_id}.mp4` — то есть путь «сырой extensionless-запрос напрямую в
-хранилище» вообще не лежит на боевом пути доставки. 404 голого S3-бакета на
-отсутствующем ключе ничего не говорит ни за, ни против архитектуры D-06 —
-он подтверждает лишь то, что у S3 нет магии автодополнения расширений, что и так
-предполагалось.
+The result is informational and **does not apply to this delivery
+implementation** (D-06/D-07): in the project's architecture, the
+extensionless address `/v/{slug}` is served not by S3 directly but by the
+**orchestrator**, which resolves the slug and returns `302` to
+`/blob/{edition_id}.mp4` — meaning the path "a raw extensionless request
+straight to storage" is not on the production delivery path at all. A bare
+S3 bucket's 404 on a missing key says nothing for or against the D-06
+architecture — it only confirms that S3 has no extension-autocompletion
+magic, which was already assumed.
 
-Эксперимент помечен как **информационный / неприменимый к реализации**, а не
-как проваленный.
+This experiment is marked **informational / not applicable to the
+implementation**, not failed.
