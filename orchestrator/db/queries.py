@@ -693,3 +693,197 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
         WHERE e.poster_key IS NOT NULL AND t.status != 'deleted'
         """
     )
+
+
+# --- Operator credential and session queries (0003_operator_auth.py) ------
+
+
+async def operator_exists(conn: asyncpg.Connection) -> bool:
+    """Whether the credential table already has its one row -- the
+    first-run check that routes every request to the setup page while it
+    is empty."""
+    return await conn.fetchval("SELECT EXISTS (SELECT 1 FROM operator_credential)")
+
+
+async def create_operator(
+    conn: asyncpg.Connection, operator_id, username: str, password_hash: str
+) -> None:
+    """Insert the one operator row. A unique violation propagates rather
+    than being caught here -- the caller decides what to say about it.
+    There are now two constraints that can raise it, the username and the
+    one-row singleton index, and the caller must not try to tell them
+    apart: both mean the same thing to a person, which is that this
+    database already has its operator.
+    """
+    await conn.execute(
+        "INSERT INTO operator_credential (id, username, password_hash) "
+        "VALUES ($1, $2, $3)",
+        operator_id,
+        username,
+        password_hash,
+    )
+
+
+async def credential_by_username(
+    conn: asyncpg.Connection, username: str
+) -> asyncpg.Record | None:
+    """The stored hash and id for a login attempt to verify against."""
+    return await conn.fetchrow(
+        "SELECT id, password_hash FROM operator_credential WHERE username = $1",
+        username,
+    )
+
+
+async def set_password_and_revoke_sessions(
+    conn: asyncpg.Connection, operator_id, password_hash: str
+) -> None:
+    """Change the stored hash and kill every session in one transaction
+    (D-86). A password is changed when someone believes it was taken, so
+    leaving live sessions alive would leave exactly the access the change
+    was meant to remove.
+    """
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE operator_credential "
+            "SET password_hash = $2, password_changed_at = now() "
+            "WHERE id = $1",
+            operator_id,
+            password_hash,
+        )
+        await conn.execute("DELETE FROM sessions WHERE operator_id = $1", operator_id)
+
+
+async def create_session(
+    conn: asyncpg.Connection,
+    token_hash: str,
+    operator_id,
+    lifetime_seconds: int,
+    expected_password_hash: str,
+) -> bool:
+    """Insert a session, but only if `expected_password_hash` still
+    matches the stored hash at the instant of insert -- returns False,
+    inserting nothing, when it does not.
+
+    Not a plain INSERT. A login reads the stored hash, verifies it (which
+    deliberately takes the better part of a second), and only then
+    creates the session. A password reset changes the hash and deletes
+    every session in one transaction. Those two overlap in the obvious
+    way: a login that read the old hash before the reset would insert its
+    session after it, and the reset's delete would have already run. The
+    result would be a live session authenticated by the password that was
+    just revoked, at the one moment the revocation exists for.
+
+    Re-reading the hash without locking does not close it, because the
+    reset may still be uncommitted at that instant. `FOR SHARE` makes the
+    two orders serialize: if the reset holds the row, this statement
+    waits for it, then re-evaluates its condition against the updated
+    row, finds a different hash and inserts nothing; if this statement
+    holds the row first, the reset waits, and its delete then removes the
+    session that was just created. Either way the outcome is the one
+    D-86 asks for.
+
+    The caller treats False exactly like a wrong password -- the same
+    generic message, the same delay -- because from the operator's side
+    it is one: the password they typed is no longer the password.
+    """
+    result = await conn.fetchval(
+        """
+        INSERT INTO sessions (token_hash, operator_id, expires_at)
+        SELECT $1, c.id, now() + make_interval(secs => $3)
+          FROM operator_credential c
+         WHERE c.id = $2 AND c.password_hash = $4
+           FOR SHARE OF c
+        RETURNING token_hash
+        """,
+        token_hash,
+        operator_id,
+        lifetime_seconds,
+        expected_password_hash,
+    )
+    return result is not None
+
+
+async def validate_and_renew_session(
+    conn: asyncpg.Connection,
+    token_hash: str,
+    lifetime_seconds: int,
+    renew_after_seconds: int,
+) -> tuple:
+    """Look up a session and slide its window forward in one statement,
+    returning `(operator_id, renewed)`. `operator_id` is None for an
+    expired or unknown token.
+
+    Validation and renewal are one statement on purpose. A separate
+    SELECT then UPDATE would let a request arrive between them and act on
+    a session that has just expired.
+
+    The renewal is throttled, and `renew_after_seconds` is what throttles
+    it. The window still slides; it is simply not rewritten while the
+    session's remaining life is within that much of the full lifetime.
+    Writing on every request would mean a heap tuple and an index entry
+    per request on a column that carries an index -- multiplied by every
+    poster on a library render and by a four-second poll per preparing
+    row per open tab, the sliding window would become the busiest writer
+    in the system, for a session that is thirty days long. Throttled, it
+    is at most one write a day per session and the operator cannot tell
+    the difference.
+
+    The `renewed` flag is not diagnostics. The cookie carries its own
+    Max-Age, and the browser drops it that far after the cookie was
+    issued no matter how much the row was renewed -- so a window that
+    slid only in the database would still expire in the browser thirty
+    days after the login. The gate re-issues the cookie exactly when this
+    flag comes back true, which is the natural trigger the throttle
+    creates. Without both halves the sliding window is a promise that
+    only the database keeps.
+
+    Note for tests: inside a transaction now() is the transaction's start
+    time, so a test that opens a transaction, makes two requests and
+    expects the second to differ from the first cannot pass however
+    correct this query is.
+    """
+    row = await conn.fetchrow(
+        """
+        WITH renewed AS (
+             UPDATE sessions
+                SET expires_at = now() + make_interval(secs => $2)
+              WHERE token_hash = $1
+                AND expires_at > now()
+                AND expires_at < now() + make_interval(secs => $2) - make_interval(secs => $3)
+            RETURNING operator_id
+        )
+        SELECT s.operator_id, EXISTS (SELECT 1 FROM renewed) AS renewed
+          FROM sessions s
+         WHERE s.token_hash = $1 AND s.expires_at > now()
+        """,
+        token_hash,
+        lifetime_seconds,
+        renew_after_seconds,
+    )
+    if row is None:
+        return None, False
+    return row["operator_id"], row["renewed"]
+
+
+async def delete_session(conn: asyncpg.Connection, token_hash: str) -> None:
+    """Sign out one device (D-82) -- other sessions are untouched."""
+    await conn.execute("DELETE FROM sessions WHERE token_hash = $1", token_hash)
+
+
+async def delete_sessions_for_operator(conn: asyncpg.Connection, operator_id) -> None:
+    """Every session for this operator, gone -- the bulk half of D-86's
+    password-reset revocation, called directly by tests and by the CLI
+    reset path.
+    """
+    await conn.execute("DELETE FROM sessions WHERE operator_id = $1", operator_id)
+
+
+async def sweep_expired_sessions(conn: asyncpg.Connection) -> int:
+    """Delete every session whose window has actually closed, returning
+    how many rows were removed so the reaper can log something meaningful
+    when it is not zero.
+    """
+    result = await conn.execute("DELETE FROM sessions WHERE expires_at < now()")
+    # asyncpg's command tag looks like "DELETE 3" -- the row count is
+    # everything after the last space.
+    return int(result.split()[-1])

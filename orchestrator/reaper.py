@@ -1,8 +1,12 @@
-"""Background reaper for delayed title deletion (D-13).
+"""Background reaper for delayed title deletion (D-13) and expired session
+cleanup (D-80).
 
 Runs inside the same FastAPI process as everything else -- a title crossing
 its `delete_at` needs no dedicated compose service, the orchestrator is
-already running continuously.
+already running continuously. The session sweep extends this same loop
+rather than starting a second background task (D-80): a session table with
+no janitor would grow forever, and the loop that already runs every thirty
+seconds is where `sessions_expires_at_idx` gets used.
 
 Every object delete goes through `asyncio.to_thread`: this loop shares its
 event loop with every HTTP request in the process, and `purge_route` awaits
@@ -12,6 +16,10 @@ for as long as storage takes to answer.
 Never touches the slug history table: a deleted title's slug stays a
 tombstone and keeps answering 410 forever (D-10) -- a dead link is honest,
 a link that quietly starts playing something else is not.
+
+The two sweeps run inside their own `try/except` in `run_reaper`'s loop
+body, each isolated from the other: a failure in the session sweep must
+never stop the title reaper's cycle, and the reverse.
 """
 import asyncio
 import logging
@@ -58,10 +66,21 @@ async def reap_once(pool: asyncpg.Pool) -> None:
             await queries.finish_delete(conn, title_id)
 
 
+async def sweep_sessions_once(pool: asyncpg.Pool) -> None:
+    async with pool.acquire() as conn:
+        removed = await queries.sweep_expired_sessions(conn)
+        if removed:
+            logger.info("reaper: swept %d expired session(s)", removed)
+
+
 async def run_reaper(pool: asyncpg.Pool) -> None:
     while True:
         try:
             await reap_once(pool)
         except Exception:
-            logger.exception("reaper: cycle failed")
+            logger.exception("reaper: title-deletion cycle failed")
+        try:
+            await sweep_sessions_once(pool)
+        except Exception:
+            logger.exception("reaper: session-sweep cycle failed")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
