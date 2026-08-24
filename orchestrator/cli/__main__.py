@@ -10,12 +10,14 @@ row (ADDR-05) -- skip this and the first links are the ones a hand-rolled
 INSERT would get wrong.
 """
 import asyncio
+import logging
 import uuid
 from pathlib import Path
 
 import asyncpg
 import typer
 
+from orchestrator.cli.auth import _audit, _create_operator, _reset_password
 from orchestrator.cli.cache_report import cache_report as _cache_report
 from orchestrator.cli.cache_warm import DEFAULT_BASE_URL, cache_warm as _cache_warm
 from orchestrator.cli.storage_audit import run_storage_audit as _storage_audit
@@ -114,6 +116,8 @@ async def _add(file: Path, name: str, explicit_slug: str | None, reuse: bool) ->
                 conn, name, slug_plan.chosen, edition_id, object_key
             )
 
+        _audit("add", f"created title {name!r} at slug {slug_plan.chosen!r}")
+
         if slug_plan.is_tombstone:
             # --reuse-slug: use the exact requested slug, no suffixing --
             # the whole point is to get this specific address back (D-10).
@@ -164,6 +168,8 @@ async def _rename(old_slug: str, new_name: str) -> None:
                 typer.echo(str(exc), err=True)
                 raise typer.Exit(1)
 
+        _audit("rename", f"renamed {old_slug!r} to {chosen!r}")
+
         if similar:
             typer.echo(f"Предупреждение: похожий слаг уже занят: {', '.join(similar)}")
 
@@ -188,6 +194,7 @@ async def _remove(slug: str) -> None:
             raise typer.Exit(1)
 
         await queries.mark_for_delete(conn, row["title_id"], settings.delete_grace_seconds)
+        _audit("remove", f"marked {slug!r} for delete")
 
         # The grace window is now reachable from both ends through the web
         # interface's library screen: undo restores the title, and delete
@@ -245,5 +252,31 @@ def storage_audit_command() -> None:
     raise typer.Exit(_storage_audit())
 
 
+@app.command("create-operator")
+def create_operator_command(
+    username: str = typer.Option(..., "--username", help="Username for the new operator"),
+) -> None:
+    """Create the one operator account this interface will accept."""
+    # Prompted, never a command-line argument and never an environment
+    # variable: an argument lands in shell history and in the process
+    # list of every other container on the machine.
+    password = typer.prompt("Password", hide_input=True, confirmation_prompt=True)
+    asyncio.run(_create_operator(username, password))
+
+
+@app.command("reset-password")
+def reset_password_command(
+    username: str = typer.Option(
+        None, "--username", help="Operator to reset; defaults to the single existing one"
+    ),
+) -> None:
+    """Change the operator's password and sign every device out."""
+    password = typer.prompt("New password", hide_input=True, confirmation_prompt=True)
+    asyncio.run(_reset_password(username, password))
+
+
 if __name__ == "__main__":
+    # Nothing configured logging for this process before now -- an INFO
+    # line from _audit would go nowhere without this.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     app()

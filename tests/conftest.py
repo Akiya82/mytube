@@ -284,3 +284,35 @@ async def auth_tables(raw_conn):
     await raw_conn.execute("TRUNCATE sessions, operator_credential CASCADE")
     yield
     await raw_conn.execute("TRUNCATE sessions, operator_credential CASCADE")
+
+
+@pytest.fixture(autouse=True)
+async def _cli_auth_operator_singleton_reset(request):
+    """`tests/test_cli_auth.py` exercises the same true-singleton
+    `operator_credential` table `auth_tables` above exists for (see
+    migration 0003's `operator_credential_singleton` index -- one row,
+    full stop, whatever the username is), through `raw_conn`, a real,
+    non-rolled-back connection, but names a distinct username per test
+    rather than requesting `auth_tables` itself. Without a reset, the row
+    one test commits is a precondition the next test does not expect, and
+    the singleton constraint refuses it -- CLI commands under test
+    included, since `_create_operator` asks the same table.
+
+    Scoped to that one module by checking `request.module` before
+    touching any database fixture, rather than made unconditionally
+    autouse -- otherwise every test in this session, including the ones
+    with no interest in Postgres at all, would pay for spinning up the
+    testcontainers instance this whole suite shares.
+    """
+    if not request.module.__name__.endswith("test_cli_auth"):
+        yield
+        return
+
+    migrated_db_url = request.getfixturevalue("migrated_db_url")
+    conn = await asyncpg.connect(migrated_db_url)
+    try:
+        await conn.execute("TRUNCATE sessions, operator_credential CASCADE")
+        yield
+        await conn.execute("TRUNCATE sessions, operator_credential CASCADE")
+    finally:
+        await conn.close()

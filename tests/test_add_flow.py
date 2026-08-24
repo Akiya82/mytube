@@ -142,8 +142,20 @@ async def client(env, storage_spy, signed_in):
     real startup sweep) against an in-memory ASGI transport -- the only
     way to exercise D-49's "the row is written, the response returns, and
     a background task does the rest" shape for real.
+
+    Because the lifespan runs for real here, it also queries the real
+    (shared, session-scoped) `operator_credential` table for real -- and
+    this file never creates a row in it, so without the override below
+    the gate's own first-run branch would redirect every request in this
+    whole suite to `/setup`, `signed_in`'s stubbed session notwithstanding
+    (that stub only replaces `session_operator_id`, which the first-run
+    check runs ahead of). These are the add flow's own tests, not the
+    first-run gate's, so this treats "an operator exists" as already
+    established the same way `signed_in` already treats "a session
+    exists" as already established.
     """
     async with app.router.lifespan_context(app):
+        app.state.operator_exists = True
         transport = ASGITransport(app=app)
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
