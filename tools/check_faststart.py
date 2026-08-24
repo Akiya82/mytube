@@ -1,31 +1,32 @@
 #!/usr/bin/env python3
-"""Машинная проверка faststart: moov обязан идти раньше mdat в MP4.
+"""Machine check for faststart: moov must come before mdat in an MP4.
 
-Без +faststart moov лежит в конце файла, и плеер выкачивает весь файл до
-первого кадра.
+Without +faststart, moov sits at the end of the file, and a player
+downloads the whole file before it can show the first frame.
 
-Тонкая обёртка: сама логика (`orchestrator.media.compat.moov_before_mdat`)
-теперь живёт там, потому что она нужна и внутри работающего контейнера
-(D-44 — решение "уже готов, ffmpeg не запускаем" принимается на рантайме),
-а не только здесь, при разработке. Два места, одна логика — дублировать её
-было бы граблей.
+Thin wrapper: the actual logic (`orchestrator.media.compat.moov_before_mdat`)
+lives there instead, because it is also needed inside the running container
+(the "already good, skip ffmpeg" decision is made at runtime), not only
+here, during development. Two call sites, one piece of logic -- duplicating
+it would be a trap waiting to spring.
 
-Этот скрипт при этом обязан продолжать работать под python хоста, где нет
-виртуального окружения проекта и `orchestrator` не установлен как пакет --
-`tools/make_control_clip.sh` и `tools/make_error_clips.sh` вызывают его
-именно так. Поэтому перед импортом корень репозитория подставляется в
-sys.path вручную, а `orchestrator.media.compat` намеренно не тянет ничего
-стороннего на уровне модуля (см. её докстринг).
+This script still has to run under the host's own python, which has no
+project virtual environment and no `orchestrator` package installed --
+`tools/make_control_clip.sh` and `tools/make_error_clips.sh` call it exactly
+that way. So the repository root is added to sys.path by hand before the
+import, and `orchestrator.media.compat` deliberately pulls in nothing
+third-party at module level (see its own docstring).
 
 Usage: check_faststart.py <mp4_path>
-Exit code: 0 если moov раньше mdat, 1 иначе (или при ошибке чтения).
+Exit code: 0 if moov comes before mdat, 1 otherwise (or on a read error).
 """
 import sys
 from pathlib import Path
 
-# Хостовый python не видит пакет orchestrator (он ставится editable только
-# внутри venv/образа) -- подставляем корень репозитория в sys.path перед
-# импортом, а не полагаемся на PYTHONPATH или установку пакета.
+# The host's python cannot see the orchestrator package (it is installed
+# editable only inside the venv/image) -- add the repository root to
+# sys.path before the import instead of relying on PYTHONPATH or a real
+# package install.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from orchestrator.media.compat import moov_before_mdat  # noqa: E402
@@ -40,19 +41,20 @@ def main():
     try:
         ok = moov_before_mdat(path)
     except OSError as exc:
-        print(f"ERROR: не удалось прочитать '{path}': {exc}", file=sys.stderr)
+        print(f"ERROR: could not read '{path}': {exc}", file=sys.stderr)
         return 1
 
     if not ok:
         print(
-            "ERROR: moov не идёт раньше mdat (или один из них отсутствует в "
-            "top-level атомах) — файл не faststart. Плеер выкачает весь файл "
-            "до первого кадра. Пересоберите с -movflags +faststart.",
+            "ERROR: moov does not come before mdat (or one of them is "
+            "missing from the top-level atoms) -- the file is not "
+            "faststart. A player will download the whole file before the "
+            "first frame. Re-encode with -movflags +faststart.",
             file=sys.stderr,
         )
         return 1
 
-    print("OK: moov раньше mdat (faststart подтверждён)")
+    print("OK: moov comes before mdat (faststart confirmed)")
     return 0
 
 
