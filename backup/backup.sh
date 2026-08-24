@@ -30,7 +30,22 @@ dump_once() {
   # and restoring over an existing one fails on the first CREATE TABLE — which is
   # the case that actually matters, since you restore when the data is there and
   # wrong, not when it is absent.
-  if pg_dump --clean --if-exists "$MYTUBE_DATABASE_URL" | gzip > "${out}.tmp"; then
+  #
+  # The flag below drops only the *rows* of the session table, not the table
+  # itself: a session is a login, and restoring last week's dump should not
+  # resurrect logins that should have died days ago. The table's own
+  # definition stays in the dump, which is what keeps the restore's drop
+  # order coherent -- a live database already has a sessions row referencing
+  # operator_credential by foreign key (migrations run on every container
+  # start), and the table-omitting form of this flag would drop both the
+  # CREATE and the DROP TABLE IF EXISTS for it, leaving that foreign key
+  # standing when the dump reaches DROP TABLE IF EXISTS
+  # public.operator_credential and aborting the whole restore under
+  # --clean --if-exists's own ON_ERROR_STOP requirement. The credential row
+  # itself is deliberately not excluded: a real-cost password hash is
+  # exactly what a backup is for, and a restore that left nobody able to
+  # sign in would be the worse outcome.
+  if pg_dump --clean --if-exists --exclude-table-data=public.sessions "$MYTUBE_DATABASE_URL" | gzip > "${out}.tmp"; then
     mv "${out}.tmp" "$out"
     echo "backup: ok -- $out ($(wc -c < "$out") bytes)"
   else

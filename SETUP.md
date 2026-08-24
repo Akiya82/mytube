@@ -11,6 +11,15 @@ Every command below was either actually run while writing this document,
 against a live stack (`docker compose ps` — every service healthy), or is
 explicitly marked as not run.
 
+## Quick index
+
+- [Interface](#interface) — how to reach it, first run, changing the password
+- [What to expose to the reverse proxy](#what-to-expose-to-the-reverse-proxy) — a worked config block
+- [Upgrading](#upgrading) — pulling a change into a running deployment
+- [Rolling back](#rolling-back) — reverting one
+- [Backup and restore](#backup-and-restore) — what the dump now contains
+- [When something is wrong](#when-something-is-wrong) — symptom-first troubleshooting
+
 ## What this is, and what it does not do
 
 Self-hosted progressive-MP4 delivery for a synchronous group of 7–15 friends
@@ -55,9 +64,8 @@ marked "must be generated".
 | `MYTUBE_BACKUP_KEEP_DAYS` | How many days to keep dumps before deleting them | `7` | Optional |
 | `MYTUBE_WARM_BYTES` | Cache warm-up limit in bytes | `268435456` (half of the 512m zone) | Optional |
 | `MYTUBE_PUBLIC_BASE_URL` | The address viewers reach, scheme included, no trailing slash | — | **Required — the service refuses to start without it.** Written into every copied link, so it is never derived from a browser's own address bar |
+| `MYTUBE_ADMIN_FQDN` | The bare hostname the operator interface answers on — no scheme, no trailing slash. Must differ from `MYTUBE_PUBLIC_BASE_URL`'s own host | — | **Required — the interface container refuses to start without it.** `docker compose logs api` names `admin_fqdn` in a validation error: `Field required` if the line is missing from `.env` entirely, `must not be empty` if it is present but blank |
 | `MYTUBE_SHARE_HOST_PATH` | Host path of the mounted network share, bind-mounted read-only into `api` at `/share` | `./ingest` | Optional |
-| `MYTUBE_UI_PORT` | Host port the interface is published on | `8081` | Optional |
-| `MYTUBE_UI_BIND` | Host address the interface port binds to | `127.0.0.1` | Optional, but see "Interface" below before changing it |
 | `MYTUBE_STORAGE_QUOTA_BYTES` | Configured storage quota in bytes, `0` means no quota enforced — used only for the interface's usage figure | `0` | Optional |
 
 **About `MYTUBE_S3_UPSTREAM` specifically.** `api` reaches storage through
@@ -113,24 +121,58 @@ never touched by any code path.
 
 ## Interface
 
-The web interface is published on its own host port
-(`MYTUBE_UI_PORT`, default `8081`), separate from the edge port that serves
-video. It is bound to `127.0.0.1` (loopback) by default — reachable only
-from the machine running the stack, not from the LAN.
+The interface answers on its own hostname (`MYTUBE_ADMIN_FQDN`), through the
+same edge port that already serves video. It publishes no host port of its
+own — the edge is the only door in, for both surfaces.
 
-**The public reverse proxy must never forward this port.** It points at the
-edge port only (see "What to expose to the reverse proxy" below); the
-interface is not meant to be reachable from outside the owner's own network
-at all.
+That hostname needs its own DNS record and its own certificate on the
+reverse proxy the owner already runs; TLS terminates there and never inside
+this stack (see "What to expose to the reverse proxy" below for a worked
+example). The two hostnames — the delivery one in `MYTUBE_PUBLIC_BASE_URL`
+and this one — must be different names. The separation between what a
+viewer gets and what an operator gets is the difference between the two
+names, and nothing else.
 
-**Widening `MYTUBE_UI_BIND` to a LAN address is a deliberate, informed act,
-not a convenience toggle.** Every route on the interface port is
-unauthenticated, including the one that deletes a video immediately —
-anyone on that network, any browser open to any page, can reach every one
-of those routes. The loopback default is the only thing standing between
-those routes and the network; widening it hands that boundary away
-knowingly. The service logs the same warning at startup whenever the bind
-address is not loopback.
+The session cookie is marked `Secure`, which means the interface needs TLS
+on any address that is not loopback. That is deliberate, and a LAN address
+is not offered as an alternative: there is no host port left to reach one
+on, and this document does not describe a route the project does not
+support.
+
+**First run.** Bring the stack up, then read the container log:
+
+```bash
+docker compose logs api
+```
+
+It prints exactly one line carrying a complete, clickable address, shaped
+like `https://<admin-hostname>/setup?token=<random>` — the one-time setup
+link. Open it once; choosing a username and a password finishes setup and
+signs the operator in immediately. The link works once, a restart mints a
+new one, and nobody who cannot read the container log can reach that page.
+
+Signing out ends that browser's session on the server; other devices stay
+signed in.
+
+**To change the password**, run this inside the container. It takes effect
+immediately with no restart, and it signs every device out — which is the
+point of it:
+
+```bash
+docker compose exec api python -m orchestrator.cli reset-password
+```
+
+It prompts for the new password twice, prints the username it reset, and
+says that every signed-in device was signed out.
+
+**If the account is gone, or the setup link expired and was never used**,
+this is the way back in:
+
+```bash
+docker compose exec api python -m orchestrator.cli create-operator --username <name>
+```
+
+It refuses if an operator already exists.
 
 ## Storage capacity
 
@@ -228,8 +270,8 @@ confirms each one still resolves to a real, `linux/amd64`-capable manifest
 ```bash
 cp .env.example .env
 # fill in .env -- at minimum MYTUBE_SECURE_LINK_SECRET, MYTUBE_S3_KEY,
-# MYTUBE_S3_SECRET, POSTGRES_PASSWORD, MYTUBE_PUBLIC_BASE_URL
-# (see the variable table above)
+# MYTUBE_S3_SECRET, POSTGRES_PASSWORD, MYTUBE_PUBLIC_BASE_URL,
+# MYTUBE_ADMIN_FQDN (see the variable table above)
 
 docker compose up -d --wait
 ```
@@ -263,6 +305,9 @@ docker compose exec api python -m orchestrator.cli add \
 ```
 
 The command prints an address of the form `/v/<slug>`.
+
+**First run on the interface** is described once, under [Interface](#interface)
+above — read it there before opening the admin hostname for the first time.
 
 ## Windows / WSL2 deployment notes
 
@@ -355,13 +400,65 @@ load, ask about their VPN client's mode before debugging the server.
 
 ## What to expose to the reverse proxy
 
-Through the owner's own external reverse proxy, **exactly four** paths are
-exposed: `/v/`, `/p/`, `/blob/` and `/refresh/`. Everything else — any
-admin surface, the storage console, `/healthz`, and the web interface
-described above — stays inside the LAN. There is deliberately no separate
-access path from inside the LAN that bypasses the external channel: one
-address and one code path for everyone, including the owner — so the owner
-sees a break first, through the same eyes as everyone else.
+Through the owner's own external reverse proxy, **two hostnames** forward to
+the **one** edge port (`MYTUBE_EDGE_PORT`): the delivery hostname
+(`MYTUBE_PUBLIC_BASE_URL`'s own host) and the interface hostname
+(`MYTUBE_ADMIN_FQDN`). The storage console and `/healthz` are never exposed
+to either — they are not proxied by edge at all. There is deliberately no
+separate access path from inside the LAN that bypasses the external
+channel: one address and one code path for everyone, including the owner —
+so the owner sees a break first, through the same eyes as everyone else.
+
+**A worked example, in nginx** (the edge in this repository is nginx, so
+this is not a second syntax to learn). It is an example, not a supported
+product — run something else if you prefer, but carry these properties
+across whatever you use:
+
+```nginx
+# Delivery hostname -- video addresses, VRChat and browsers alike.
+server {
+    listen 443 ssl;
+    server_name mytube.example.com;   # MYTUBE_PUBLIC_BASE_URL's own host
+
+    ssl_certificate     /etc/letsencrypt/live/mytube.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mytube.example.com/privkey.pem;
+
+    location / {
+        # Load-bearing, not decorative. The ordinary default form of a
+        # reverse proxy leaves Host at whatever proxy_pass's own upstream
+        # name is, which matches neither of edge's own server_name
+        # directives -- the request then falls into edge's delivery block
+        # (the first one in its file, and the implicit default for any
+        # unmatched Host), and the operator's panel answers with a video
+        # download and no explanation.
+        proxy_set_header Host $host;
+
+        # Delivery is progressive video served in byte ranges. A buffering
+        # proxy, or one that strips the Range header, turns every seek into
+        # a full re-download.
+        proxy_buffering off;
+        proxy_http_version 1.1;
+
+        proxy_pass http://127.0.0.1:8080;   # MYTUBE_EDGE_PORT
+    }
+}
+
+# Interface hostname -- must be a different name than the one above.
+server {
+    listen 443 ssl;
+    server_name admin.mytube.example.com;   # MYTUBE_ADMIN_FQDN
+
+    ssl_certificate     /etc/letsencrypt/live/admin.mytube.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/admin.mytube.example.com/privkey.pem;
+
+    location / {
+        proxy_set_header Host $host;   # same reason as above
+        proxy_buffering off;
+        proxy_http_version 1.1;
+        proxy_pass http://127.0.0.1:8080;   # MYTUBE_EDGE_PORT
+    }
+}
+```
 
 **Required check: the external proxy must not buffer the response, and
 must pass `Range` through untouched.** This is the classic pitfall of two
@@ -378,6 +475,69 @@ Expect a `206` status and a `Content-Range` header shaped like
 `bytes 0-1048575/<full size>`. A `200` with the whole file means the
 external proxy is buffering — fix that on its side, not in this compose
 project.
+
+## Upgrading
+
+`docker compose up -d --wait` — the only bring-up command elsewhere in this
+document — **builds an image only when one is absent.** An existing
+deployment that pulls a change and runs that command as-is gets the new
+edge template and the new compose file running against the **old**
+application image: no gate, no login screen, no first run. If the interface
+hostname is already published by then, the whole operator surface is on the
+public internet with nothing in front of it, and `--wait` reports every
+service healthy — the old image is perfectly healthy, it just predates the
+gate.
+
+1. Pull the change.
+2. Add `MYTUBE_ADMIN_FQDN` to `.env` if it is not already there. The
+   interface refuses to start without it and names it in its own log; every
+   other compose subcommand keeps working while you fix it.
+3. **Rebuild and bring up in one command:**
+   ```bash
+   docker compose up -d --build --wait
+   ```
+   `--build` is not optional here — the application is baked into its
+   image, and the plain form reuses whatever image is already there.
+4. **Check the interface is closed before it is reachable**, from the
+   machine itself, with a forged host header:
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' -H "Host: $MYTUBE_ADMIN_FQDN" http://127.0.0.1:${MYTUBE_EDGE_PORT}/library
+   ```
+   must print `302`. If it prints `200`, the old image is still running —
+   stop, and go back to step 3.
+5. Only then create the DNS record and the reverse-proxy vhost.
+6. Read `docker compose logs api` for the setup link and finish first run
+   (see [Interface](#interface) above).
+
+Step 4 before step 5 is the whole point: a reader who publishes first and
+checks later has no way to know how long the panel was open.
+
+## Rolling back
+
+Reverting the application while the reverse-proxy vhost keeps forwarding the
+interface hostname is not a rollback — it is the same exposure, arrived at
+from the other direction, and it would happen at speed, under stress, by
+somebody who has just decided something is wrong. There is also a database
+step with no obvious symptom until it kills the container.
+
+1. **Remove the interface vhost from the reverse proxy first.** Not the DNS
+   record — DNS is cached and slow, the vhost is immediate. The interface
+   stops being reachable from outside at this moment, and everything after
+   it happens on a surface nobody outside can see.
+2. **Downgrade the schema before switching the image back:**
+   ```bash
+   docker compose exec api alembic downgrade -1
+   ```
+   This phase's schema revision is unknown to an older version's migration
+   history, so an older container's start-up migration cannot proceed past
+   it and the container would die on a message naming a revision it cannot
+   find.
+3. Check out the previous revision and run `docker compose up -d --build --wait`.
+4. Confirm delivery — which is what the rollback was for.
+
+The interface is unreachable between steps 1 and 4, and that is deliberate:
+it is the only ordering with no window in which a published hostname fronts
+an application with no gate.
 
 ## Verifying served video is actually decodable
 
@@ -462,6 +622,10 @@ once a day into a compressed, date-named file, drops it into
 `./data/backups` on the host (the same `/data/` tree already in
 `.gitignore`), and deletes dumps older than `MYTUBE_BACKUP_KEEP_DAYS` days.
 
+**The dump directory now contains the operator's password hash** and
+deserves the same care as any other secret on the machine — treat
+`./data/backups` accordingly, including on any machine it is copied to.
+
 A one-off manual run (for example, right before a risky operation):
 
 ```bash
@@ -491,6 +655,23 @@ echo "exit code: $?"   # 0 -- restored; anything else -- NOT restored
 docker compose up -d --wait
 ```
 
+**What a restore produces:** the operator account survives, every session
+does not — the dump keeps the session table's definition but excludes its
+rows, so nobody stays signed in on a restored stack and everyone signs in
+again afterwards, including on the device that took the dump.
+
+**Restoring a dump taken before the interface had a login** is both likely
+and, without this note, would look broken in a confusing way. Such a dump
+carries no `operator_credential` table and no `sessions` table, so it emits
+no drop for either — but it does restore the recorded schema version to
+what it was when the dump was taken. The stack then comes back up with both
+tables already standing (this phase's migration created them earlier) and a
+schema version that predates them; the migration is written to tolerate
+that, which is what keeps the container alive. What the operator sees next
+is an interface with no account. Restart the `api` container, read
+`docker compose logs api` for a fresh setup link, and choose a password
+again, the same as any other first run.
+
 The dump is taken with `pg_dump --clean --if-exists`, so it is
 self-contained: it applies cleanly to an empty database and over an
 existing one alike. That matters because a restore is normally needed when
@@ -504,6 +685,37 @@ is ever needed for real.
 **Under Git Bash on Windows**, commands with a path inside the container
 need the `MSYS_NO_PATHCONV=1` prefix, or `/backup/backup.sh` turns into
 `C:/Program Files/Git/backup/backup.sh`.
+
+## When something is wrong
+
+Every symptom below is new as of the interface gaining its own hostname and
+login; none of them is self-explanatory from the error alone.
+
+- **The panel hands you a video download instead of a page** — the reverse
+  proxy is not preserving the original host. See the worked example under
+  [What to expose to the reverse proxy](#what-to-expose-to-the-reverse-proxy).
+- **The interface container will not start and the log names a variable** —
+  `MYTUBE_ADMIN_FQDN` is missing from `.env`.
+- **The interface container will not start and the log says the two
+  hostnames are the same** — `MYTUBE_ADMIN_FQDN` and `MYTUBE_PUBLIC_BASE_URL`
+  must be different names, or nginx routes every request for that name into
+  whichever server block wins the exact match, breaking the other silently.
+- **Every address answers with a short clip instead of a page** — the
+  interface hostname is reaching the delivery block; either it is not in
+  `.env` or it does not match the reverse-proxy vhost.
+- **The browser will not keep you signed in** — the session cookie is
+  marked `Secure`, so the address needs TLS.
+- **The setup link says it is no longer valid** — the container restarted
+  and a new one was printed; read `docker compose logs api` again.
+- **You are locked out entirely** — see the two credential commands under
+  [Interface](#interface): `reset-password` if the account still exists,
+  `create-operator` if it does not.
+- **Too many attempts, and requests start being refused** — the edge bounds
+  the rate on the login and setup routes; wait a minute.
+
+**A better first move than working through the list above:**
+`bash tools/smoke_auth.sh` walks the whole authentication path against a
+running stack and prints a pass or fail line per step.
 
 ## Cache modes
 
