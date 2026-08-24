@@ -28,6 +28,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
+from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media.add import SlugPlan, plan_slug, required_free_bytes
@@ -249,9 +250,10 @@ async def share_listing_route(request: Request, path: str = ""):
 
 @router.get("/lang/{code}")
 async def set_lang_route(code: str, request: Request):
-    next_url = request.query_params.get("next", "/")
-    if not next_url.startswith("/") or next_url.startswith("//"):
-        next_url = "/"
+    # The same off-site-redirect hole used to be guarded by its own
+    # three-line check here; auth.safe_next is the one shared function now
+    # (see auth.py's own docstring for the slash-backslash case this adds).
+    next_url = auth.safe_next(request.query_params.get("next", "/"), fallback="/")
 
     response = RedirectResponse(next_url, status_code=302)
     if code in LOCALES:

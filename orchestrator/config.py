@@ -3,8 +3,9 @@
 See src/.env.example for every field this class expects.
 """
 from functools import lru_cache
+from urllib.parse import urlsplit
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +28,12 @@ class Settings(BaseSettings):
     # already refuses without secure_link_secret, because a bare hostname
     # here produces a copied link that silently does not work in a player.
     public_base_url: str
+    # D-77: the hostname the interface answers on. Required, no default --
+    # redirects and the session cookie are built against a name the
+    # application knows rather than one a caller supplies, and the service
+    # refuses to start without it for the same reason it already refuses
+    # without a public base address.
+    admin_fqdn: str
     # D-54: the read-only bind mount of the one CIFS/NFS share this phase browses.
     share_root: str = "/share"
     # D-52/D-53: ephemeral ffmpeg scratch space -- a plain container-layer
@@ -48,6 +55,50 @@ class Settings(BaseSettings):
                 "that silently does not work in a player."
             )
         return value.rstrip("/")
+
+    @field_validator("admin_fqdn")
+    @classmethod
+    def _validate_admin_fqdn(cls, value: str) -> str:
+        value = value.strip().rstrip(".").lower()
+        if not value:
+            raise ValueError("MYTUBE_ADMIN_FQDN must not be empty.")
+        if "://" in value or "/" in value:
+            raise ValueError(
+                f"MYTUBE_ADMIN_FQDN must be a bare hostname, not a URL "
+                f"(got {value!r}) -- a scheme or path here means somebody "
+                "pasted a URL where a hostname belongs."
+            )
+        if ":" in value:
+            raise ValueError(
+                f"MYTUBE_ADMIN_FQDN must not carry a port (got {value!r}) -- "
+                "the port is stripped from the incoming X-Forwarded-Host "
+                "header before comparison, so carrying one here would only "
+                "ever produce a mismatch."
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _admin_fqdn_must_differ_from_public_base_url(self) -> "Settings":
+        # D-77's fourth case: the two hostnames must not be the same name.
+        # nginx picks a server block by matching server_name exactly before
+        # it falls back to the catch-all, regardless of the order the
+        # blocks appear in the file. Two blocks claiming one name means the
+        # exact match wins for every request on that name -- including
+        # /blob/, which the interface block does not serve at all. Every
+        # viewer in VRChat would then receive a redirect to a login form
+        # their player cannot render, produced by a typo in an environment
+        # file. Refusing to start with a self-defeating value costs one
+        # comparison and turns a silent outage into a startup message.
+        public_host = (urlsplit(self.public_base_url).hostname or "").lower()
+        if self.admin_fqdn == public_host:
+            raise ValueError(
+                f"MYTUBE_ADMIN_FQDN ({self.admin_fqdn!r}) must not equal the "
+                f"host of MYTUBE_PUBLIC_BASE_URL ({self.public_base_url!r}) "
+                "-- the two must be different names, or nginx will route "
+                "every request for that name into whichever server block "
+                "wins the exact match, breaking the other one silently."
+            )
+        return self
 
 
 @lru_cache
