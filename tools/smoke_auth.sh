@@ -50,8 +50,17 @@ ORIGIN="-H Origin:https://${MYTUBE_ADMIN_FQDN}"
 
 SMOKE_DIR="$SRC_ROOT/build/smoke"
 mkdir -p "$SMOKE_DIR"
-COOKIE_JAR="$SMOKE_DIR/auth_cookies.txt"
-rm -f "$COOKIE_JAR"
+# No cookie-jar file: the session cookie carries Secure, and curl's cookie
+# engine -- correctly, the same rule a browser applies -- refuses to store
+# or resend a Secure cookie received over a plain http:// connection, which
+# is exactly what EDGE_URL is (TLS is terminated by the operator's own
+# reverse proxy in front of this stack, never by edge itself). Against a
+# jar, every later step silently carried no cookie at all rather than the
+# one just issued. Each step below extracts the raw cookie value out of the
+# response headers instead and passes it explicitly with -b "name=value",
+# which bypasses curl's Secure-attribute storage rule entirely because that
+# form is a literal Cookie header, not a jar lookup.
+extract_cookie() { grep -i '^set-cookie:' | sed -E 's/^[Ss]et-[Cc]ookie: *([^;]+);.*/\1/' | tr -d '\r'; }
 
 RUN_USERNAME="smoke-op-$(date +%s)"
 RUN_PASSWORD="smoke-password-$(date +%s)-not-a-real-secret"
@@ -82,57 +91,89 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 3: unauthenticated GET /library redirects to the login form.
+# Step 3: create (or reset, if one already exists) the operator credential.
+#
+# This has to happen before the gate checks below it. It originally ran
+# later (after the unauthenticated-redirect and login-form checks), on the
+# unstated assumption that an operator would already exist by the time this
+# script runs against a real stack. Once the empty-table first-run redirect
+# existed, that assumption stopped holding: against a genuinely fresh
+# database, every one of those checks landed on the create-password page
+# instead, because the application was correctly refusing to show a login
+# form nobody could pass yet. That is not a defect in the gate; it is this
+# script asserting the wrong page for a state it never accounted for. Moving
+# the credential's own creation first tests the fresh-database path
+# explicitly (the create branch below, not just the always-passing reset
+# branch) and lets every later step assert against the steady state the
+# rest of this file is actually about.
 # ---------------------------------------------------------------------------
-info "step 3: unauthenticated /library -> 302 /login?next=%2Flibrary"
-HDRS3=$(curl -s -o /dev/null -D - $ADMIN "${EDGE_URL}/library" 2>&1)
-CODE3=$(echo "$HDRS3" | head -1 | awk '{print $2}')
-LOCATION3=$(echo "$HDRS3" | grep -i '^location:' | tr -d '\r' | awk '{print $2}')
-if [ "$CODE3" = "302" ] && [ "$LOCATION3" = "/login?next=%2Flibrary" ]; then
-  pass "step 3: 302 -> $LOCATION3"
+info "step 3: create-operator (or reset-password if one already exists)"
+CREATE_OUT=$(api_exec sh -c "echo '${RUN_PASSWORD}
+${RUN_PASSWORD}' | python -m orchestrator.cli create-operator --username '${RUN_USERNAME}'" 2>&1)
+CREATE_EXIT=$?
+if [ "$CREATE_EXIT" -eq 0 ]; then
+  LOGIN_USERNAME="$RUN_USERNAME"
+  pass "step 3: operator credential created ($LOGIN_USERNAME)"
+elif echo "$CREATE_OUT" | grep -qi "already exists"; then
+  # A credential from an earlier run of this script is still present. Its
+  # username was generated from that earlier run's own timestamp and is
+  # unknown here, so this resets without --username, which resolves the
+  # single existing row itself and prints back which account it changed --
+  # a mismatched --username would have found no row and silently left the
+  # old password in place, which is exactly what happened before this line
+  # existed: reset-password --username '${RUN_USERNAME}' looked up a row
+  # that was never there on a second run, and the previous check here
+  # accepted "No operator account exists to reset." as success because it
+  # loosely matched the substring "reset" in its own failure message.
+  RESET_OUT=$(api_exec sh -c "echo '${RUN_PASSWORD}
+${RUN_PASSWORD}' | python -m orchestrator.cli reset-password" 2>&1)
+  RESET_EXIT=$?
+  LOGIN_USERNAME=$(echo "$RESET_OUT" | sed -n "s/.*Password for '\([^']*\)'.*/\1/p")
+  if [ "$RESET_EXIT" -eq 0 ] && [ -n "$LOGIN_USERNAME" ]; then
+    pass "step 3: operator credential reset ($LOGIN_USERNAME)"
+  else
+    fail "step 3: create-operator reported an existing account, and reset-password did not confirm: $RESET_OUT"
+    LOGIN_USERNAME="$RUN_USERNAME"
+  fi
 else
-  fail "step 3: expected 302 to /login?next=%2Flibrary, got code=$CODE3 location='$LOCATION3'"
+  fail "step 3: create-operator failed unexpectedly (exit $CREATE_EXIT): $CREATE_OUT"
+  LOGIN_USERNAME="$RUN_USERNAME"
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4: the login form itself renders.
+# Step 4: unauthenticated GET /library redirects to the login form.
 # ---------------------------------------------------------------------------
-info "step 4: /login renders a password field"
+info "step 4: unauthenticated /library -> 302 /login?next=%2Flibrary"
+HDRS4=$(curl -s -o /dev/null -D - $ADMIN "${EDGE_URL}/library" 2>&1)
+CODE4=$(echo "$HDRS4" | head -1 | awk '{print $2}')
+LOCATION4=$(echo "$HDRS4" | grep -i '^location:' | tr -d '\r' | awk '{print $2}')
+if [ "$CODE4" = "302" ] && [ "$LOCATION4" = "/login?next=%2Flibrary" ]; then
+  pass "step 4: 302 -> $LOCATION4"
+else
+  fail "step 4: expected 302 to /login?next=%2Flibrary, got code=$CODE4 location='$LOCATION4'"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 5: the login form itself renders.
+# ---------------------------------------------------------------------------
+info "step 5: /login renders a password field"
 LOGIN_BODY=$(curl -s $ADMIN "${EDGE_URL}/login")
 LOGIN_CTYPE=$(curl -s -o /dev/null -D - $ADMIN "${EDGE_URL}/login" | grep -i '^content-type:' | tr -d '\r')
 if [[ "$LOGIN_CTYPE" == *"text/html"* ]] && [[ "$LOGIN_BODY" == *'type="password"'* ]]; then
-  pass "step 4: 200 text/html with a password field"
+  pass "step 5: 200 text/html with a password field"
 else
-  fail "step 4: expected 200 text/html with a password input, content-type='$LOGIN_CTYPE'"
+  fail "step 5: expected 200 text/html with a password input, content-type='$LOGIN_CTYPE'"
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: /healthz is not proxied externally (D-79).
+# Step 6: /healthz is not proxied externally (D-79).
 # ---------------------------------------------------------------------------
-info "step 5: /healthz is refused by nginx, not answered by the application"
+info "step 6: /healthz is refused by nginx, not answered by the application"
 HEALTHZ_CODE=$(curl -s -o /dev/null -w '%{http_code}' $ADMIN "${EDGE_URL}/healthz")
 if [ "$HEALTHZ_CODE" = "404" ]; then
-  pass "step 5: /healthz -> 404 from nginx"
+  pass "step 6: /healthz -> 404 from nginx"
 else
-  fail "step 5: expected 404, got $HEALTHZ_CODE — an anonymous endpoint that queries the database has no reason to be public"
-fi
-
-# ---------------------------------------------------------------------------
-# Step 6: create (or reset, if one already exists) the operator credential.
-# ---------------------------------------------------------------------------
-info "step 6: create-operator (or reset-password if one already exists)"
-CREATE_OUT=$(api_exec sh -c "echo '${RUN_PASSWORD}
-${RUN_PASSWORD}' | python -m orchestrator.cli create-operator --username '${RUN_USERNAME}'" 2>&1)
-if [ $? -eq 0 ] || echo "$CREATE_OUT" | grep -qi "already"; then
-  RESET_OUT=$(api_exec sh -c "echo '${RUN_PASSWORD}
-${RUN_PASSWORD}' | python -m orchestrator.cli reset-password --username '${RUN_USERNAME}'" 2>&1)
-  if echo "$RESET_OUT" | grep -qi "${RUN_USERNAME}\|reset\|password"; then
-    pass "step 6: operator credential created or reset ($RUN_USERNAME)"
-  else
-    fail "step 6: create-operator failed and reset-password did not confirm: $RESET_OUT"
-  fi
-else
-  pass "step 6: operator credential created ($RUN_USERNAME)"
+  fail "step 6: expected 404, got $HEALTHZ_CODE — an anonymous endpoint that queries the database has no reason to be public"
 fi
 
 # ---------------------------------------------------------------------------
@@ -142,7 +183,7 @@ fi
 info "step 7: wrong password -> generic error, at least one second wall-clock"
 START7=$(date +%s%N)
 HDRS7=$(curl -s -o /tmp/smoke_login_wrong_body -D - $ADMIN $ORIGIN -X POST \
-  -d "username=${RUN_USERNAME}&password=definitely-the-wrong-password" \
+  -d "username=${LOGIN_USERNAME}&password=definitely-the-wrong-password" \
   "${EDGE_URL}/login" 2>&1)
 END7=$(date +%s%N)
 ELAPSED_MS7=$(( (END7 - START7) / 1000000 ))
@@ -158,19 +199,21 @@ fi
 # Step 8: the correct credentials sign in and set the session cookie.
 # ---------------------------------------------------------------------------
 info "step 8: correct credentials -> 302 /library, cookie set"
-HDRS8=$(curl -s -o /dev/null -D - -c "$COOKIE_JAR" $ADMIN $ORIGIN -X POST \
-  -d "username=${RUN_USERNAME}&password=${RUN_PASSWORD}" \
+HDRS8=$(curl -s -o /dev/null -D - $ADMIN $ORIGIN -X POST \
+  -d "username=${LOGIN_USERNAME}&password=${RUN_PASSWORD}" \
   "${EDGE_URL}/login" 2>&1)
 CODE8=$(echo "$HDRS8" | head -1 | awk '{print $2}')
 LOCATION8=$(echo "$HDRS8" | grep -i '^location:' | tr -d '\r')
 SETCOOKIE8=$(echo "$HDRS8" | grep -i '^set-cookie:' | tr -d '\r')
+SESSION_COOKIE=$(echo "$HDRS8" | extract_cookie)
 if [ "$CODE8" = "302" ] \
   && [[ "$LOCATION8" == *"/library"* ]] \
   && [[ "$SETCOOKIE8" == *"mytube_session"* ]] \
   && [[ "$SETCOOKIE8" == *"HttpOnly"* ]] \
   && [[ "$SETCOOKIE8" == *"Secure"* ]] \
   && [[ "$SETCOOKIE8" == *"SameSite=Lax"* || "$SETCOOKIE8" == *"SameSite=lax"* ]] \
-  && [[ "$SETCOOKIE8" != *"Domain="* ]]; then
+  && [[ "$SETCOOKIE8" != *"Domain="* ]] \
+  && [ -n "$SESSION_COOKIE" ]; then
   pass "step 8: signed in, cookie carries HttpOnly, Secure, SameSite=Lax, no Domain"
 else
   fail "step 8: expected 302 /library with a properly-attributed cookie, got code=$CODE8 location='$LOCATION8' set-cookie='$SETCOOKIE8'"
@@ -180,7 +223,7 @@ fi
 # Step 9: the cookie actually grants access.
 # ---------------------------------------------------------------------------
 info "step 9: /library with the session cookie -> 200"
-CODE9=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" $ADMIN "${EDGE_URL}/library")
+CODE9=$(curl -s -o /dev/null -w '%{http_code}' -b "$SESSION_COOKIE" $ADMIN "${EDGE_URL}/library")
 if [ "$CODE9" = "200" ]; then
   pass "step 9: 200"
 else
@@ -191,9 +234,9 @@ fi
 # Step 10: sign-out kills the session server-side.
 # ---------------------------------------------------------------------------
 info "step 10: sign-out, then the stale cookie no longer works"
-CODE10_LOGOUT=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" -c "$COOKIE_JAR" $ADMIN $ORIGIN -X POST "${EDGE_URL}/logout")
-CODE10_REPLAY=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" $ADMIN "${EDGE_URL}/library")
-LOCATION10=$(curl -s -o /dev/null -D - -b "$COOKIE_JAR" $ADMIN "${EDGE_URL}/library" | grep -i '^location:' | tr -d '\r')
+CODE10_LOGOUT=$(curl -s -o /dev/null -w '%{http_code}' -b "$SESSION_COOKIE" $ADMIN $ORIGIN -X POST "${EDGE_URL}/logout")
+CODE10_REPLAY=$(curl -s -o /dev/null -w '%{http_code}' -b "$SESSION_COOKIE" $ADMIN "${EDGE_URL}/library")
+LOCATION10=$(curl -s -o /dev/null -D - -b "$SESSION_COOKIE" $ADMIN "${EDGE_URL}/library" | grep -i '^location:' | tr -d '\r')
 if [ "$CODE10_LOGOUT" = "302" ] && [ "$CODE10_REPLAY" = "302" ] && [[ "$LOCATION10" == *"/login"* ]]; then
   pass "step 10: signed out, stale cookie now redirects to $LOCATION10"
 else
@@ -215,42 +258,68 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 12: the rate limit fires before a password hash ever runs.
+# Step 12: a poster keeps its own long-lived caching header through the gate.
+#
+# This has to run before the rate-limit burst below it, not after. It
+# originally ran after: the burst step drives twenty rapid requests at
+# /login and, by design, gets most of them refused with 503, which drains
+# the same shared rate-limit zone this step's own sign-in POST also has to
+# pass through. Running this step second meant its login could itself land
+# on a freshly-drained zone and come back 503, which this step's own cookie
+# extraction turned into an empty string, which then read as "no poster in
+# the library" instead of the rate limit it actually was -- a real
+# authenticated-poster answer never got checked, silently. Running the
+# poster check first, while the zone is still fresh, is the fix; the burst
+# step deliberately runs last, since nothing after it needs the zone clear.
 # ---------------------------------------------------------------------------
-info "step 12: twenty rapid wrong-password POSTs, at least one 503"
+info "step 12: a poster's caching header survives the gate"
+HDRS12_LOGIN=$(curl -s -o /dev/null -D - $ADMIN $ORIGIN -X POST \
+  -d "username=${LOGIN_USERNAME}&password=${RUN_PASSWORD}" "${EDGE_URL}/login" 2>&1)
+POSTER_SESSION_COOKIE=$(echo "$HDRS12_LOGIN" | extract_cookie)
+LIBRARY_HTML=$(curl -s -b "$POSTER_SESSION_COOKIE" $ADMIN "${EDGE_URL}/library")
+POSTER_ID=$(echo "$LIBRARY_HTML" | grep -o '/poster/[0-9a-f-]\{36\}' | head -1 | sed 's#/poster/##')
+if [ -z "$POSTER_ID" ]; then
+  skipped "step 12: no poster in the library yet — nothing to check"
+else
+  POSTER_CACHE=$(curl -s -o /dev/null -D - -b "$POSTER_SESSION_COOKIE" $ADMIN "${EDGE_URL}/poster/${POSTER_ID}" | grep -i '^cache-control:' | tr -d '\r')
+  if [[ "$POSTER_CACHE" == *"immutable"* ]] && [[ "$POSTER_CACHE" != *"no-store"* ]]; then
+    pass "step 12: poster ${POSTER_ID} kept its own caching header: $POSTER_CACHE"
+  else
+    fail "step 12: expected the long-lived immutable header, got '$POSTER_CACHE'"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Step 13: the rate limit fires before a password hash ever runs.
+# ---------------------------------------------------------------------------
+info "step 13: twenty rapid wrong-password POSTs, at least one 503"
 STATUS_LIST=""
 for _ in $(seq 1 20); do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' $ADMIN $ORIGIN -X POST \
-    -d "username=${RUN_USERNAME}&password=still-wrong" \
+    -d "username=${LOGIN_USERNAME}&password=still-wrong" \
     "${EDGE_URL}/login")
   STATUS_LIST="$STATUS_LIST $CODE"
 done
 COUNT_503=$(echo "$STATUS_LIST" | tr ' ' '\n' | grep -c '^503$')
 info "twenty statuses observed:$STATUS_LIST"
 if [ "$COUNT_503" -ge 1 ]; then
-  pass "step 12: $COUNT_503 of 20 requests refused with 503 by the edge"
+  pass "step 13: $COUNT_503 of 20 requests refused with 503 by the edge"
 else
-  fail "step 12: expected at least one 503 among 20 rapid attempts, got none — the rate-limit zone parses but is not applying"
+  fail "step 13: expected at least one 503 among 20 rapid attempts, got none — the rate-limit zone parses but is not applying"
 fi
 
-# ---------------------------------------------------------------------------
-# Step 13: a poster keeps its own long-lived caching header through the gate.
-# ---------------------------------------------------------------------------
-info "step 13: a poster's caching header survives the gate"
-curl -s -o /dev/null -D "$SMOKE_DIR/login_for_poster.hdrs" -c "$COOKIE_JAR" $ADMIN $ORIGIN -X POST \
-  -d "username=${RUN_USERNAME}&password=${RUN_PASSWORD}" "${EDGE_URL}/login" >/dev/null 2>&1
-LIBRARY_HTML=$(curl -s -b "$COOKIE_JAR" $ADMIN "${EDGE_URL}/library")
-POSTER_ID=$(echo "$LIBRARY_HTML" | grep -o '/poster/[0-9a-f-]\{36\}' | head -1 | sed 's#/poster/##')
-if [ -z "$POSTER_ID" ]; then
-  skipped "step 13: no poster in the library yet — nothing to check"
-else
-  POSTER_CACHE=$(curl -s -o /dev/null -D - -b "$COOKIE_JAR" $ADMIN "${EDGE_URL}/poster/${POSTER_ID}" | grep -i '^cache-control:' | tr -d '\r')
-  if [[ "$POSTER_CACHE" == *"immutable"* ]] && [[ "$POSTER_CACHE" != *"no-store"* ]]; then
-    pass "step 13: poster ${POSTER_ID} kept its own caching header: $POSTER_CACHE"
-  else
-    fail "step 13: expected the long-lived immutable header, got '$POSTER_CACHE'"
-  fi
-fi
+# This burst deliberately empties the shared mytube_auth zone (rate=10r/m,
+# burst=5, nodelay -- edge/nginx.conf.template), which is exactly the point
+# of the check above. Left alone, a second consecutive run of this script
+# starts against that same still-draining zone: its own real login attempts
+# a few steps later land on the leftover excess from this burst and come
+# back 503 themselves, which is this test abusing itself, not a defect. At
+# 10r/m the zone regenerates one slot every 6 seconds; waiting for the full
+# five-slot burst to recover (30 seconds, plus a small margin) here is what
+# makes the script genuinely re-runnable back to back, rather than only
+# re-runnable after enough wall-clock time has passed on its own.
+info "waiting for the rate-limit zone to recover before this run ends"
+sleep 32
 
 # ---------------------------------------------------------------------------
 # Step 14: the application-level foreign-host refusal, exercised in-container
