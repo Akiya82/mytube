@@ -85,7 +85,7 @@ async def test_add_similar_slug_warns_before_saving(source_file, uploaded_object
     await cli._add(source_file, "Cli:Rezero:Warn:Case", None, False)
     out = capsys.readouterr().out
 
-    assert "Предупреждение" in out
+    assert "Warning" in out
     assert "clirezerowarncase" in out
 
 
@@ -111,7 +111,7 @@ async def test_add_on_tombstoned_slug_without_flag_refuses(
         await cli._add(source_file, "CLI New Title", "cli-tombstone-slug", False)
 
     err = capsys.readouterr().err
-    assert "разойтись по мирам" in err
+    assert "spread across worlds" in err
     assert len(uploaded_objects) == 0
 
 
@@ -129,7 +129,8 @@ async def test_add_on_tombstoned_slug_with_flag_reuses_and_keeps_history(
     await cli._add(source_file, "CLI New Title Reuse", "cli-tombstone-reuse-slug", True)
 
     out = capsys.readouterr().out
-    assert "переиспользован" in out
+    assert "Note: slug" in out
+    assert "was reused" in out
     # Anchored to end of line, not a substring match: /v/x is a substring
     # of /v/x-2, so a plain "in out" check cannot tell a clean reuse from
     # the auto-suffixed collision the tombstone branch exists to prevent
@@ -137,7 +138,7 @@ async def test_add_on_tombstoned_slug_with_flag_reuses_and_keeps_history(
     # for an extraction to reintroduce silently).
     lines = out.splitlines()
     assert "/v/cli-tombstone-reuse-slug" in lines
-    assert "Предупреждение" not in out
+    assert "Warning" not in out
 
     resolved = await queries.resolve_slug(raw_conn, "cli-tombstone-reuse-slug")
     assert resolved["title_id"] != old_title_id
@@ -156,7 +157,7 @@ async def test_rename_keeps_old_address_working(source_file, uploaded_objects, c
     out = capsys.readouterr().out
 
     assert "cli-rename-a" in out
-    assert "по-прежнему работает" in out
+    assert "still works" in out
 
     old = await queries.resolve_slug(raw_conn, "cli-rename-a")
     new = await queries.resolve_slug(raw_conn, "cli-rename-target")
@@ -173,12 +174,12 @@ async def test_remove_output_names_undo_and_purge_now_in_the_interface(
     await cli._remove("cli-remove-wording")
     out = capsys.readouterr().out
 
-    assert "освободится" in out
-    # Inverted from phase 1: the grace window is now an undo window, and
-    # the CLI has to say so rather than deny it exists.
-    assert "не окно отмены" not in out
-    assert "Отменить удаление" in out
-    assert "веб-интерфейсе" in out
+    assert "freed" in out
+    # Inverted from an earlier wording: the grace window is now an undo
+    # window, and the CLI has to say so rather than deny it exists.
+    assert "not an undo window" not in out
+    assert "Undo the deletion" in out
+    assert "web interface" in out
 
 
 async def test_two_cli_adds_racing_on_one_name_get_two_different_addresses(

@@ -10,8 +10,8 @@ extend this file, not replace it.
 
 MYTUBE_DATABASE_URL is stored as `postgresql://...` (the form asyncpg.connect
 accepts directly) — this file is the one place that swaps the scheme to
-`postgresql+asyncpg://` for SQLAlchemy's async engine, per the driver
-decision in 01-03-PLAN.md's objective ("Драйвер для Alembic").
+`postgresql+asyncpg://` for SQLAlchemy's async engine, matching the async
+driver Alembic runs against in this project.
 """
 import asyncio
 from logging.config import fileConfig

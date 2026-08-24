@@ -72,8 +72,8 @@ async def test_clean_state_exits_zero(monkeypatch, capsys):
 
     assert code == 0
     out = capsys.readouterr().out
-    assert "объектов без ссылок нет" in out
-    assert "сломанных адресов нет" in out
+    assert "no unreferenced objects" in out
+    assert "no broken addresses" in out
 
 
 async def test_unreferenced_object_reports_key_size_and_total(monkeypatch, capsys):
@@ -86,7 +86,7 @@ async def test_unreferenced_object_reports_key_size_and_total(monkeypatch, capsy
     assert code == 1
     assert "orphan.mp4" in out
     assert "250" in out
-    assert "итого без ссылок: 250" in out
+    assert "total unreferenced: 250" in out
 
 
 async def test_unreferenced_object_prints_a_removal_command_but_deletes_nothing(monkeypatch, capsys):
@@ -140,7 +140,7 @@ async def test_poster_key_referenced_prevents_it_being_reported_unreferenced(mon
 
     out = capsys.readouterr().out
     assert code == 0
-    assert "объектов без ссылок нет" in out
+    assert "no unreferenced objects" in out
 
 
 async def test_present_count_excludes_missing_rows(monkeypatch, capsys):
@@ -153,7 +153,7 @@ async def test_present_count_excludes_missing_rows(monkeypatch, capsys):
     await storage_audit.storage_audit()
 
     out = capsys.readouterr().out
-    assert "на месте и учтено в каталоге: 1" in out
+    assert "present and accounted for in the catalog: 1" in out
 
 
 async def test_no_slug_reports_address_unknown_instead_of_a_bare_key(monkeypatch, capsys):

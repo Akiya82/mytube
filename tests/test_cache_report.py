@@ -52,7 +52,7 @@ def test_clean_session_all_chunks_hit_at_most_once_returns_zero(tmp_path, capsys
 
     out = capsys.readouterr().out
     assert code == 0
-    assert "нарушител" in out or "0" in out
+    assert "violation" in out or "0" in out
 
 
 def test_chunk_fetched_twice_from_storage_returns_one_and_names_it(tmp_path, capsys):
@@ -124,7 +124,7 @@ def test_five_point_range_requests_to_five_offsets_are_five_chunks_not_one(tmp_p
 
     out = capsys.readouterr().out
     assert code == 0
-    assert "уникальных кусков: 5" in out
+    assert "unique chunks: 5" in out
     assert " -:" not in out
 
 
@@ -168,7 +168,7 @@ def test_master_line_with_unparseable_offset_is_unattributed_not_a_chunk(tmp_pat
 
     out = capsys.readouterr().out
     assert code == 0
-    assert "не привязано ни к одному куску: 2" in out
+    assert "not attributable to any chunk: 2" in out
     assert "/blob/v.mp4" not in out.split("\n")[-1]
 
 
@@ -188,8 +188,8 @@ def test_log_made_entirely_of_stale_format_master_lines_is_insufficient_data(tmp
 
     out = capsys.readouterr().out
     assert code == 2
-    assert "недостаточно данных" in out
-    assert "до появления поля смещения" in out
+    assert "not enough data" in out
+    assert "before the client offset field existed" in out
 
 
 def test_alignment_follows_mytube_slice_size_not_a_hardcoded_default(tmp_path, capsys, monkeypatch):
@@ -263,7 +263,7 @@ def test_empty_log_returns_nonzero_and_says_insufficient_data(tmp_path, capsys):
 
     out = capsys.readouterr().out
     assert code != 0
-    assert "недостаточно данных" in out
+    assert "not enough data" in out
     assert "log_subrequest" in out
 
 
@@ -275,7 +275,7 @@ def test_log_with_no_valid_lines_is_empty_data_not_a_clean_pass(tmp_path, capsys
 
     out = capsys.readouterr().out
     assert code != 0
-    assert "недостаточно данных" in out
+    assert "not enough data" in out
 
 
 def test_since_filtering_everything_out_is_also_empty_data(tmp_path, capsys):
@@ -286,4 +286,4 @@ def test_since_filtering_everything_out_is_also_empty_data(tmp_path, capsys):
 
     out = capsys.readouterr().out
     assert code != 0
-    assert "недостаточно данных" in out
+    assert "not enough data" in out

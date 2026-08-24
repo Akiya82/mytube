@@ -2,9 +2,9 @@
 
 Wraps `python-slugify` 8.0.4 (default backend `text-unidecode`, Artistic
 License -- the GPL `unidecode` extra, `python-slugify[unidecode]`, is
-deliberately not installed; see 01-RESEARCH.md "Standard Stack"). Verified
-locally in 01-RESEARCH.md against real Cyrillic strings: "Атака Титанов" ->
-"ataka-titanov", "Пираты Карибского моря" -> "piraty-karibskogo-moria".
+deliberately not installed). Verified against real Cyrillic anime titles;
+see the transliteration fixtures in tests/test_slugs.py for worked
+examples.
 
 `python-slugify` transliterates but does not detect near-duplicate
 collisions: "Re:Zero" -> "re-zero" and "ReZero" -> "rezero" are two
@@ -36,9 +36,9 @@ def normalize_slug(name: str) -> str:
     slug = slugify(name)[:MAX_SLUG_LENGTH].rstrip("-")
     if not slug or not _SLUG_SHAPE.match(slug):
         raise SlugError(
-            f"Не удалось получить слаг из {name!r} -- транслитерация дала "
-            "пустую или недопустимую строку. Задайте слаг вручную флагом "
-            "--slug."
+            f"Could not derive a slug from {name!r} -- transliteration produced "
+            "an empty or invalid string. Set the slug explicitly with the "
+            "--slug flag."
         )
     return slug
 

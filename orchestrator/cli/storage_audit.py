@@ -60,19 +60,19 @@ async def storage_audit() -> int:
     result = reconcile(usage.listing, referenced)
 
     present = len(referenced) - len(result.missing)
-    typer.echo(f"на месте и учтено в каталоге: {present}")
+    typer.echo(f"present and accounted for in the catalog: {present}")
 
     typer.echo("")
     if result.unreferenced:
         total = sum(obj.size_bytes for obj in result.unreferenced)
-        typer.echo("объекты, на которые ничего не ссылается:")
+        typer.echo("objects nothing references:")
         for obj in result.unreferenced:
-            typer.echo(f"  {obj.key}  {obj.size_bytes} байт")
-        typer.echo(f"итого без ссылок: {total} байт")
+            typer.echo(f"  {obj.key}  {obj.size_bytes} bytes")
+        typer.echo(f"total unreferenced: {total} bytes")
         typer.echo("")
         typer.echo(
-            "команда ничего не удаляет; чтобы освободить это место, "
-            "выполните для каждого ключа:"
+            "this command deletes nothing; to reclaim this space, "
+            "run this for each key:"
         )
         for obj in result.unreferenced:
             typer.echo(
@@ -80,16 +80,16 @@ async def storage_audit() -> int:
                 f"delete-object --bucket {settings.s3_bucket} --key {obj.key}"
             )
     else:
-        typer.echo("объектов без ссылок нет")
+        typer.echo("no unreferenced objects")
 
     typer.echo("")
     if result.missing:
-        typer.echo("адреса, чей объект пропал из хранилища:")
+        typer.echo("addresses whose object is missing from storage:")
         for obj in result.missing:
-            address = f"/v/{obj.slug}" if obj.slug else "адрес неизвестен (нет текущего слага)"
-            typer.echo(f"  {address} сломан -- {obj.title_name} ({obj.kind}), ключ {obj.key}")
+            address = f"/v/{obj.slug}" if obj.slug else "address unknown (no current slug)"
+            typer.echo(f"  {address} is broken -- {obj.title_name} ({obj.kind}), key {obj.key}")
     else:
-        typer.echo("сломанных адресов нет")
+        typer.echo("no broken addresses")
 
     return DISCREPANCY_EXIT_CODE if (result.unreferenced or result.missing) else OK_EXIT_CODE
 

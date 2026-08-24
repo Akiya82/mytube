@@ -91,7 +91,7 @@ def test_the_byte_limit_is_honoured_when_the_origin_serves_ranges(fake_http, cap
 
     assert code == 0
     assert len(fake_http.requested) == 3
-    assert f"прогрето байт: {3 * CHUNK}" in capsys.readouterr().out
+    assert f"bytes warmed: {3 * CHUNK}" in capsys.readouterr().out
 
 
 def test_a_file_shorter_than_the_limit_ends_on_the_short_read(fake_http, capsys):
@@ -107,7 +107,7 @@ def test_a_file_shorter_than_the_limit_ends_on_the_short_read(fake_http, capsys)
 
     assert code == 0
     assert len(fake_http.requested) == 2
-    assert f"прогрето байт: {total}" in capsys.readouterr().out
+    assert f"bytes warmed: {total}" in capsys.readouterr().out
 
 
 def test_a_slug_that_does_not_resolve_exits_one(fake_http, monkeypatch, capsys):

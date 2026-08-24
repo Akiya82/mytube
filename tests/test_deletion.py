@@ -63,7 +63,7 @@ async def test_remove_unknown_slug_fails(capsys):
         await cli._remove("does-not-exist-anywhere")
 
     err = capsys.readouterr().err
-    assert "не найден" in err
+    assert "not found" in err
 
 
 async def test_reaper_deletes_object_and_finishes_delete_after_grace_expires(

@@ -163,28 +163,28 @@ def cache_report(log_path: str, since: str | None = None) -> int:
 
     if parsed_count == 0:
         print(
-            "недостаточно данных: прочитано "
-            f"{read_count} строк(и), из них разобрано 0 -- "
-            "мерить нечем, это не значит, что нарушителей нет"
+            "not enough data: read "
+            f"{read_count} line(s), 0 of them parsed -- "
+            "there is nothing to measure, which does not mean there are no violations"
         )
         print(
-            "вероятная причина: в src/edge/nginx.conf.template для "
-            "location ~ ^/blob/ не включён `log_subrequest on;`, "
-            "либо формат access_log разошёлся с log_format cache_audit"
+            "likely cause: src/edge/nginx.conf.template's "
+            "location ~ ^/blob/ does not have `log_subrequest on;` enabled, "
+            "or access_log's format has drifted from log_format cache_audit"
         )
         return INSUFFICIENT_DATA_EXIT_CODE
 
     if not per_slice:
         print(
-            "недостаточно данных: прочитано "
-            f"{read_count} строк(и), разобрано {parsed_count}, но ни одна "
-            "не привязана ни к одному куску -- мерить нечем, это не "
-            "значит, что нарушителей нет"
+            "not enough data: read "
+            f"{read_count} line(s), parsed {parsed_count}, but none of them "
+            "attributable to any chunk -- there is nothing to measure, "
+            "which does not mean there are no violations"
         )
         print(
-            "вероятная причина: всё окно лога записано до появления поля "
-            "смещения клиента (edge ещё не пересоздан), либо это сплошь "
-            "multi-range запросы"
+            "likely cause: the whole log window was recorded before the "
+            "client offset field existed (edge has not been recreated "
+            "yet), or it is entirely multi-range requests"
         )
         return INSUFFICIENT_DATA_EXIT_CODE
 
@@ -198,16 +198,16 @@ def cache_report(log_path: str, since: str | None = None) -> int:
         reverse=True,
     )
 
-    print(f"прочитано строк: {read_count}, разобрано: {parsed_count}")
-    print(f"уникальных кусков: {total_slices}, доля HIT: {hit_ratio:.1%}")
-    print(f"кусков с более чем одним запросом к хранилищу: {len(worst)}")
+    print(f"lines read: {read_count}, parsed: {parsed_count}")
+    print(f"unique chunks: {total_slices}, HIT ratio: {hit_ratio:.1%}")
+    print(f"chunks with more than one request to storage: {len(worst)}")
     for uri, rng in worst[:10]:
-        print(f"  {uri} {rng}: {upstream_hits[(uri, rng)]} запросов к хранилищу")
+        print(f"  {uri} {rng}: {upstream_hits[(uri, rng)]} requests to storage")
     if unattributed_count:
         print(
-            f"не привязано ни к одному куску: {unattributed_count} строк(и) -- "
-            "вероятная причина: строки записаны до появления поля смещения "
-            "клиента, либо это multi-range запросы"
+            f"not attributable to any chunk: {unattributed_count} line(s) -- "
+            "likely cause: the lines were recorded before the client "
+            "offset field existed, or they are multi-range requests"
         )
 
     return VIOLATION_EXIT_CODE if worst else OK_EXIT_CODE

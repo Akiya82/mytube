@@ -64,7 +64,7 @@ def cache_warm(
         resp = client.get(f"{base_url}/v/{slug}")
         if resp.status_code != 302:
             typer.echo(
-                f"/v/{slug} не отдал 302 (получено {resp.status_code}) -- греть нечего",
+                f"/v/{slug} did not answer 302 (got {resp.status_code}) -- nothing to warm",
                 err=True,
             )
             return 1
@@ -106,8 +106,8 @@ def cache_warm(
     elapsed = time.monotonic() - started
     if range_refused:
         typer.echo(
-            "отдача проигнорировала Range и вернула файл целиком -- "
-            "греть нечего. Проверьте slice и proxy_cache_key в конфиге edge.",
+            "the origin ignored Range and returned the whole file -- "
+            "nothing to warm. Check slice and proxy_cache_key in edge's config.",
             err=True,
         )
         return 1
@@ -115,16 +115,17 @@ def cache_warm(
     limited_by_file_length = total_size is not None and warmed < total_size
 
     typer.echo(
-        f"прогрето кусков: {chunks}, прогрето байт: {warmed}"
-        f"{f' из {total_size}' if total_size is not None else ''}, "
-        f"зона кэша: {cache_zone}, время: {elapsed:.1f}с"
+        f"chunks warmed: {chunks}, bytes warmed: {warmed}"
+        f"{f' of {total_size}' if total_size is not None else ''}, "
+        f"cache zone: {cache_zone}, time: {elapsed:.1f}s"
     )
     if limited_by_file_length:
         typer.echo(
-            f"файл длиннее предела прогрева ({warm_bytes} байт) -- прогрет только "
-            "начальный отрезок; зона кэша всё равно меньше файла целиком, а "
-            "inactive вытеснит прогретое раньше, чем начнётся просмотр, так что "
-            "греть дальше бессмысленно"
+            f"the file is longer than the warm-up limit ({warm_bytes} bytes) -- "
+            "only the opening stretch was warmed; the cache zone is smaller "
+            "than the whole file anyway, and inactive would evict the warmed "
+            "part before playback even starts, so warming further would be "
+            "pointless"
         )
     # Hand the operator the exact --since value instead of telling them to take a
     # timestamp themselves. nginx logs whole seconds, so a warm that finishes in
@@ -137,8 +138,9 @@ def cache_warm(
         datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=1)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
     typer.echo(
-        "замеряйте сеанс начиная с этой метки — так `cache-report` увидит "
-        "сам сеанс, а не растянутый на прогрев начальный отрезок файла:"
+        "measure the session starting from this timestamp -- that way "
+        "`cache-report` sees the session itself, not the opening stretch "
+        "stretched out by the warm-up:"
     )
     typer.echo(f"    cache-report --since {safe_since}")
 

@@ -46,15 +46,16 @@ def _candidate_slug(explicit: str | None, name: str) -> str:
 def add(
     file: Path = typer.Option(
         ..., "--file", exists=True, dir_okay=False, readable=True,
-        help="Путь к файлу внутри примонтированного /ingest",
+        help="Path to a file inside the mounted /ingest",
     ),
-    name: str = typer.Option(..., "--name", help="Человекочитаемое название тайтла"),
-    slug: str = typer.Option(None, "--slug", help="Явный слаг вместо производного от названия"),
+    name: str = typer.Option(..., "--name", help="Human-readable title name"),
+    slug: str = typer.Option(None, "--slug", help="Explicit slug instead of one derived from the name"),
     reuse_slug: bool = typer.Option(
         False, "--reuse-slug",
-        help="Подтвердить переиспользование слага удалённого тайтла",
+        help="Confirm reusing a deleted title's slug",
     ),
 ) -> None:
+    """Add a title from a file already on the mounted share, printing its address."""
     asyncio.run(_add(file, name, slug, reuse_slug))
 
 
@@ -76,9 +77,9 @@ async def _add(file: Path, name: str, explicit_slug: str | None, reuse: bool) ->
         def refuse_tombstone(plan) -> None:
             if plan.is_tombstone and not reuse:
                 typer.echo(
-                    f"Слаг {plan.candidate!r} принадлежит удалённому тайтлу -- адрес "
-                    "мог разойтись по мирам. Повторите с --reuse-slug для "
-                    "явного подтверждения.",
+                    f"Slug {plan.candidate!r} belongs to a deleted title -- the address "
+                    "may have already spread across worlds. Repeat with --reuse-slug "
+                    "to confirm explicitly.",
                     err=True,
                 )
                 raise typer.Exit(1)
@@ -120,17 +121,17 @@ async def _add(file: Path, name: str, explicit_slug: str | None, reuse: bool) ->
 
         if slug_plan.is_tombstone:
             # --reuse-slug: use the exact requested slug, no suffixing --
-            # the whole point is to get this specific address back (D-10).
+            # the whole point is to get this specific address back.
             typer.echo(
-                f"Внимание: слаг {slug_plan.chosen!r} переиспользован -- прежний адрес "
-                "мог разойтись по мирам с другим видео."
+                f"Note: slug {slug_plan.chosen!r} was reused -- the previous address "
+                "may have spread across worlds pointing at different video."
             )
         elif slug_plan.chosen != slug_plan.candidate:
-            typer.echo(f"Слаг {slug_plan.candidate!r} занят, использован {slug_plan.chosen!r}")
+            typer.echo(f"Slug {slug_plan.candidate!r} taken, used {slug_plan.chosen!r} instead")
 
         if slug_plan.similar:
             typer.echo(
-                f"Предупреждение: похожий слаг уже занят: {', '.join(slug_plan.similar)}"
+                f"Warning: a similar slug is already taken: {', '.join(slug_plan.similar)}"
             )
 
         typer.echo(f"/v/{slug_plan.chosen}")
@@ -140,9 +141,10 @@ async def _add(file: Path, name: str, explicit_slug: str | None, reuse: bool) ->
 
 @app.command()
 def rename(
-    slug: str = typer.Argument(..., help="Текущий слаг тайтла"),
-    to: str = typer.Option(..., "--to", help="Новое название или слаг"),
+    slug: str = typer.Argument(..., help="The title's current slug"),
+    to: str = typer.Option(..., "--to", help="New name or slug"),
 ) -> None:
+    """Give a title a new address, leaving the old one working."""
     asyncio.run(_rename(slug, to))
 
 
@@ -171,16 +173,17 @@ async def _rename(old_slug: str, new_name: str) -> None:
         _audit("rename", f"renamed {old_slug!r} to {chosen!r}")
 
         if similar:
-            typer.echo(f"Предупреждение: похожий слаг уже занят: {', '.join(similar)}")
+            typer.echo(f"Warning: a similar slug is already taken: {', '.join(similar)}")
 
-        typer.echo(f"/v/{old_slug} по-прежнему работает")
-        typer.echo(f"/v/{chosen} -- новый адрес")
+        typer.echo(f"/v/{old_slug} still works")
+        typer.echo(f"/v/{chosen} -- new address")
     finally:
         await conn.close()
 
 
 @app.command()
-def remove(slug: str = typer.Argument(..., help="Слаг тайтла для удаления")) -> None:
+def remove(slug: str = typer.Argument(..., help="Slug of the title to remove")) -> None:
+    """Delete an already-published title after its grace window."""
     asyncio.run(_remove(slug))
 
 
@@ -190,7 +193,7 @@ async def _remove(slug: str) -> None:
     try:
         row = await queries.resolve_slug(conn, slug)
         if row is None or row["status"] != "active":
-            typer.echo(f"Слаг {slug!r} не найден среди активных тайтлов", err=True)
+            typer.echo(f"Slug {slug!r} not found among active titles", err=True)
             raise typer.Exit(1)
 
         await queries.mark_for_delete(conn, row["title_id"], settings.delete_grace_seconds)
@@ -201,10 +204,10 @@ async def _remove(slug: str) -> None:
         # now skips the wait. The CLI itself still offers neither -- both
         # live in the interface, not as a fifth CLI command.
         typer.echo(
-            f"/v/{slug} уже отдаёт 410. Через {settings.delete_grace_seconds} "
-            "секунд объект будет физически удалён и место освободится. "
-            "Отменить удаление или удалить сразу же можно в веб-интерфейсе, "
-            "на странице библиотеки."
+            f"/v/{slug} already answers 410. In {settings.delete_grace_seconds} "
+            "seconds the object will be physically deleted and the space "
+            "freed. Undo the deletion or delete it immediately from the "
+            "web interface's library page."
         )
     finally:
         await conn.close()
@@ -212,19 +215,20 @@ async def _remove(slug: str) -> None:
 
 @app.command("cache-warm")
 def cache_warm_command(
-    slug: str = typer.Argument(..., help="Слаг тайтла, который прогреваем перед сеансом просмотра"),
+    slug: str = typer.Argument(..., help="Slug of the title to warm before a viewing session"),
     base_url: str = typer.Option(
-        DEFAULT_BASE_URL, "--base-url", help="Адрес edge; внутри контейнера обычно внутренний"
+        DEFAULT_BASE_URL, "--base-url", help="Edge address; usually the internal one from inside the container"
     ),
     chunk_size: int = typer.Option(
-        None, "--chunk-size", help="Размер шага в байтах; по умолчанию MYTUBE_SLICE_SIZE"
+        None, "--chunk-size", help="Step size in bytes; defaults to MYTUBE_SLICE_SIZE"
     ),
     bytes: int = typer.Option(
         None, "--bytes",
-        help="Предел прогрева в байтах; по умолчанию MYTUBE_WARM_BYTES "
-        "или половина зоны кэша",
+        help="Warm-up limit in bytes; defaults to MYTUBE_WARM_BYTES "
+        "or half of the cache zone",
     ),
 ) -> None:
+    """Pre-fetch a title's opening chunks so playback starts without a cold-cache stall."""
     code = _cache_warm(slug, base_url=base_url, chunk_size=chunk_size, warm_bytes=bytes)
     raise typer.Exit(code)
 
@@ -232,12 +236,13 @@ def cache_warm_command(
 @app.command("cache-report")
 def cache_report_command(
     log_path: str = typer.Argument(
-        None, help="Путь к blob_access.log; по умолчанию MYTUBE_BLOB_ACCESS_LOG из настроек"
+        None, help="Path to blob_access.log; defaults to MYTUBE_BLOB_ACCESS_LOG from settings"
     ),
     since: str = typer.Option(
-        None, "--since", help="Учитывать только строки не старше этого момента (ISO 8601)"
+        None, "--since", help="Only count lines no older than this moment (ISO 8601)"
     ),
 ) -> None:
+    """Count cache hits and misses since a viewing session, exiting non-zero on a double fetch."""
     path = log_path or get_settings().blob_access_log
     code = _cache_report(path, since=since)
     raise typer.Exit(code)
@@ -245,8 +250,8 @@ def cache_report_command(
 
 @app.command(
     "storage-audit",
-    help="Сверить каталог с реальным содержимым хранилища в обе стороны. "
-    "Только читает — ничего не удаляет и не меняет.",
+    help="Cross-check the catalog against what storage actually holds, in both "
+    "directions. Read-only -- never deletes or changes anything.",
 )
 def storage_audit_command() -> None:
     raise typer.Exit(_storage_audit())
