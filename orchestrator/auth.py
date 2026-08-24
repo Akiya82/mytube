@@ -190,12 +190,17 @@ async def operator_exists_cached(request) -> bool:
 
 
 # Explicit cost parameters rather than the library defaults, which are
-# platform-dependent. A starting point measured against nothing yet -- a
-# single verify should land near 250-500 ms on the real deploy machine;
-# a later plan benchmarks these on the deploy host and adjusts. Note that
-# `max_workers` below (the hashing executor) and `memory_cost` here
-# multiply: raising one after that measurement means looking at the other.
-_hasher = argon2.PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
+# platform-dependent. Measured on the machine this stack actually runs on
+# (AMD Ryzen 7 9800X3D, 4 CPUs visible inside the container), 2026-08-24:
+# repeated verify calls against a rebuilt image landed a median between
+# 316 ms and 349 ms across separate measurement runs, comfortably inside
+# the 250-500 ms band a single verify is meant to cost -- expensive enough
+# that it is not free to guess, cheap enough that a worker thread is not
+# tied up for a meaningful fraction of a second on a process that also
+# serves video redirects. Note that `max_workers` below (the hashing
+# executor) and `memory_cost` here multiply: raising one means looking at
+# the other.
+_hasher = argon2.PasswordHasher(time_cost=8, memory_cost=262144, parallelism=4)
 
 # A dedicated executor for the two hashing calls, not `asyncio.to_thread`.
 # `to_thread` uses the event loop's single default executor, and in this
