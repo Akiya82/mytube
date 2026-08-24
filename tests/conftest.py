@@ -3,6 +3,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import asyncpg
@@ -153,6 +154,37 @@ async def raw_conn(migrated_db_url):
         yield conn
     finally:
         await conn.close()
+
+
+# The cookie every screen test that drives an admin route now carries,
+# alongside the `signed_in` fixture below -- imported by test modules and
+# passed to their own `httpx.AsyncClient(cookies=SESSION_COOKIE)`.
+SESSION_COOKIE = {"mytube_session": "test-session-token"}
+
+
+@pytest.fixture
+def signed_in(operator_present, monkeypatch):
+    """Stubs `orchestrator.auth.session_operator_id` to a fixed operator id,
+    regardless of the cookie's actual value.
+
+    Requests `operator_present` rather than setting the existence flag a
+    second time. Deliberately does not perform a real login: these tests
+    are about their own screens, the gate has its own tests in
+    test_auth.py, and a test that had to sign in for real before checking
+    a library row would be testing the login twice and the library once.
+    The cookie is still required rather than waived (`SESSION_COOKIE`
+    above), so each of these tests keeps saying "this screen needs a
+    session" in its own source.
+    """
+    from orchestrator import auth
+
+    fixed_operator_id = uuid.uuid4()
+
+    async def _fake_session_operator_id(request):
+        return fixed_operator_id, False
+
+    monkeypatch.setattr(auth, "session_operator_id", _fake_session_operator_id)
+    yield
 
 
 @pytest.fixture

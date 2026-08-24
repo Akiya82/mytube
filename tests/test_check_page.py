@@ -17,6 +17,8 @@ from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
 
+from conftest import ADMIN_FQDN, SESSION_COOKIE
+
 
 class _DummyConn:
     pass
@@ -46,6 +48,7 @@ def _web_env(monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
+    monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -73,10 +76,12 @@ def queries_stub(monkeypatch):
 
 
 @pytest.fixture
-def client(_web_env, queries_stub):
+def client(_web_env, queries_stub, signed_in):
     app.state.db_pool = _DummyPool()
     transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+    return httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    )
 
 
 def _resolved(**over) -> dict:

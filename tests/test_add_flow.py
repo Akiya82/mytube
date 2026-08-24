@@ -29,6 +29,8 @@ from orchestrator.media.compat import audio_tracks
 from orchestrator.media.compat import probe as ffprobe_probe
 from orchestrator.media.queue import AddJob, AddQueue
 
+from conftest import ADMIN_FQDN, SESSION_COOKIE
+
 pytestmark = pytest.mark.integration
 
 
@@ -96,6 +98,7 @@ def env(migrated_db_url, clips, tmp_path, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
+    monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
     monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(share_root))
     monkeypatch.setenv("MYTUBE_WORK_DIR", str(work_dir))
     get_settings.cache_clear()
@@ -134,7 +137,7 @@ def storage_spy(monkeypatch):
 
 
 @pytest.fixture
-async def client(env, storage_spy):
+async def client(env, storage_spy, signed_in):
     """Runs the real lifespan (real Postgres pool, real add worker task,
     real startup sweep) against an in-memory ASGI transport -- the only
     way to exercise D-49's "the row is written, the response returns, and
@@ -142,7 +145,9 @@ async def client(env, storage_spy):
     """
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+        ) as ac:
             yield ac
 
 

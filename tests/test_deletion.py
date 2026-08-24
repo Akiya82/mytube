@@ -10,6 +10,8 @@ from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator import reaper
 
+from conftest import ADMIN_FQDN
+
 pytestmark = pytest.mark.integration
 
 
@@ -21,6 +23,7 @@ def _cli_env(migrated_db_url, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
+    monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

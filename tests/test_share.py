@@ -14,6 +14,8 @@ from orchestrator.main import app
 from orchestrator.media.share import ShareEntry, ShareEscape, ShareUnavailable, list_dir, safe_join
 from orchestrator.web import routes_share
 
+from conftest import ADMIN_FQDN, SESSION_COOKIE
+
 
 def test_safe_join_empty_rel_returns_resolved_root(share_root):
     assert safe_join(share_root, "") == share_root.resolve()
@@ -162,6 +164,7 @@ def _web_env(share_root, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
+    monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
     monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(share_root))
     get_settings.cache_clear()
     yield
@@ -189,7 +192,7 @@ class _DummyPool:
 
 
 @pytest.fixture
-def web_client(_web_env, monkeypatch):
+def web_client(_web_env, monkeypatch, signed_in):
     """Since plan 03 the directory-listing branch also calls
     `queries.editions_by_source_paths` (the already-added chip, D-48), so
     `request.app.state.db_pool` now needs to exist -- same `_DummyPool`
@@ -205,7 +208,9 @@ def web_client(_web_env, monkeypatch):
     monkeypatch.setattr(queries, "editions_by_source_paths", _no_editions_already_added)
     app.state.db_pool = _DummyPool()
     transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+    return httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    )
 
 
 async def test_root_redirects_to_add(web_client):

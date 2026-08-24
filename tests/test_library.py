@@ -24,6 +24,8 @@ from orchestrator.main import app
 from orchestrator.storage import StorageUsage
 from orchestrator.web import routes_titles
 
+from conftest import ADMIN_FQDN, SESSION_COOKIE
+
 
 class _DummyConn:
     pass
@@ -53,6 +55,7 @@ def _web_env(tmp_path, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
+    monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
     monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(tmp_path))
     monkeypatch.setenv("MYTUBE_STORAGE_QUOTA_BYTES", "0")
     get_settings.cache_clear()
@@ -134,10 +137,12 @@ def storage_stub(monkeypatch):
 
 
 @pytest.fixture
-def client(_web_env, queries_stub, storage_stub):
+def client(_web_env, queries_stub, storage_stub, signed_in):
     app.state.db_pool = _DummyPool()
     transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+    return httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    )
 
 
 def _row(**over) -> dict:
@@ -615,16 +620,19 @@ def _action_env(migrated_db_url, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
+    monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
 
 
 @pytest.fixture
-async def action_client(_action_env, raw_conn):
+async def action_client(_action_env, raw_conn, signed_in):
     app.state.db_pool = _SingleActionConnPool(raw_conn)
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    ) as ac:
         yield ac
 
 

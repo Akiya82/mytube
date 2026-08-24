@@ -19,6 +19,8 @@ from orchestrator.media.add import required_free_bytes
 from orchestrator.media.compat import ProbeError
 from orchestrator.web import routes_share
 
+from conftest import ADMIN_FQDN, SESSION_COOKIE
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "probe"
 
 
@@ -54,6 +56,7 @@ def _web_env(share_root, tmp_path, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
+    monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
     monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(share_root))
     # The real default (/work) is a container-only path (see config.py) --
     # a real, empty, writable directory here so shutil.disk_usage has
@@ -97,10 +100,12 @@ def db_stub(monkeypatch):
 
 
 @pytest.fixture
-def web_client(_web_env, db_stub):
+def web_client(_web_env, db_stub, signed_in):
     app.state.db_pool = _DummyPool()
     transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+    return httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    )
 
 
 def _probe_returning(fixture_name: str):

@@ -12,6 +12,8 @@ import pytest
 
 from orchestrator.db import queries
 
+from conftest import ADMIN_FQDN
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 pytestmark = pytest.mark.integration
@@ -169,6 +171,7 @@ async def test_migration_downgrade_and_upgrade_round_trip(migrated_db_url):
         "MYTUBE_S3_KEY": "test-key",
         "MYTUBE_S3_SECRET": "test-secret",
         "MYTUBE_PUBLIC_BASE_URL": "https://mytube.example",
+        "MYTUBE_ADMIN_FQDN": ADMIN_FQDN,
     }
 
     subprocess.run(
