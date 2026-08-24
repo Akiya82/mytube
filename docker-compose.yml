@@ -117,9 +117,15 @@ services:
       # from, so the login rate limit counts real callers instead of
       # counting the reverse proxy once for everybody. Carries a default
       # for the same reason as the two above: an empty value would render
-      # a bare directive and nginx would refuse to start. The default is
-      # the private range Docker publishes host traffic from; narrow it to
-      # the proxy's own address in .env when you know it.
+      # a bare directive and nginx would refuse to start.
+      #
+      # The default is the range Docker's own bridge gateways fall in, and
+      # is usually correct. It is deliberately not the reverse proxy's
+      # address: Docker rewrites the source of anything arriving through a
+      # published port, so edge sees its gateway rather than whoever
+      # connected. Naming the proxy instead is the natural guess and
+      # silently disables the whole mechanism -- SETUP.md shows how to read
+      # the address and how to check which way the limit is counting.
       MYTUBE_TRUSTED_PROXY: "${MYTUBE_TRUSTED_PROXY:-172.16.0.0/12}"
     depends_on:
       api:

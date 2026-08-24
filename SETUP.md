@@ -65,7 +65,7 @@ marked "must be generated".
 | `MYTUBE_WARM_BYTES` | Cache warm-up limit in bytes | `268435456` (half of the 512m zone) | Optional |
 | `MYTUBE_PUBLIC_BASE_URL` | The address viewers reach, scheme included, no trailing slash | — | **Required — the service refuses to start without it.** Written into every copied link, so it is never derived from a browser's own address bar |
 | `MYTUBE_ADMIN_FQDN` | The bare hostname the operator interface answers on — no scheme, no trailing slash. Must differ from `MYTUBE_PUBLIC_BASE_URL`'s own host | — | **Required — the interface container refuses to start without it.** `docker compose logs api` names `admin_fqdn` in a validation error: `Field required` if the line is missing from `.env` entirely, `must not be empty` if it is present but blank |
-| `MYTUBE_TRUSTED_PROXY` | The address edge believes a forwarded client address from, so the login rate limit counts real callers instead of counting your reverse proxy once for everybody. An address or CIDR | `172.16.0.0/12` (the private range Docker publishes host traffic from) | Optional — narrow it to your proxy's own address if you know it. A value that does not match the true peer is harmless: the forwarded header is ignored and the limit counts everyone as one |
+| `MYTUBE_TRUSTED_PROXY` | The address edge believes a forwarded client address from, so the login rate limit counts real callers instead of counting your reverse proxy once for everybody. An address or CIDR | `172.16.0.0/12` (the range Docker's own bridge gateways fall in) | Optional, and the default is usually right. **Not your proxy's address** — Docker rewrites the source of anything arriving through a published port, so edge sees its bridge gateway instead. See "Reverse proxy" for how to read the address and check which way it is counting |
 | `MYTUBE_SHARE_HOST_PATH` | Host path of the mounted network share, bind-mounted read-only into `api` at `/share` | `./ingest` | Optional |
 | `MYTUBE_STORAGE_QUOTA_BYTES` | Configured storage quota in bytes, `0` means no quota enforced — used only for the interface's usage figure | `0` | Optional |
 
@@ -471,12 +471,32 @@ server {
 }
 ```
 
-Edge only believes that header from an address you have named, so a client
-cannot forge its own. The default trusts the private range Docker publishes
-host traffic from, which is how the proxy above reaches it. If your proxy
-reaches edge from somewhere else, set `MYTUBE_TRUSTED_PROXY` to its address
-in `.env`; a value that does not match simply means the header is ignored
-and the limit goes back to counting everyone as one.
+Edge only believes that header from an address you have named in
+`MYTUBE_TRUSTED_PROXY`, so a client cannot forge its own.
+
+**Name the address edge actually sees, which is almost certainly not your
+proxy's.** Docker rewrites the source address of anything arriving through a
+published port, so the container sees its own bridge gateway no matter where
+the request came from — setting this to the proxy's LAN address is the
+natural guess and it does not work. The default covers the range those
+gateways fall in, and is usually the right answer. To see the address for
+yourself:
+
+```bash
+docker network inspect src_edge_net \
+  --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+```
+
+A value that does not match costs nothing but the fix: the header is
+ignored, and the rate limit goes back to counting everyone as one. To check
+which it is doing, make a few requests and look at what the refusal names:
+
+```bash
+docker compose logs edge | grep "limiting requests" | tail -1
+```
+
+`client:` is the address the limit is counting. If it shows the gateway
+address rather than a real caller, the header is not being believed.
 
 **Required check: the external proxy must not buffer the response, and
 must pass `Range` through untouched.** This is the classic pitfall of two
