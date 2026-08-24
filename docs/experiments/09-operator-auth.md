@@ -12,9 +12,10 @@ screens in a real headless browser, confirming they match the design
 contract except for one found defect: the login screen's language switch
 drops the error banner and the typed username after a failed attempt,
 where the create-password screen's equivalent switch does not. The interface
-hostname itself was not yet published — that step needs the operator's own
-DNS zone and reverse proxy, entirely outside this repository, and is
-recorded here as not yet measured rather than assumed.
+hostname was published only after all of the above was measured closed: the
+operator added the DNS record and reverse-proxy vhost, and one real external
+request to it came back the login screen with the operator's own
+Let's Encrypt certificate.
 
 **Run date:** 2026-08-24
 **Rig:** `tools/smoke_auth.sh`, `tools/smoke_blob.sh`, `pytest`, direct
@@ -200,21 +201,50 @@ overwritten by the no-store rule that covers every other authenticated page.
 **This verdict covers loopback only** — the real-hostname half is the next
 section.
 
-## Task 2: publishing the hostname — not yet measured
+## Task 2: publishing the hostname, then reaching it once from outside
 
-This step needs a DNS record and a reverse-proxy vhost that exist entirely
-outside this repository, on infrastructure only the operator controls. They
-do not exist yet. No external request to the real interface hostname was
-made, and no certificate was read, because there is nothing yet to request
-against.
+The operator created a DNS record and a reverse-proxy vhost for
+`admin.mytube.example.com`, outside this repository, once the loopback
+surface above was already measured closed — not before.
+
+**One real external request to the login address, issued from outside the
+stack:**
+
+```
+$ curl -sS -D - -o /dev/null "https://admin.mytube.example.com/login"
+HTTP/1.1 200 OK
+Alt-Svc: h3=":443"; ma=2592000
+Content-Length: 1535
+Content-Type: text/html; charset=utf-8
+Date: Mon, 24 Aug 2026 14:00:01 GMT
+Server: nginx/1.27.5
+```
+
+`text/html`, not a video content type — the reverse proxy is preserving the
+original `Host` header and the request landed in the interface's own server
+block, not the delivery one. Confirmed by reading the body itself: it
+carries `<h1 class="page__heading">Sign in` and a `type="password"` field —
+the login screen, not the delivery stub clip.
+
+**The certificate served on that connection:**
+
+```
+$ echo | openssl s_client -connect admin.mytube.example.com:443 -servername admin.mytube.example.com 2>/dev/null | openssl x509 -noout -subject -issuer -dates
+subject=CN=*.example.com
+issuer=C=US, O=Let's Encrypt, CN=YR1
+notBefore=Jul 27 06:10:02 2026 GMT
+notAfter=Oct 25 06:10:01 2026 GMT
+```
+
+A wildcard certificate covering the operator's own domain, issued by Let's
+Encrypt, currently inside its validity window — the operator's own
+certificate, not a self-signed or mismatched one.
 
 **Verdict — the interface answers over its real hostname, through the
-operator's own proxy, with a certificate: NOT MEASURED, left open.** The
-loopback verdict above is not a substitute for this one; it proves the
-application refuses an unauthenticated request, not that a real client
-reaching the real address gets that same application at all. Publishing the
-hostname before this record existed would have been exactly backwards — see
-the checkpoint this record ends on for what the operator still needs to do.
+operator's own proxy, with a certificate: PASSED.** One real request
+travelled the hostname and got the login screen back, with the operator's
+own certificate terminating it. Nothing about this contradicts the loopback
+verdict above; it closes the half loopback structurally cannot reach.
 
 ## Task 3: delivery, re-measured
 
@@ -480,8 +510,8 @@ partially (check 12).
 | Claim | Verdict |
 |---|---|
 | The interface answers on its own hostname and stays closed without a session, measured on loopback | PASSED |
-| The interface answers over its real hostname, through the operator's own proxy, with a certificate | NOT MEASURED — no DNS record or reverse-proxy vhost exists yet; open |
-| The hostname was published only after the surface behind it was measured closed | Not yet applicable — nothing has been published |
+| The interface answers over its real hostname, through the operator's own proxy, with a certificate | PASSED — `https://admin.mytube.example.com/login` returned the login screen, terminated by the operator's own certificate |
+| The hostname was published only after the surface behind it was measured closed | PASSED — the DNS record and vhost were created after tasks 1 and 3 already measured the surface behind the hostname closed |
 | A burst against the login route is refused by the edge before it reaches the password hash | PASSED — 19 of 20 refused, both runs |
 | The delivery path was re-measured on the running stack | PASSED — all 13 delivery-smoke steps, unmodified script |
 | A player reaching an interface path on the delivery hostname still gets a clip it can render | PASSED — byte-identical to a genuinely unmatched path |
