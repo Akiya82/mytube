@@ -205,14 +205,30 @@ async def logout_route(request: Request):
     reach.
     """
     raw = request.cookies.get(auth.SESSION_COOKIE_NAME)
-    if raw is not None:
-        pool = request.app.state.db_pool
-        async with pool.acquire() as conn:
-            await queries.delete_session(conn, auth.hash_session_token(raw))
-    logger.info("operator signed out")
 
+    # The response is built before the delete is attempted and returned
+    # whatever the database does. An unreachable database used to raise
+    # straight out of here into a 500, which left the browser holding the
+    # cookie the operator had just asked to be rid of -- sign-out failing
+    # open, in the one direction it must never fail. Clearing the cookie
+    # regardless is strictly better: the row may outlive the click, but it
+    # carries an expiry and the sweep collects it, whereas a cookie left in
+    # a browser nobody is watching does not.
     response = RedirectResponse("/login?signed_out=1", status_code=302)
     response.delete_cookie(auth.SESSION_COOKIE_NAME, path="/")
+
+    if raw is not None:
+        pool = request.app.state.db_pool
+        try:
+            async with pool.acquire(timeout=auth.ACQUIRE_TIMEOUT_SECONDS) as conn:
+                await queries.delete_session(conn, auth.hash_session_token(raw))
+        except (asyncpg.PostgresError, OSError, asyncio.TimeoutError):
+            # Loud, because the session really does stay live server-side
+            # until it expires, and that is worth an operator knowing.
+            logger.exception("sign-out could not delete the session row")
+            return response
+
+    logger.info("operator signed out")
     return response
 
 

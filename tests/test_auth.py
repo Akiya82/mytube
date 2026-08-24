@@ -822,3 +822,69 @@ async def test_the_cookie_lifetime_moves_when_the_window_does(
     assert "set-cookie" in first_resp.headers
     assert after_second == after_first
     assert "set-cookie" not in second_resp.headers
+
+
+@pytest.mark.integration
+async def test_setup_refuses_a_blank_operator_name(
+    app_pool, auth_tables, no_operator, integration_client
+):
+    """The schema admits exactly one operator, so a blank name is not a row
+    somebody corrects later -- it is the only credential the deployment
+    will ever have, with no name to sign in under and no second account to
+    fix it from. The form comes back carrying its error instead, and no
+    operator is created.
+    """
+    async with integration_client:
+        resp = await integration_client.post(
+            "/setup",
+            data={
+                "token": "test-setup-token",
+                "username": "   ",
+                "password": "a genuinely long passphrase",
+                "password_confirm": "a genuinely long passphrase",
+            },
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 200
+    assert "set-cookie" not in resp.headers
+    # Still the form, not the redirect a successful create would send.
+    assert 'type="password"' in resp.text
+
+
+@pytest.mark.integration
+async def test_signing_out_clears_the_cookie_even_when_the_database_is_unreachable(
+    app_pool, auth_tables, signed_in, integration_client, monkeypatch
+):
+    """Sign-out must not fail open. The delete used to raise straight out of
+    the handler into a 500, which left the browser holding the very cookie
+    the operator had just asked to be rid of -- the one direction this must
+    never fail. The row can outlive the click, because it carries an expiry
+    and the sweep collects it; a cookie sitting in a browser nobody is
+    watching does not.
+    """
+    called = []
+
+    async def _unreachable(*args, **kwargs):
+        called.append(True)
+        raise OSError("database is unreachable")
+
+    monkeypatch.setattr(queries, "delete_session", _unreachable)
+
+    async with integration_client:
+        resp = await integration_client.post(
+            "/logout",
+            headers={"Cookie": f"{auth.SESSION_COOKIE_NAME}=a-cookie-the-browser-still-holds"},
+            follow_redirects=False,
+        )
+
+    # Without this the test would pass trivially on a request that never
+    # carried a session cookie, proving nothing about the failure path.
+    assert called, "the delete was never attempted -- the test proved nothing"
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/login?signed_out=1"
+    assert any(
+        auth.SESSION_COOKIE_NAME in value and "Max-Age=0" in value
+        for value in resp.headers.get_list("set-cookie")
+    ), resp.headers.get_list("set-cookie")
