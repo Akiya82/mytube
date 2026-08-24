@@ -208,6 +208,17 @@ button.site-nav__link {
   margin: 0 0 var(--space-2xl);
 }
 
+/* The create-password screen's one-sentence intro, directly under the
+   heading (02.1-UI-SPEC.md Screen B) -- Body size, muted, the one place
+   this project needs a muted paragraph at 16px rather than the 14px
+   every existing muted note (.audio-note, .cost-line, .check-page__intro)
+   already uses. */
+.page__intro {
+  font-size: var(--text-body-size);
+  color: var(--text-muted);
+  margin: 0 0 var(--space-md);
+}
+
 .breadcrumb {
   display: flex;
   align-items: center;

@@ -1,13 +1,20 @@
-"""Operator auth: GET/POST /login, POST /logout.
+"""Operator auth: GET/POST /login, POST /logout, GET/POST /setup.
 
-The create-password route (`GET`/`POST /setup`) is plan 05's own module
-addition -- nothing here assumes it exists beyond the one first-run check
-below, which plan 05's own helper replaces.
+`/setup` is the first-run counterpart to `/login`: reachable only via the
+one-time token `orchestrator.main`'s lifespan prints to the container log
+when the credential table is empty, it either renders the create-password
+form or one of two fixed banners -- "no account yet, here is where the
+link is" or "this link is no longer valid" -- keyed on nothing but
+whether an operator already exists (see setup_form_route's own
+docstring).
 """
 import asyncio
 import logging
+import secrets
+import uuid
 from urllib.parse import quote
 
+import asyncpg
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
@@ -48,16 +55,28 @@ async def login_form_route(request: Request):
         # Never shown to somebody already signed in.
         return RedirectResponse("/library", status_code=302)
 
-    # First-run branch -- a placeholder, plan 05's spot. On a fresh stack
-    # there is no credential to check a password against, so this form
-    # would be a deadlock -- the most likely address a person types from
-    # memory or autocomplete. The check belongs here rather than in the
-    # gate: moving the gate's own first-run branch above its public-path
-    # check would put it in front of the static assets and the language
-    # route too, and one of the two orderings there is load-bearing for
-    # delivery (see auth.auth_gate). Plan 05 owns the cached
-    # `app.state.operator_exists` flag this will read; left a no-op here
-    # so plan 05 changes one branch rather than re-reading this route.
+    # First-run branch. On a fresh stack there is no credential to check a
+    # password against, so this form would be a deadlock -- the most
+    # likely address a person types from memory or autocomplete. The
+    # check belongs here rather than in the gate: moving the gate's own
+    # first-run branch above its public-path check would put it in front
+    # of the static assets and the language route too, and one of the two
+    # orderings there is load-bearing for delivery (see auth.auth_gate).
+    #
+    # Gated on the *absence* of a `next` value, not on first-run alone.
+    # `next` only ever arrives here two ways: the gate's own redirect
+    # (`/login?next=...`), which never fires on first run because the gate
+    # redirects a non-public path straight to `/setup` before it would
+    # ever build a `/login` redirect -- or a deliberate direct visit
+    # carrying one. Either way, a `next` present means this exact URL is
+    # already the operator's destination in hand (an existing screen's
+    # own "keep the query string" behaviour, exercised with no operator
+    # present by this suite's own no_operator-fixtured tests), and this
+    # branch leaves that alone rather than redirecting it away.
+    if request.query_params.get("next") is None and not await auth.operator_exists_cached(
+        request
+    ):
+        return RedirectResponse("/setup", status_code=302)
 
     next_url = auth.safe_next(request.query_params.get("next"))
     return render(
@@ -178,4 +197,191 @@ async def logout_route(request: Request):
 
     response = RedirectResponse("/login?signed_out=1", status_code=302)
     response.delete_cookie(auth.SESSION_COOKIE_NAME, path="/")
+    return response
+
+
+def _setup_token_valid(request: Request, token: str) -> bool:
+    """Constant-time, crash-proof comparison of a submitted token against
+    `app.state.setup_token` (T-02.1-83).
+
+    `token` is compared as **bytes**, never as `str`:
+    `secrets.compare_digest` on two `str` requires both to be ASCII-only
+    and raises `TypeError` otherwise, so a submission carrying a
+    non-ASCII character (`/setup?token=ü`) would be a `500` on the first
+    page of every fresh deploy, reachable by anyone who can type. Encoding
+    first turns every input into a comparison instead of an exception and
+    loses nothing: the generated token is ASCII, so a non-ASCII submission
+    is simply wrong.
+
+    `None` for the stored token (no lifespan has run, or a transport that
+    never ran one) makes every submission invalid -- closed is the right
+    answer, not an exception.
+    """
+    stored = getattr(request.app.state, "setup_token", None)
+    if stored is None:
+        return False
+    return secrets.compare_digest(token.encode("utf-8"), stored.encode("utf-8"))
+
+
+@router.get("/setup")
+async def setup_form_route(request: Request):
+    """Two states, keyed on one thing: whether an operator exists. Not
+    three, and not keyed on the token -- that is what makes the security
+    contract hold and the first run survivable at the same time.
+
+    **An operator exists.** The spent-link banner renders for every
+    request, whatever token was submitted and whether or not one was. A
+    wrong token and an arrival after the account already exists are
+    indistinguishable on purpose (T-02.1-28) -- checked first, before the
+    token is even read, so the two cases share not just their output but
+    their code path.
+
+    **No operator yet.** Either the token opens the form, or the page
+    tells the operator where the current link is (the first-arrival
+    state) -- this is what a bare `/setup` used to answer with the
+    spent-link banner before this route existed, telling a brand-new
+    operator on their very first minute with the product that their link
+    was already spent, with no other way in.
+    """
+    # current_url pinned to bare /setup for both banner states, not the
+    # request's own query string: neither state's copy depends on the
+    # token, and test_the_setup_page_looks_the_same_once_an_account_exists
+    # pins that a wrong token and no token at all render byte-identical
+    # bodies -- which the language switcher's next= link would otherwise
+    # break, since templates.render()'s own default current_url embeds
+    # whatever query string this exact request carried.
+    if await auth.operator_exists_cached(request):
+        return render(
+            request, "setup.html", minimal_header=True, setup_state="spent",
+            current_url="/setup",
+        )
+
+    token = request.query_params.get("token") or ""
+    if not _setup_token_valid(request, token):
+        return render(
+            request, "setup.html", minimal_header=True, setup_state="needed",
+            current_url="/setup",
+        )
+
+    return render(
+        request,
+        "setup.html",
+        minimal_header=True,
+        setup_state="form",
+        token=token,
+        min_password_length=auth.MIN_PASSWORD_LENGTH,
+    )
+
+
+@router.post("/setup")
+async def setup_submit_route(
+    request: Request,
+    token: str = Form(""),
+    username: str = Form(""),
+    password: str = Form(""),
+    password_confirm: str = Form(""),
+):
+    """Re-validates exactly as the GET does, in the same order: operator
+    exists first, then the token. Any state other than "no operator and a
+    valid token" applies the constant failed-attempt delay, logs a
+    warning, and renders the matching banner with status 200 -- the
+    spent-link and first-arrival bodies are each identical between GET and
+    POST, in status and in timing, so a stranger probing the address
+    learns nothing they could not learn by loading the page.
+    """
+    if await auth.operator_exists_cached(request):
+        await asyncio.sleep(auth.FAILED_ATTEMPT_DELAY_SECONDS)
+        logger.warning("setup submission refused: an operator already exists")
+        return render(
+            request, "setup.html", status_code=200, minimal_header=True,
+            setup_state="spent", current_url="/setup",
+        )
+
+    if not _setup_token_valid(request, token):
+        await asyncio.sleep(auth.FAILED_ATTEMPT_DELAY_SECONDS)
+        logger.warning("setup submission refused: invalid or missing token")
+        return render(
+            request, "setup.html", status_code=200, minimal_header=True,
+            setup_state="needed", current_url="/setup",
+        )
+
+    # A POST's state lives in the body, not the query string -- see
+    # templates.render()'s own docstring on why the language switcher
+    # needs an explicit current_url here: the computed one would be bare
+    # /setup, and switching language after a mismatch or a too-short
+    # password would destroy the one-time link and land the operator on
+    # the spent-link banner instead of their own form again.
+    current_url = f"/setup?token={quote(token, safe='')}"
+
+    if password != password_confirm:
+        return render(
+            request,
+            "setup.html",
+            status_code=200,
+            minimal_header=True,
+            setup_state="form",
+            token=token,
+            username_value=username,
+            min_password_length=auth.MIN_PASSWORD_LENGTH,
+            error_key="setup.error.password_mismatch",
+            current_url=current_url,
+        )
+
+    if len(password) < auth.MIN_PASSWORD_LENGTH:
+        return render(
+            request,
+            "setup.html",
+            status_code=200,
+            minimal_header=True,
+            setup_state="form",
+            token=token,
+            username_value=username,
+            min_password_length=auth.MIN_PASSWORD_LENGTH,
+            error_key="setup.error.password_too_short",
+            current_url=current_url,
+        )
+
+    operator_id = uuid.uuid4()
+    password_hash = await auth.hash_password(password)
+    raw, token_hash = auth.new_session_token()
+
+    pool = request.app.state.db_pool
+    try:
+        async with pool.acquire() as conn:
+            await queries.create_operator(conn, operator_id, username, password_hash)
+            await queries.create_session(
+                conn, token_hash, operator_id, auth.SESSION_LIFETIME_SECONDS, password_hash
+            )
+    except asyncpg.exceptions.UniqueViolationError:
+        # Two submissions at once, or a credential created from the
+        # command line between this request's check above and this
+        # insert (T-02.1-84). The database now admits exactly one
+        # operator by constraint -- this is what a genuine race looks
+        # like, and the constraint is the truth the fast check above only
+        # approximates.
+        request.app.state.operator_exists = True
+        request.app.state.setup_token = None
+        logger.warning("setup submission lost a race: an operator was created concurrently")
+        return render(
+            request, "setup.html", status_code=200, minimal_header=True,
+            setup_state="spent", current_url="/setup",
+        )
+
+    # Consumed the instant it works, in process, with no extra query on
+    # the hot path ever again -- an operator does exist now, whichever
+    # process's request this was.
+    request.app.state.operator_exists = True
+    request.app.state.setup_token = None
+    logger.info("operator account %r created", username)
+
+    response = RedirectResponse("/library", status_code=302)
+    response.set_cookie(
+        key=auth.SESSION_COOKIE_NAME,
+        value=raw,
+        max_age=auth.SESSION_LIFETIME_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
     return response

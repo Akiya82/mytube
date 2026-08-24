@@ -100,11 +100,20 @@ document
 // deliberately minimal mechanism -- keyboard- and screen-reader-operable
 // for free, no custom modal. A form carrying data-confirm blocks its own
 // submit unless the operator accepts the dialog.
+//
+// data-submit-once (the create-password form): the setup token is
+// consumed the instant the first submission succeeds, so a double-click
+// sends a second POST carrying a now-spent token -- the browser abandons
+// the first navigation and shows the second response, and the operator
+// ends up looking at "this link is no longer valid" seconds after their
+// account was in fact created. Disabling the button on submit is the fix;
+// nothing on the server can tell that second request apart from a
+// stranger replaying the token.
 document.addEventListener("submit", (event) => {
   const message = event.target.getAttribute("data-confirm");
-  if (message && !confirm(message)) {
-    event.preventDefault();
-  }
+  if (message && !confirm(message)) return event.preventDefault();
+  if (event.target.hasAttribute("data-submit-once"))
+    event.target.querySelector('[type="submit"]').disabled = true;
 });
 
 // Delete countdown tick (D-62): computed every second from the
