@@ -136,32 +136,48 @@ async def login_submit_route(
     if operator_id is not None:
         return RedirectResponse(auth.safe_next(next_value), status_code=302)
 
+    # Three separate steps on purpose: read the credential, release the
+    # connection, verify, take a connection again to insert the session.
+    # The verify in the middle deliberately costs the better part of a
+    # second, and the pool it would otherwise hold is the same pool
+    # `GET /v/{slug}` draws from, so holding a connection across it turns a
+    # burst of unauthenticated login attempts into a resource attack on
+    # delivery -- the exact threat the edge's rate-limit zone was written
+    # for, arriving by a different road. `setup_submit_route` already
+    # hashes before it acquires, for the same reason.
+    #
+    # Splitting the connection costs nothing in correctness: the
+    # read-then-insert race is closed inside `create_session`'s single
+    # statement by `FOR SHARE OF c`, not by holding one connection across
+    # both halves.
     pool = request.app.state.db_pool
-    async with pool.acquire() as conn:
+    async with pool.acquire(timeout=auth.ACQUIRE_TIMEOUT_SECONDS) as conn:
         row = await queries.credential_by_username(conn, username)
-        if row is None:
-            # Nothing to verify against -- run the same-cost dummy verify
-            # so "no such user" is not measurably faster than "wrong
-            # password" (T-02.1-21).
-            await auth.verify_absent_credential()
-            ok = False
-        else:
-            ok = await auth.verify_password(row["password_hash"], password)
 
-        if not ok:
-            return await _reject_login(request, username, next_value)
+    if row is None:
+        # Nothing to verify against -- run the same-cost dummy verify
+        # so "no such user" is not measurably faster than "wrong
+        # password" (T-02.1-21).
+        await auth.verify_absent_credential()
+        ok = False
+    else:
+        ok = await auth.verify_password(row["password_hash"], password)
 
-        raw, token_hash = auth.new_session_token()
+    if not ok:
+        return await _reject_login(request, username, next_value)
+
+    raw, token_hash = auth.new_session_token()
+    async with pool.acquire(timeout=auth.ACQUIRE_TIMEOUT_SECONDS) as conn:
         created = await queries.create_session(
             conn, token_hash, row["id"], auth.SESSION_LIFETIME_SECONDS, row["password_hash"]
         )
-        if not created:
-            # The credential changed between the read above and this
-            # insert -- a password reset landing during the second or so
-            # verification takes. From the operator's side it is not a
-            # special case: the password they typed is no longer the
-            # password (T-02.1-80).
-            return await _reject_login(request, username, next_value)
+    if not created:
+        # The credential changed between the read above and this
+        # insert -- a password reset landing during the second or so
+        # verification takes. From the operator's side it is not a
+        # special case: the password they typed is no longer the
+        # password (T-02.1-80).
+        return await _reject_login(request, username, next_value)
 
     logger.info("operator %r signed in", username)
     response = RedirectResponse(auth.safe_next(next_value), status_code=302)
@@ -347,7 +363,7 @@ async def setup_submit_route(
 
     pool = request.app.state.db_pool
     try:
-        async with pool.acquire() as conn:
+        async with pool.acquire(timeout=auth.ACQUIRE_TIMEOUT_SECONDS) as conn:
             await queries.create_operator(conn, operator_id, username, password_hash)
             await queries.create_session(
                 conn, token_hash, operator_id, auth.SESSION_LIFETIME_SECONDS, password_hash
