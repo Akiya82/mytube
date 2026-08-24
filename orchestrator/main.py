@@ -17,6 +17,8 @@ with the threat model and the reasons for what they do not attempt.
 import asyncio
 import contextlib
 import logging
+import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -119,6 +121,39 @@ async def _sweep_preparing_titles(pool: asyncpg.Pool, add_queue: AddQueue) -> No
 async def lifespan(app: FastAPI):
     app.state.db_pool = await create_pool()
     app.state.add_queue = AddQueue()
+
+    async with app.state.db_pool.acquire() as conn:
+        app.state.operator_exists = await queries.operator_exists(conn)
+    app.state.operator_exists_checked_at = time.monotonic()
+
+    # The setup token authorises exactly one act -- creating the first
+    # operator credential -- and is minted fresh on every start that finds
+    # an empty table, so a restart invalidates whatever link was printed
+    # before it. It lives only in this process, with no table and no
+    # file, because a secret that outlives the one act it authorises is a
+    # secret somebody has to remember to delete. It is cleared the instant
+    # the credential is created (orchestrator/web/routes_auth.py) or the
+    # instant this process notices one was created elsewhere
+    # (auth.operator_exists_cached).
+    #
+    # It still travels three places this repository does not fully close
+    # on its own: the query string lands in the edge's access log -- a
+    # volume this container mounts -- unless that log is configured not to
+    # record query strings, which the edge configuration does; in the
+    # operator's own reverse-proxy log, if one sits in front of this
+    # stack, which is outside this repository; and in the browser's own
+    # history. The token's one-time nature is what bounds the other two:
+    # whichever log or history entry survives, the link it recorded stops
+    # working the moment the account exists.
+    app.state.setup_token = None
+    if not app.state.operator_exists:
+        app.state.setup_token = secrets.token_urlsafe(32)
+        logger.warning(
+            "No operator account exists yet. Open this address once to "
+            "create one: https://%s/setup?token=%s",
+            get_settings().admin_fqdn,
+            app.state.setup_token,
+        )
 
     await _sweep_preparing_titles(app.state.db_pool, app.state.add_queue)
 

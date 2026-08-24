@@ -241,11 +241,23 @@ async def app_pool(migrated_db_url, monkeypatch):
     `min_size=1, max_size=5`: the default is ten connections per pool, and
     this fixture is created fresh per test, so ten would multiply quickly
     against the one testcontainers Postgres this whole session shares.
+
+    Also resets `operator_exists`/`operator_exists_checked_at` to the
+    "never checked" state -- the same reason `db_pool` needs resetting.
+    `operator_exists_cached`'s own caching means a real deployment's
+    lifespan queries the table exactly once at startup and trusts that
+    answer (or the negative one, for a bounded interval) from then on;
+    `ASGITransport` never runs that lifespan, so without this reset the
+    flag would carry whatever a previous test in this same session left
+    behind -- or the `getattr` default of "an operator exists" -- instead
+    of asking this test's own freshly migrated/truncated table.
     """
     from orchestrator.main import app
 
     pool = await asyncpg.create_pool(migrated_db_url, min_size=1, max_size=5)
     monkeypatch.setattr(app.state, "db_pool", pool, raising=False)
+    monkeypatch.setattr(app.state, "operator_exists", False, raising=False)
+    monkeypatch.setattr(app.state, "operator_exists_checked_at", 0.0, raising=False)
     try:
         yield pool
     finally:

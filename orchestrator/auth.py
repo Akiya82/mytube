@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import logging
 import secrets
+import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
@@ -103,6 +104,90 @@ FAILED_ATTEMPT_DELAY_SECONDS = 1.0
 # forever by default; without a bound a saturated pool would leave a
 # request queued on an open socket with nothing ever returning (D-79).
 ACQUIRE_TIMEOUT_SECONDS = 5.0
+
+# --- First run (D-85) -------------------------------------------------
+
+# The floor the create-password screen enforces. Argon2 does the heavy
+# lifting against brute force, so this number exists to refuse the
+# trivially guessable rather than to enforce a complexity policy --
+# deliberately no strength meter and no live complexity checklist.
+MIN_PASSWORD_LENGTH = 8
+
+# How long a *negative* answer ("no operator yet") is trusted before
+# operator_exists_cached re-queries. See that function's own docstring for
+# why only the negative answer needs bounding at all.
+FIRST_RUN_RECHECK_SECONDS = 5.0
+
+
+async def operator_exists_cached(request) -> bool:
+    """Whether the credential table has its one row, cached on
+    `request.app.state` so the gate does not run a query on every request
+    once an operator exists.
+
+    Reads the flag as `getattr(request.app.state, "operator_exists", True)`
+    and the timestamp as
+    `getattr(request.app.state, "operator_exists_checked_at", 0.0)`.
+
+    **The defaults are load-bearing, and `True` is deliberate.**
+    `orchestrator.main`'s `lifespan` sets both attributes, but the
+    in-process test transport this whole suite drives never runs the
+    lifespan -- without these defaults every gated unit test written a
+    wave earlier would raise an `AttributeError` the moment this function
+    is called, and with a `False` default they would all see the
+    create-password redirect instead of the login redirect they assert.
+    `True` is also the safe direction for a real process that somehow
+    answers a request without its lifespan having run: it means "an
+    operator exists", which sends the caller to a login form that refuses
+    them, whereas `False` would offer a stranger the create-password page.
+    A test that wants the first-run branch asks for it explicitly through
+    the `no_operator` fixture, which sets the flag false **and** stamps
+    the timestamp so a unit test with no real pool never falls into the
+    re-query below.
+
+    This is a **negative** cache only. The value only ever moves from
+    false to true, once, so caching `True` forever is correct and removes
+    a query from the hot path for the life of the process. Caching `False`
+    forever would not be: the credential can be created from the
+    in-container CLI, in a different process, and this function is the
+    only thing that ever notices -- without the re-check the interface
+    would go on redirecting to the setup page until someone restarted the
+    container. Re-checking on a short interval bounds the cost to one
+    query every few seconds no matter how many scanners are knocking
+    during first run, which is exactly the case the caching was for.
+
+    When the re-query comes back true, this also clears
+    `app.state.setup_token`. The token is minted at process start against
+    an empty table and lives for the life of the process; the credential
+    can be created from a different process (the CLI), and this is the
+    only place that ever notices. Without the clear, an operator created
+    from the command line would leave a live setup token behind -- printed
+    in the log for anyone who has read the log -- that still opens the
+    create-password page for as long as the container keeps running.
+    """
+    state = request.app.state
+    if getattr(state, "operator_exists", True):
+        return True
+
+    checked_at = getattr(state, "operator_exists_checked_at", 0.0)
+    if time.monotonic() - checked_at < FIRST_RUN_RECHECK_SECONDS:
+        return False
+
+    # Stamped before the query, not after -- a failed or slow query must
+    # not turn into a re-query on every single request until it succeeds,
+    # which is exactly the load the interval exists to bound.
+    state.operator_exists_checked_at = time.monotonic()
+    try:
+        async with state.db_pool.acquire(timeout=ACQUIRE_TIMEOUT_SECONDS) as conn:
+            exists = await queries.operator_exists(conn)
+    except (asyncpg.PostgresError, OSError, TimeoutError):
+        logger.exception("operator-exists recheck failed, staying in first-run state")
+        return False
+
+    state.operator_exists = exists
+    if exists:
+        state.setup_token = None
+    return exists
+
 
 # Explicit cost parameters rather than the library defaults, which are
 # platform-dependent. A starting point measured against nothing yet -- a
@@ -323,13 +408,15 @@ async def auth_gate(request, call_next):
        reason to arrive on another hostname, and a bypass wide enough to
        serve the login screen to a stranger's hostname is wider than the
        refusal that was agreed.
-    4. First-run branch -- a placeholder. On a fresh stack with no
-       operator row, every non-public path should route to `/setup`
-       instead of `/login`; the cached `app.state.operator_exists` flag
-       plan 05 wires up in `main.py`'s lifespan is what this step reads
-       once that lands. Left as a single, clearly marked no-op here so
-       plan 05 changes one branch rather than re-reading the whole
-       function.
+    4. First-run branch. On a fresh stack with no operator row, every
+       non-public path routes to `/setup` instead of falling through to
+       the session check below -- a `/login` a fresh deploy cannot pass
+       (there is no credential to check a password against) would
+       otherwise be the most likely address a person types from memory or
+       autocomplete, and this is what turns that into the create-password
+       page instead of a dead end. `operator_exists_cached` is the cache;
+       `/setup` itself is already in `PUBLIC_PATHS` and never reaches this
+       step.
     5. A valid session: `request.state.operator_id` is set, the route
        runs, and two things are applied to its response. A `Cache-Control:
        no-store`, but only via `setdefault` (a route that has an opinion
@@ -378,8 +465,8 @@ async def auth_gate(request, call_next):
     if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
 
-    # Step 4: first-run branch -- plan 05's spot. Intentionally a no-op
-    # until then; see the docstring above.
+    if not await operator_exists_cached(request):
+        return RedirectResponse("/setup", status_code=302)
 
     had_cookie = SESSION_COOKIE_NAME in request.cookies
     operator_id, renewed = await session_operator_id(request)
