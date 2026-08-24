@@ -4,6 +4,7 @@ Jinja2Templates directly.
 """
 import json
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -60,9 +61,24 @@ def humanize_seconds(seconds) -> str:
     return f"{hours} hour" + ("" if hours == 1 else "s")
 
 
+def urlencode_strict(value) -> str:
+    """Percent-encode `value` for embedding as a single query-string value.
+
+    Overrides Jinja2's own `urlencode` filter, which leaves `/` unescaped
+    (the right default for encoding a bare path) -- every caller of this
+    filter in this project embeds a *whole relative address*, path and
+    query string together, as the value of a single `next=` parameter.
+    Jinja's default would leave the embedded `?` and `/` unescaped and
+    produce a malformed nested query string; this escapes every reserved
+    character, matching `urllib.parse.quote(value, safe="")`.
+    """
+    return quote(str(value), safe="")
+
+
 _templates.env.filters["filesizeformat_binary"] = filesizeformat_binary
 _templates.env.filters["duration_hms"] = duration_hms
 _templates.env.filters["humanize_seconds"] = humanize_seconds
+_templates.env.filters["urlencode"] = urlencode_strict
 
 
 def resolve_lang(request: Request) -> str:
@@ -83,19 +99,38 @@ def translator(lang: str):
 
 
 def render(request: Request, template_name: str, status_code: int = 200, **context):
-    """Render `template_name`, injecting `t`, `lang`, and `public_base_url`
-    fresh for this request. Built per call rather than stored on
-    `_templates.env.globals` -- a shared mutable global would race under
-    concurrent requests carrying different language cookies.
+    """Render `template_name`, injecting `t`, `lang`, `public_base_url`, and
+    `current_url` fresh for this request. Built per call rather than
+    stored on `_templates.env.globals` -- a shared mutable global would
+    race under concurrent requests carrying different language cookies.
+
+    `current_url` is `request.url.path` plus `?` + the query string when
+    there is one -- the address the language switcher builds its `next=`
+    from (`base.html`). **It is placed before `**context`, not after, and
+    that ordering is the feature:** a route that passes `current_url=`
+    explicitly overrides the computed value. Exactly two routes need to --
+    the login route's and the setup route's own failure branches. The
+    switcher works from the request's own address for every `GET`, but a
+    form that fails validation re-renders on a `POST`, and on a `POST` the
+    state lives in the body, not in the query string: the computed
+    `current_url` would then be bare `/login` or bare `/setup`, and
+    switching language after an error would throw away the destination
+    the operator was heading to, or destroy a one-time setup link and land
+    them on a banner that tells them their link is spent. Do not reorder
+    this dictionary for tidiness -- the override depends on this position.
     """
     from orchestrator.config import get_settings
 
     lang = resolve_lang(request)
     settings = get_settings()
+    current_url = request.url.path
+    if request.url.query:
+        current_url += "?" + request.url.query
     ctx = {
         "t": translator(lang),
         "lang": lang,
         "public_base_url": settings.public_base_url,
+        "current_url": current_url,
         **context,
     }
     return _templates.TemplateResponse(request, template_name, ctx, status_code=status_code)

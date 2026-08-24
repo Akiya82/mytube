@@ -7,9 +7,12 @@ onward): /static/ assets and the share router. The add worker (D-49/D-50)
 is a second lifespan-scoped background task, started and cancelled exactly
 the way the reaper task already is -- see orchestrator.media.queue.
 
-The one piece of middleware here is the cross-origin write refusal; its
-own docstring carries the threat model and the reasons for what it does
-not attempt.
+Two pieces of middleware run here, in this order (D-75, D-83):
+`auth.auth_gate`, registered last and therefore outermost, closes the
+interface by default; `reject_cross_origin_writes`, registered first and
+therefore innermost, refuses a same-site-cookie-bearing mutating request
+whose `Origin` names a different site. Both carry their own docstrings
+with the threat model and the reasons for what they do not attempt.
 """
 import asyncio
 import contextlib
@@ -20,15 +23,17 @@ from urllib.parse import urlsplit
 
 import asyncpg
 from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import create_pool, queries
 from orchestrator.media.queue import AddJob, AddQueue
 from orchestrator.reaper import run_reaper
 from orchestrator.resolve import router as resolve_router
 from orchestrator.storage import abort_dangling_multipart, delete_object
+from orchestrator.web.routes_auth import router as auth_router
 from orchestrator.web.routes_share import router as share_router
 from orchestrator.web.routes_titles import router as titles_router
 
@@ -140,40 +145,67 @@ UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 async def reject_cross_origin_writes(request, call_next):
     """Refuse a state-changing request whose `Origin` is some other site.
 
-    Every action on this interface is a plain form POST with no token, on
-    an origin the operator's browser can reach. That the port is
-    unauthenticated by decision is a statement about *reachability* -- it
-    does not follow that a page the operator happens to have open in
-    another tab should be able to enqueue adds or fire the delete routes.
-    A cross-origin form POST needs no CORS permission to be *sent*; only
-    the response is hidden from the attacker, and these routes are
-    interesting for their side effects, not their bodies.
+    The argument for keeping this middleware no longer rests on "one
+    operator, no accounts, and no login to fixate" -- this phase makes all
+    three false. It stays anyway, as a second layer: the session cookie is
+    `SameSite=Lax`, which browsers do not attach to a cross-site POST, so
+    cross-site request forgery is already closed by the session itself,
+    and per-form tokens threaded through nine templates would buy nothing
+    extra for their price. `Strict` was rejected because it breaks
+    arriving at the page the operator was originally going to after
+    signing in. This middleware's deliberate allowance of a mutating
+    request carrying no `Origin` at all stops being a hole for a different
+    reason than it used to be: the host port is gone (D-78) and the
+    application is closed by default (D-75), so such a request still needs
+    a valid session cookie to reach anything.
 
-    An `Origin` check is the whole mitigation, deliberately. A token
-    threaded through six templates plus the session state to validate it
-    against buys nothing extra here: there is one operator, no accounts,
-    and no login to fixate. Browsers attach `Origin` to every
-    cross-origin POST, which is exactly and only the traffic this needs to
-    stop.
+    **What it compares.** Not `Host` any more -- `auth.request_host`
+    instead, the same forwarded-host accessor `auth.auth_gate` uses, so
+    exactly one place in the application knows how a hostname reaches it
+    (T-02.1-56). Comparing against the literal `Host` header was inert
+    only by accident: it worked while the operator reached this process on
+    a published host port, where the browser's `Origin` and the `Host` it
+    sent agreed. Plan 03 retired that port and routes the interface
+    through `proxy_pass` to the `orchestrator` upstream block -- and nginx
+    derives the outgoing `Host` it sends upstream from the *upstream
+    block's own name*, not from the client's request. `Host` therefore
+    becomes the literal string `orchestrator` while a browser sends
+    `Origin: https://<the admin hostname>` on every same-site POST, and
+    the old comparison would refuse every one of them: the login itself
+    first, then every add, rename and delete -- `auth_gate` lets `/login`
+    through as public and this inner middleware would refuse it anyway.
+    Both sides of the comparison are normalised through
+    `auth.normalize_host`, which also fixes the case of an external proxy
+    on a non-default port, where `Origin` carries a port and a forwarded
+    host may not.
+
+    The alternative -- setting a real `Host` header on the admin `server`
+    block in nginx -- is also one line and would also work. It is not the
+    one chosen: it would put a security control's correctness into a
+    different file, in a different container, where nothing in this test
+    suite can reach it. The in-process test that proves this behaviour
+    runs through `ASGITransport` with no nginx anywhere, so with the nginx
+    fix that test would pass trivially and would not catch a regression
+    the next time this middleware is touched. Fixing it in the application
+    is what makes the test mean something.
 
     Two things it does not do, both on purpose:
 
     * A request with no `Origin` at all is allowed. That is curl, the CLI,
-      and non-browser clients -- and anything with network access to this
-      port can already do as it likes, by the same decision that leaves
-      the port unauthenticated. Refusing them would break the tooling
-      without closing anything.
+      and non-browser clients, and every such request still has to carry
+      a valid session cookie to reach anything now that the interface is
+      closed by default.
     * Only the host is compared, not the scheme. The threat is a
       *different site*, and an attacker cannot make their page's host
       match this one. Comparing schemes as well would turn a future
-      https-terminating proxy in front of this port into a blanket 403 on
-      every action, which is a worse failure than the one it prevents.
+      https-terminating proxy in front of this service into a blanket 403
+      on every action, which is a worse failure than the one it prevents.
     """
     if request.method in UNSAFE_METHODS:
         origin = request.headers.get("origin")
         if origin:
-            origin_host = urlsplit(origin).netloc
-            if origin_host != request.headers.get("host"):
+            origin_host = auth.normalize_host(urlsplit(origin).netloc)
+            if origin_host != auth.request_host(request):
                 logger.warning(
                     "refused a %s to %s from a foreign origin (%s)",
                     request.method,
@@ -187,14 +219,31 @@ async def reject_cross_origin_writes(request, call_next):
     return await call_next(request)
 
 
+# auth_gate must be registered last so it is outermost: Starlette inserts
+# each newly added @app.middleware("http") at the front of the stack, so
+# the last one registered runs first and last (D-83). See auth.auth_gate's
+# own docstring for the full ordering rationale.
+app.middleware("http")(auth.auth_gate)
+
 app.include_router(resolve_router)
 app.include_router(share_router)
 app.include_router(titles_router)
+app.include_router(auth_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/healthz")
-async def healthz() -> dict[str, str]:
-    async with app.state.db_pool.acquire() as conn:
-        await conn.fetchval("SELECT 1")
+async def healthz():
+    """Docker's healthcheck calls this on localhost inside the container
+    (D-79) -- a failure here has to be a deliberate "unhealthy" answer,
+    never an unhandled exception. A crash mid-request is not a status
+    Docker's healthcheck (or a test's ASGI transport) can read; a caught
+    failure returning 503 is.
+    """
+    try:
+        async with app.state.db_pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+    except Exception:
+        logger.exception("healthcheck: database check failed")
+        return Response(status_code=503)
     return {"status": "ok"}

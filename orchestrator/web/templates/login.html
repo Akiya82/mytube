@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import warning %}
+
+{% block title %}{{ t("login.heading") }} - MyTube{% endblock %}
+
+{% block heading %}{{ t("login.heading") }}{% endblock %}
+
+{% block content %}
+{% if notice_key %}
+  <div class="banner banner--info" role="status">
+    {{ warning(cls="banner__icon") }}
+    <div class="banner__text">
+      <p class="banner__body">{{ t(notice_key) }}</p>
+    </div>
+  </div>
+{% endif %}
+
+{% if error_key %}
+  <div class="banner banner--error" role="alert">
+    {{ warning(cls="banner__icon") }}
+    <div class="banner__text">
+      <p class="banner__body">{{ t(error_key) }}</p>
+    </div>
+  </div>
+{% endif %}
+
+<form class="add-form auth-card" method="post" action="/login">
+  <input type="hidden" name="next" value="{{ next_url }}">
+
+  <div class="form-field">
+    <label class="form-field__label" for="login-username">{{ t("login.field.username") }}</label>
+    <input
+      class="form-field__input"
+      type="text"
+      id="login-username"
+      name="username"
+      autocomplete="username"
+      value="{{ username_value | default('') }}"
+      required
+      {% if not error_key %}autofocus{% endif %}
+    >
+  </div>
+
+  <div class="form-field">
+    <label class="form-field__label" for="login-password">{{ t("login.field.password") }}</label>
+    <input
+      class="form-field__input"
+      type="password"
+      id="login-password"
+      name="password"
+      autocomplete="current-password"
+      required
+      {% if error_key %}autofocus{% endif %}
+    >
+  </div>
+
+  <button type="submit" class="btn btn--primary">{{ t("login.cta.submit") }}</button>
+</form>
+{% endblock %}

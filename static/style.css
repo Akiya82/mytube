@@ -115,9 +115,35 @@ button:focus-visible {
 }
 
 .site-nav__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   padding: var(--space-sm) var(--space-sm);
   text-decoration: none;
   font-weight: var(--text-heading-weight);
+}
+
+/* The sign-out control (base.html) is a <button> wrapped in its own
+   <form>, styled with .site-nav__link -- but .site-nav__link alone only
+   sets padding/text-decoration/weight, and a <button> takes neither its
+   colour (the bare `a { color: var(--accent) }` rule never matches it)
+   nor its font family/size from a sibling <a>. This resets background,
+   border and padding, sets the accent colour and font explicitly, then
+   re-applies the heading weight -- `font: inherit` resets weight too, so
+   the order below is load-bearing. */
+button.site-nav__link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: var(--text-heading-weight);
+  cursor: pointer;
+}
+
+/* The wrapping <form> must not introduce a box between site-nav's flex
+   container and the button it wraps. */
+.site-nav form {
+  display: contents;
 }
 
 .site-header__storage {
@@ -134,6 +160,9 @@ button:focus-visible {
 }
 
 .lang-switch__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   padding: var(--space-xs) var(--space-sm);
   text-decoration: none;
   color: var(--text-muted);
@@ -148,6 +177,28 @@ button:focus-visible {
   max-width: 960px;
   margin: 0 auto;
   padding: var(--space-xl) var(--space-lg) var(--space-3xl);
+}
+
+/* The login and create-password screens (02.1-UI-SPEC.md Screens A/B).
+   Without this, the heading and error banner span the full 960px page
+   while the .auth-card sits at 400px in the middle -- three widths on two
+   axes, reading as a broken layout rather than a chosen one. One class
+   puts the heading, the banner and the card in one 400px column. */
+.page--narrow {
+  max-width: 400px;
+}
+
+/* .auth-card is `.add-form` reused verbatim (02.1-UI-SPEC.md Component
+   Inventory) -- a form is a block element that already fills its
+   .page--narrow parent, so no width rule of its own is needed; the class
+   exists as the semantic name these two screens' markup uses. */
+
+/* The header on the same two screens: the storage element (the flexible
+   child of `justify-content: space-between`) is gone along with the nav,
+   so the language switcher would otherwise land hard against the left
+   edge -- push it to the right instead. */
+.site-header--minimal {
+  justify-content: flex-end;
 }
 
 .page__heading {

@@ -8,11 +8,13 @@
 // "copied" text for two seconds. Later plans append the delete countdown
 // tick and the status poll to this same file.
 //
-// navigator.clipboard exists only in a secure context, and the documented
-// way to widen this interface -- MYTUBE_UI_BIND on a LAN address -- is
-// reached over plain http, which is not one. Reading .writeText off an
-// undefined clipboard throws, so this screen's headline control would do
-// nothing at all with no message. Two fallbacks behind it: a hidden
+// navigator.clipboard exists only in a secure context, and the interface
+// is reached over the operator's own TLS from here on -- but a secure
+// context is not guaranteed regardless (a self-signed cert an operator's
+// browser has not trusted yet, for one), so the fallback stays: it costs
+// nothing, and reading .writeText off an undefined clipboard throws, so
+// this screen's headline control would do nothing at all with no message
+// if it were removed. Two fallbacks behind it: a hidden
 // textarea with the legacy copy command, then a prompt holding the address
 // so the operator can at least select it by hand.
 function copyTextToClipboard(text) {
@@ -66,15 +68,31 @@ document.addEventListener("click", (event) => {
 function pollLibraryRow(row) {
   const titleId = row.getAttribute("data-title-id");
   fetch(`/library/${titleId}/row`)
-    .then((res) => (res.ok ? res.text() : null))
-    .then((html) => {
+    .then((res) => {
+      // Fact: the session died and this fetch met the gate, which
+      // answered with a 302 to /login that fetch followed by default --
+      // res.ok is true and the body is the whole login page, not a row.
+      // Reload immediately so the operator lands on the login screen
+      // itself, and go no further: do not touch the row, do not
+      // reschedule. `null` (rather than the row-parsing branch below)
+      // marks this fetch as already fully handled.
+      if (res.redirected) {
+        window.location.reload();
+        return null;
+      }
+      return res.ok ? res.text().then((html) => ({ html })) : { html: null };
+    })
+    .then((result) => {
+      if (result === null) return; // already reloading, see above
+      const { html } = result;
       const template = document.createElement("template");
       template.innerHTML = html === null ? "" : html.trim();
       const fresh = template.content.firstElementChild;
       if (!fresh) {
-        // 404 or an empty body: the row was dismissed or purged from
-        // another tab. replaceWith stringifies its argument, so the null
-        // firstElementChild would leave a text node reading "null" here.
+        // Fact: a plain 404 or empty body -- the row was dismissed or
+        // purged from another tab. replaceWith stringifies its argument,
+        // so the null firstElementChild would leave a text node reading
+        // "null" here.
         row.remove();
         return;
       }

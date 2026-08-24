@@ -8,10 +8,28 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <header class="site-header">
+  {# minimal_header (opt-in, like storage_usage above): the login and
+     create-password screens have nothing to navigate to yet and no
+     storage figure to show, so they suppress site-nav and the storage
+     line and keep only the language switcher. The same flag adds two
+     classes -- removing elements from a flex row changes where the
+     remainder sits, and a narrower page column matches the narrower auth
+     card these two screens use. One flag drives all three effects on
+     purpose: the two screens that want a reduced header are exactly the
+     two that want the switcher pinned right and the column narrow. #}
+  <header class="site-header{% if minimal_header %} site-header--minimal{% endif %}">
+    {% if not minimal_header %}
     <nav class="site-nav" aria-label="primary">
       <a class="site-nav__link" href="/add">{{ t("nav.share") }}</a>
       <a class="site-nav__link" href="/library">{{ t("nav.library") }}</a>
+      {# A POST-only form-button, never a GET link (Security-Visible
+         Contract #1): a `<a href="/logout">` is trivially triggerable by
+         link prefetch, a stray click, or a third-party page rendering it
+         as an image source -- every other state-changing control in this
+         interface is already a form POST. #}
+      <form method="post" action="/logout">
+        <button class="site-nav__link" type="submit">{{ t("nav.sign_out") }}</button>
+      </form>
     </nav>
 
     <div class="site-header__storage" aria-live="polite">
@@ -32,20 +50,26 @@
         {{ t("storage.reconciliation_issue").format(unreferenced=reconciliation.unreferenced | length, missing=reconciliation.missing | length) }}
       {% endif %}
     </div>
+    {% endif %}
 
+    {# next= carries the whole current address, not just the path -- see
+       templates.render()'s own docstring. Built from current_url (never
+       request.url.path alone) so switching language never drops a query
+       string: invisible on most pages, destructive on the login screen's
+       ?next= and the create-password screen's one-time ?token=. #}
     <div class="lang-switch">
       <a
         class="lang-switch__link{% if lang == 'en' %} lang-switch__link--active{% endif %}"
-        href="/lang/en?next={{ request.url.path | urlencode }}"
+        href="/lang/en?next={{ current_url | urlencode }}"
       >{{ t("lang.en") }}</a>
       <a
         class="lang-switch__link{% if lang == 'ru' %} lang-switch__link--active{% endif %}"
-        href="/lang/ru?next={{ request.url.path | urlencode }}"
+        href="/lang/ru?next={{ current_url | urlencode }}"
       >{{ t("lang.ru") }}</a>
     </div>
   </header>
 
-  <main class="page">
+  <main class="page{% if minimal_header %} page--narrow{% endif %}">
     <h1 class="page__heading">{% block heading %}{% endblock %}</h1>
     {% block content %}{% endblock %}
   </main>
