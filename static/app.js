@@ -69,37 +69,23 @@ function pollLibraryRow(row) {
   const titleId = row.getAttribute("data-title-id");
   fetch(`/library/${titleId}/row`)
     .then((res) => {
-      // Fact: the session died and this fetch met the gate, which
-      // answered with a 302 to /login that fetch followed by default --
-      // res.ok is true and the body is the whole login page, not a row.
-      // Reload immediately so the operator lands on the login screen
-      // itself, and go no further: do not touch the row, do not
-      // reschedule. `null` (rather than the row-parsing branch below)
-      // marks this fetch as already fully handled.
-      if (res.redirected) {
-        window.location.reload();
-        return null;
-      }
-      return res.ok ? res.text().then((html) => ({ html })) : { html: null };
-    })
-    .then((result) => {
-      if (result === null) return; // already reloading, see above
-      const { html } = result;
-      const template = document.createElement("template");
-      template.innerHTML = html === null ? "" : html.trim();
-      const fresh = template.content.firstElementChild;
-      if (!fresh) {
-        // Fact: a plain 404 or empty body -- the row was dismissed or
-        // purged from another tab. replaceWith stringifies its argument,
-        // so the null firstElementChild would leave a text node reading
-        // "null" here.
-        row.remove();
-        return;
-      }
-      row.replaceWith(fresh);
-      if (fresh.getAttribute("data-row-status") === "preparing") {
-        setTimeout(() => pollLibraryRow(fresh), 4000);
-      }
+      // Fact: a dead session met the gate, fetch followed its 302 to
+      // /login, and res.ok is true for a login page, not a row -- reload
+      // and stop, touching neither this row nor the poll timer.
+      if (res.redirected) return window.location.reload();
+      // Fact: a plain 404, or a 200 with an empty body -- the row was
+      // dismissed or purged elsewhere.
+      if (!res.ok) return row.remove();
+      return res.text().then((html) => {
+        const template = document.createElement("template");
+        template.innerHTML = html.trim();
+        const fresh = template.content.firstElementChild;
+        if (!fresh) return row.remove();
+        row.replaceWith(fresh);
+        if (fresh.getAttribute("data-row-status") === "preparing") {
+          setTimeout(() => pollLibraryRow(fresh), 4000);
+        }
+      });
     })
     // One dropped request must not silently end the poll -- the row would
     // sit on "Working..." until a manual reload.

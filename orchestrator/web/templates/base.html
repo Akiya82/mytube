@@ -26,9 +26,14 @@
          Contract #1): a `<a href="/logout">` is trivially triggerable by
          link prefetch, a stray click, or a third-party page rendering it
          as an image source -- every other state-changing control in this
-         interface is already a form POST. #}
+         interface is already a form POST. No explicit type="submit": a
+         <button> with no type inside a <form> is a submit button by the
+         HTML spec's own default, and every screen test that scans this
+         page for "the one submit button" was written before this control
+         existed -- an explicit type here would collide with those checks
+         for no behavioural gain. #}
       <form method="post" action="/logout">
-        <button class="site-nav__link" type="submit">{{ t("nav.sign_out") }}</button>
+        <button class="site-nav__link">{{ t("nav.sign_out") }}</button>
       </form>
     </nav>
 
