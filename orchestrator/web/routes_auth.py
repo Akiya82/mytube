@@ -345,6 +345,27 @@ async def setup_submit_route(
     # the spent-link banner instead of their own form again.
     current_url = f"/setup?token={quote(token, safe='')}"
 
+    # Checked before the password pair, because it is the first field on
+    # the form and because the schema admits exactly one operator: a blank
+    # name is not a row somebody corrects later, it is the only credential
+    # this deployment will ever have, with no name to sign in under and no
+    # second account to fix it from. Stored stripped, so the name typed at
+    # the login form is the name that was saved.
+    username = username.strip()
+    if not username:
+        return render(
+            request,
+            "setup.html",
+            status_code=200,
+            minimal_header=True,
+            setup_state="form",
+            token=token,
+            username_value=username,
+            min_password_length=auth.MIN_PASSWORD_LENGTH,
+            error_key="setup.error.username_required",
+            current_url=current_url,
+        )
+
     if password != password_confirm:
         return render(
             request,

@@ -73,6 +73,7 @@
   "setup.error.invalid_token.heading": "This setup link is no longer valid",
   "setup.error.password_mismatch": "The passwords do not match.",
   "setup.error.password_too_short": "The password must be at least 8 characters.",
+  "setup.error.username_required": "The operator name cannot be empty.",
   "setup.field.password": "New password",
   "setup.field.password_confirm": "Confirm password",
   "setup.field.password_hint": "At least 8 characters.",
@@ -89,7 +90,7 @@
   "share.empty.heading": "This folder is empty",
   "share.unreachable.body": "The network share is not responding. Check that it is mounted and try again.",
   "share.unreachable.heading": "Cannot reach the share",
+  "storage.reconciliation_issue": " -- {unreferenced} stored objects nothing points at, {missing} addresses broken; run storage-audit to see which",
   "storage.usage": "{used} used, {free} free",
-  "storage.usage_used_only": "{used} used",
-  "storage.reconciliation_issue": " -- {unreferenced} stored objects nothing points at, {missing} addresses broken; run storage-audit to see which"
+  "storage.usage_used_only": "{used} used"
 }

@@ -73,6 +73,7 @@
   "setup.error.invalid_token.heading": "Эта ссылка настройки больше не действует",
   "setup.error.password_mismatch": "Пароли не совпадают.",
   "setup.error.password_too_short": "Пароль должен быть не короче 8 символов.",
+  "setup.error.username_required": "Имя оператора не может быть пустым.",
   "setup.field.password": "Новый пароль",
   "setup.field.password_confirm": "Повторите пароль",
   "setup.field.password_hint": "Не менее 8 символов.",
@@ -89,7 +90,7 @@
   "share.empty.heading": "В этой папке пусто",
   "share.unreachable.body": "Сетевая шара не отвечает. Проверьте, что она подключена, и попробуйте снова.",
   "share.unreachable.heading": "Шара недоступна",
+  "storage.reconciliation_issue": " -- объектов без ссылок: {unreferenced}, сломанных адресов: {missing}; подробности покажет storage-audit",
   "storage.usage": "{used} занято, {free} свободно",
-  "storage.usage_used_only": "{used} занято",
-  "storage.reconciliation_issue": " -- объектов без ссылок: {unreferenced}, сломанных адресов: {missing}; подробности покажет storage-audit"
+  "storage.usage_used_only": "{used} занято"
 }
