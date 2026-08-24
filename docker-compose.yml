@@ -113,6 +113,14 @@ services:
       # the Host header (see the upstream block in edge/nginx.conf.template).
       MYTUBE_S3_SCHEME: "${MYTUBE_S3_SCHEME:-http}"
       MYTUBE_S3_HOST: "${MYTUBE_S3_HOST:-storage}"
+      # Which peer address the edge believes a forwarded client address
+      # from, so the login rate limit counts real callers instead of
+      # counting the reverse proxy once for everybody. Carries a default
+      # for the same reason as the two above: an empty value would render
+      # a bare directive and nginx would refuse to start. The default is
+      # the private range Docker publishes host traffic from; narrow it to
+      # the proxy's own address in .env when you know it.
+      MYTUBE_TRUSTED_PROXY: "${MYTUBE_TRUSTED_PROXY:-172.16.0.0/12}"
     depends_on:
       api:
         condition: service_healthy

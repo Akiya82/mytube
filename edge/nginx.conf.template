@@ -237,6 +237,29 @@ server {
 
     access_log /var/log/nginx/admin_access.log admin_audit;
 
+    # Who the rate-limit zone above is actually counting. SETUP.md requires
+    # an external reverse proxy in front of this stack, and every request
+    # that arrives through it carries that proxy's address as its peer —
+    # so without this, `$binary_remote_addr` is one value for the entire
+    # internet and all of it shares a single bucket of ten a minute. A
+    # stranger hammering the form would drain it and the operator's own
+    # login and one-time setup link would answer 503: exactly the lockout
+    # the application refused to implement, reintroduced one layer down.
+    #
+    # Scoped to this server block, not the http level, so the delivery
+    # block's own view of its clients is untouched.
+    #
+    # Only the address named here is believed, so a forwarded header from
+    # anywhere else is ignored rather than trusted. The default covers the
+    # private range Docker publishes host traffic from, which is how this
+    # compose is reached in the documented deployment; pointing
+    # MYTUBE_TRUSTED_PROXY at the real proxy narrows it further. A value
+    # that does not match the true peer costs nothing — real_ip simply
+    # does not fire and the previous behaviour stands.
+    set_real_ip_from ${MYTUBE_TRUSTED_PROXY};
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
     # An anonymous endpoint that runs a database query has no reason to be
     # reachable from the public internet. Docker's own healthcheck reaches
     # this path on localhost inside the container, which is its only
