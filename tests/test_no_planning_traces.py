@@ -51,6 +51,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATOR_DIR = REPO_ROOT / "orchestrator"
 TEMPLATES_DIR = ORCHESTRATOR_DIR / "web" / "templates"
 LOCALES_DIR = ORCHESTRATOR_DIR / "locales"
+TOOLS_DIR = REPO_ROOT / "tools"
+
+# A double-quoted string on a line that is not wholly a comment. The shell
+# tools print through several helpers of their own (`pass`, `fail`, `note`)
+# as well as bare `echo`, so matching the quoted text rather than the
+# command name catches all of them and keeps catching a helper added later.
+_SHELL_STRING = re.compile(r'"([^"\\]*(?:\\.[^"\\]*)*)"')
 
 # `{# ... #}`, possibly spanning lines. Replaced by its own newlines so the
 # reported line numbers still point at the real file.
@@ -155,6 +162,67 @@ def collect_catalog_values(locales_dir: Path) -> list[tuple[Path, str, str]]:
         for key, value in catalog.items():
             found.append((path, key, value))
     return found
+
+
+def collect_shell_output_strings(root: Path) -> list[tuple[Path, int, str]]:
+    """Every double-quoted string on a non-comment line of every `.sh` under
+    `root` -- `(path, line, text)`.
+
+    The shell tools print straight to an operator's terminal, which makes
+    them the same kind of surface as the command line, and until this pass
+    existed nothing checked them: the guard walked Python, templates and
+    catalogs only, so a requirement id in a smoke test's own PASS line
+    survived every run of this file.
+
+    A line that is entirely a comment is skipped, matching the allowance
+    every other pass here makes -- an identifier a maintainer left beside
+    the reason in words is a pointer, not output.
+    """
+    found: list[tuple[Path, int, str]] = []
+    for path in sorted(root.rglob("*.sh")):
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if line.lstrip().startswith("#"):
+                continue
+            for match in _SHELL_STRING.finditer(line):
+                found.append((path, lineno, match.group(1)))
+    return found
+
+
+def test_no_shell_tool_output_carries_a_planning_identifier():
+    offenders = [
+        (str(path.relative_to(REPO_ROOT)), lineno, text)
+        for path, lineno, text in collect_shell_output_strings(TOOLS_DIR)
+        if _ID_PATTERN.search(text)
+    ]
+    assert not offenders, offenders
+
+
+def test_the_shell_walk_actually_reaches_the_tools():
+    # Same reason as the other walks: one that collects nothing would
+    # report "no offenders" forever. The smoke tests alone carry far more
+    # than this many quoted strings.
+    assert len(collect_shell_output_strings(TOOLS_DIR)) > 50
+
+
+def test_a_shell_comment_is_skipped_but_an_output_string_is_not(tmp_path):
+    """The distinction this pass rests on, and the reason the real tree has
+    an identifier left in `smoke_blob.sh`'s step-13 comment while its PASS
+    line no longer carries one.
+    """
+    (tmp_path / "t.sh").write_text(
+        '# Step 13: the cache-off switch (DELIV-08).\n'
+        'pass "step 13: cache off, bytes still served"\n'
+        'fail "step 13 (DELIV-08): expected 206"\n',
+        encoding="utf-8",
+    )
+    offenders = [
+        text
+        for _, _, text in collect_shell_output_strings(tmp_path)
+        if _ID_PATTERN.search(text)
+    ]
+    assert offenders == ["step 13 (DELIV-08): expected 206"]
 
 
 def test_no_orchestrator_output_or_help_string_carries_a_planning_identifier():

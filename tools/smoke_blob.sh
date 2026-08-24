@@ -228,7 +228,7 @@ HDRS7=$(curl -s -o /dev/null -D - "${EDGE_URL}/blob/${OBJECT_KEY}?sig=deadbeef&e
 CODE7=$(echo "$HDRS7" | head -1 | awk '{print $2}')
 CTYPE7=$(echo "$HDRS7" | grep -i '^content-type:' | tr -d '\r')
 if [ "$CODE7" = "200" ] && [[ "$CTYPE7" == *"video/mp4"* ]]; then
-  pass "step 7: retry=1 with bad signature got 200 $CTYPE7 (loop-guard works, D-04)"
+  pass "step 7: retry=1 with bad signature got 200 $CTYPE7 (loop-guard works)"
 else
   fail "step 7: expected 200 video/mp4, got code=$CODE7 $CTYPE7"
 fi
@@ -308,7 +308,7 @@ SHA11=$(sha256sum "$DL11_PATH" 2>&1 | awk '{print $1}')
 BAD_STATUS_COUNT=$(edge_exec sh -c "awk '{print \$5}' /var/log/nginx/blob_access.log | grep -c -E '^(302|403)$'; true" 2>/dev/null)
 BAD_STATUS_COUNT=$(echo "$BAD_STATUS_COUNT" | tr -d '\r ')
 if [ "$SHA11" = "$SHA_ORIG" ] && [ "${BAD_STATUS_COUNT:-0}" = "0" ]; then
-  pass "step 11 (assumption A1, verdict M6): sha256 matches after mid-stream expiry, zero 302/403 among subrequests"
+  pass "step 11: sha256 matches after mid-stream expiry, zero 302/403 among subrequests"
 else
   fail "step 11 (assumption A1): sha256=$SHA11 (expected $SHA_ORIG), 302/403 count=$BAD_STATUS_COUNT — see src/docs/experiments/05-secure-link-on-slices.md for the recorded verdict"
 fi
@@ -344,9 +344,9 @@ for pid in "${PIDS[@]}"; do wait "$pid"; done
 ORIGIN_FETCHES=$(edge_exec sh -c "awk '{print \$4}' /var/log/nginx/blob_access.log | grep -c -E '^(MISS|EXPIRED|STALE)$'; true" 2>/dev/null)
 ORIGIN_FETCHES=$(echo "$ORIGIN_FETCHES" | tr -d '\r ')
 if [ "$ORIGIN_FETCHES" = "1" ]; then
-  pass "step 12 (DELIV-05): exactly 1 origin fetch for the same cold chunk across 10 parallel requests"
+  pass "step 12: exactly 1 origin fetch for the same cold chunk across 10 parallel requests"
 else
-  fail "step 12 (DELIV-05): expected exactly 1 origin fetch, got $ORIGIN_FETCHES"
+  fail "step 12: expected exactly 1 origin fetch, got $ORIGIN_FETCHES"
 fi
 
 # ---------------------------------------------------------------------------
@@ -369,9 +369,9 @@ XCACHE13=$(echo "$HDRS13" | grep -i '^x-cache-status:' | tr -d '\r')
 dc up -d --force-recreate edge >/dev/null 2>&1
 wait_edge_healthy || echo "WARNING: edge did not report healthy after restoring cache mode"
 if [ "$CODE13" = "206" ] && [[ "$XCACHE13" == *"OFF"* ]]; then
-  pass "step 13 (DELIV-08): MYTUBE_CACHE_MODE=off gives $XCACHE13, bytes still served ($CODE13)"
+  pass "step 13: MYTUBE_CACHE_MODE=off gives $XCACHE13, bytes still served ($CODE13)"
 else
-  fail "step 13 (DELIV-08): expected 206 with X-Cache-Status: OFF, got code=$CODE13 '$XCACHE13'"
+  fail "step 13: expected 206 with X-Cache-Status: OFF, got code=$CODE13 '$XCACHE13'"
 fi
 
 echo ""
