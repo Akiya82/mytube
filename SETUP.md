@@ -65,6 +65,7 @@ marked "must be generated".
 | `MYTUBE_WARM_BYTES` | Cache warm-up limit in bytes | `268435456` (half of the 512m zone) | Optional |
 | `MYTUBE_PUBLIC_BASE_URL` | The address viewers reach, scheme included, no trailing slash | — | **Required — the service refuses to start without it.** Written into every copied link, so it is never derived from a browser's own address bar |
 | `MYTUBE_ADMIN_FQDN` | The bare hostname the operator interface answers on — no scheme, no trailing slash. Must differ from `MYTUBE_PUBLIC_BASE_URL`'s own host | — | **Required — the interface container refuses to start without it.** `docker compose logs api` names `admin_fqdn` in a validation error: `Field required` if the line is missing from `.env` entirely, `must not be empty` if it is present but blank |
+| `MYTUBE_TRUSTED_PROXY` | The address edge believes a forwarded client address from, so the login rate limit counts real callers instead of counting your reverse proxy once for everybody. An address or CIDR | `172.16.0.0/12` (the private range Docker publishes host traffic from) | Optional — narrow it to your proxy's own address if you know it. A value that does not match the true peer is harmless: the forwarded header is ignored and the limit counts everyone as one |
 | `MYTUBE_SHARE_HOST_PATH` | Host path of the mounted network share, bind-mounted read-only into `api` at `/share` | `./ingest` | Optional |
 | `MYTUBE_STORAGE_QUOTA_BYTES` | Configured storage quota in bytes, `0` means no quota enforced — used only for the interface's usage figure | `0` | Optional |
 
@@ -453,12 +454,29 @@ server {
 
     location / {
         proxy_set_header Host $host;   # same reason as above
+
+        # Who is knocking. Every request that reaches edge through this
+        # proxy arrives carrying the proxy's own address, so without this
+        # header edge counts the whole internet as one caller and the login
+        # rate limit becomes a single shared bucket -- a stranger hammering
+        # the form would drain it and lock you out of your own interface.
+        # Only the delivery block above can skip it: it has no rate limit
+        # to key and no interest in who is asking.
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
         proxy_buffering off;
         proxy_http_version 1.1;
         proxy_pass http://127.0.0.1:8080;   # MYTUBE_EDGE_PORT
     }
 }
 ```
+
+Edge only believes that header from an address you have named, so a client
+cannot forge its own. The default trusts the private range Docker publishes
+host traffic from, which is how the proxy above reaches it. If your proxy
+reaches edge from somewhere else, set `MYTUBE_TRUSTED_PROXY` to its address
+in `.env`; a value that does not match simply means the header is ignored
+and the limit goes back to counting everyone as one.
 
 **Required check: the external proxy must not buffer the response, and
 must pass `Range` through untouched.** This is the classic pitfall of two
