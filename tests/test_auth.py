@@ -26,6 +26,7 @@ satisfy:
   `conftest.py` fixture does it for every other screen's tests.
 - `safe_next(value, fallback="/library") -> str`.
 """
+import re
 import time
 import urllib.parse
 import uuid
@@ -452,6 +453,63 @@ async def test_the_language_switcher_preserves_the_query_string(client, no_opera
         resp = await client.get(current, follow_redirects=False)
 
     assert resp.text.count(f"next={expected_param}") >= 2
+
+
+def _ru_switcher_href(text: str) -> str:
+    """Pulls the Russian language-switcher's own href out of a rendered
+    page, rather than reconstructing one -- the href is what a dropped
+    error banner broke, so a hand-built address would pass against the
+    broken code too.
+    """
+    match = re.search(r'href="(/lang/ru\?next=[^"]*)"', text)
+    assert match is not None, "no Russian language-switcher link on the page"
+    return match.group(1)
+
+
+async def test_a_failed_login_survives_a_language_switch(
+    client, operator_present, monkeypatch
+):
+    monkeypatch.setattr(
+        queries, "credential_by_username", lambda conn, username: _future(None)
+    )
+    monkeypatch.setattr(
+        auth, "verify_absent_credential", lambda: _future(None)
+    )
+    monkeypatch.setattr(auth, "FAILED_ATTEMPT_DELAY_SECONDS", 0)
+
+    async with client:
+        failure = await client.post(
+            "/login", data={"username": "someone", "password": "wrong"}
+        )
+        href = _ru_switcher_href(failure.text)
+        switched = await client.get(href, follow_redirects=True)
+
+    assert 'lang="ru"' in switched.text
+    assert "banner--error" in switched.text
+    assert 'type="password"' in switched.text
+    assert re.search(r'<input[^>]*id="login-username"[^>]*value=""', switched.text)
+
+
+async def test_a_failed_password_setup_survives_a_language_switch(
+    client, no_operator
+):
+    async with client:
+        failure = await client.post(
+            "/setup",
+            data={
+                "token": "test-setup-token",
+                "username": "someone",
+                "password": "one-password",
+                "password_confirm": "another-password",
+            },
+        )
+        href = _ru_switcher_href(failure.text)
+        switched = await client.get(href, follow_redirects=True)
+
+    assert 'lang="ru"' in switched.text
+    assert "banner--error" in switched.text
+    assert re.search(r'<input[^>]*id="setup-username"[^>]*value=""', switched.text)
+    assert 'name="token" value="test-setup-token"' in switched.text
 
 
 # --- Integration half ----------------------------------------------------
