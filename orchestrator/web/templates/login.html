@@ -24,6 +24,13 @@
   </div>
 {% endif %}
 
+{# Focus follows the username field's emptiness, not the presence of an
+   error: an error used to arrive only with the username still filled in,
+   which put the cursor in the password box, but an error can now also
+   arrive on a plain GET (the language switch carrying the banner back)
+   with the username empty, and that is the field the operator has to
+   retype. Empty username takes focus; a filled one leaves focus on the
+   password field, matching a POST failure exactly as before. #}
 <form class="add-form auth-card" method="post" action="/login">
   <input type="hidden" name="next" value="{{ next_url }}">
 
@@ -37,7 +44,7 @@
       autocomplete="username"
       value="{{ username_value | default('') }}"
       required
-      {% if not error_key %}autofocus{% endif %}
+      {% if not username_value %}autofocus{% endif %}
     >
   </div>
 
@@ -50,7 +57,7 @@
       name="password"
       autocomplete="current-password"
       required
-      {% if error_key %}autofocus{% endif %}
+      {% if username_value %}autofocus{% endif %}
     >
   </div>
 

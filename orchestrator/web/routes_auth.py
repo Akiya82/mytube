@@ -48,6 +48,32 @@ def _notice_key(request: Request) -> str | None:
     return None
 
 
+# Same shape as `_notice_key` above, and the same argument: `error` is a
+# flag read off the query string, mapped through a fixed allow-list to
+# catalogue keys never interpolated into the page, so a hand-crafted link
+# can at worst show the operator one of the four sentences the screen
+# already shows on its own. Two maps, not one shared map, so
+# `/login?error=password_mismatch` cannot borrow a create-password
+# sentence for the sign-in screen.
+#
+# The typed username deliberately does not travel with this flag. It was
+# weighed against carrying it and rejected: echoing operator-submitted
+# text into a query string puts it in browser history and in the edge's
+# access log, retyping a name costs the one operator using this
+# deployment a moment, and the field coming back empty on the far side of
+# a language switch is the intended behaviour, not an oversight.
+_LOGIN_ERROR_KEYS = {"invalid_credentials": "login.error.invalid_credentials"}
+_SETUP_ERROR_KEYS = {
+    "username_required": "setup.error.username_required",
+    "password_mismatch": "setup.error.password_mismatch",
+    "password_too_short": "setup.error.password_too_short",
+}
+
+
+def _error_key(request: Request, allowed: dict[str, str]) -> str | None:
+    return allowed.get(request.query_params.get("error", ""))
+
+
 @router.get("/login")
 async def login_form_route(request: Request):
     operator_id, _ = await auth.session_operator_id(request)
@@ -85,6 +111,7 @@ async def login_form_route(request: Request):
         next_url=next_url,
         minimal_header=True,
         notice_key=_notice_key(request),
+        error_key=_error_key(request, _LOGIN_ERROR_KEYS),
     )
 
 
@@ -107,7 +134,7 @@ async def _reject_login(request: Request, username: str, next_value: str):
     # current_url would otherwise be bare /login and switching language
     # after a mistake would throw away the destination the operator was
     # heading to.
-    current_url = f"/login?next={quote(next_url, safe='')}"
+    current_url = f"/login?next={quote(next_url, safe='')}&error=invalid_credentials"
 
     return render(
         request,
@@ -302,6 +329,7 @@ async def setup_form_route(request: Request):
         setup_state="form",
         token=token,
         min_password_length=auth.MIN_PASSWORD_LENGTH,
+        error_key=_error_key(request, _SETUP_ERROR_KEYS),
     )
 
 
@@ -363,7 +391,7 @@ async def setup_submit_route(
             username_value=username,
             min_password_length=auth.MIN_PASSWORD_LENGTH,
             error_key="setup.error.username_required",
-            current_url=current_url,
+            current_url=f"{current_url}&error=username_required",
         )
 
     if password != password_confirm:
@@ -377,7 +405,7 @@ async def setup_submit_route(
             username_value=username,
             min_password_length=auth.MIN_PASSWORD_LENGTH,
             error_key="setup.error.password_mismatch",
-            current_url=current_url,
+            current_url=f"{current_url}&error=password_mismatch",
         )
 
     if len(password) < auth.MIN_PASSWORD_LENGTH:
@@ -391,7 +419,7 @@ async def setup_submit_route(
             username_value=username,
             min_password_length=auth.MIN_PASSWORD_LENGTH,
             error_key="setup.error.password_too_short",
-            current_url=current_url,
+            current_url=f"{current_url}&error=password_too_short",
         )
 
     operator_id = uuid.uuid4()
