@@ -4,6 +4,12 @@ filling it and ordering it. Driven through the application with
 here requests the `signed_in` fixture because these screens are behind the
 session, same as every other operator screen in this suite
 (tests/test_library.py, tests/test_deletion.py).
+
+One test at the end is the deliberate exception and runs against the real
+migrated database with nothing stubbed: reordering from the arrows alone
+is the one path that has to work with no pointer and no script, so it is
+also the one path where a stub standing in for the statement that actually
+renumbers the list would prove nothing.
 """
 import html
 import uuid
@@ -709,3 +715,77 @@ async def test_assembly_shows_the_timing_note_on_both_create_and_edit(monkeypatc
 
     assert timing_note in create_resp.text
     assert timing_note in edit_resp.text
+
+
+async def test_the_arrows_reorder_the_list_end_to_end_with_no_script_in_play(
+    app_pool, raw_conn, signed_in
+):
+    """The no-pointer baseline, proven rather than assumed: a plain form
+    post to the move address, the redirect followed the way a browser with
+    no scripting follows one, and the assembly screen that comes back
+    listing the members in their new order. Nothing is stubbed between the
+    request and Postgres, so this covers the one seam the rest of this
+    file cannot -- that the route hands the statement the arguments that
+    actually renumber the list, and that the new order survives being read
+    back rather than only being echoed.
+
+    Reloading the screen afterwards is not a redundant assertion: it is
+    the difference between the server having been told and the page having
+    been redrawn. A move that only changed the response would pass every
+    assertion above this one and fail this one.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    playlist_id = await queries.create_playlist(
+        raw_conn, f"Keyboard Evening {suffix}", f"keyboard-evening-{suffix}"
+    )
+    names = [f"Clip A {suffix}", f"Clip B {suffix}", f"Clip C {suffix}"]
+    for index, name in enumerate(names):
+        edition_id = uuid.uuid4()
+        await queries.create_title_with_edition(
+            raw_conn, name, f"clip-{index}-{suffix}", edition_id, f"{edition_id}.mp4"
+        )
+        await queries.add_playlist_item(raw_conn, playlist_id, edition_id)
+
+    members = await queries.playlist_members(raw_conn, playlist_id)
+    assert [m["title_name"] for m in members] == names
+    last_item_id = members[2]["item_id"]
+    first_item_id = members[0]["item_id"]
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    ) as client:
+        moved = await client.post(
+            f"/playlists/{playlist_id}/items/{last_item_id}/move",
+            data={"direction": "up"},
+            follow_redirects=True,
+        )
+        # The top of the list has no neighbour above it. That is a no-op,
+        # not an error and not a wrap around to the bottom.
+        no_op = await client.post(
+            f"/playlists/{playlist_id}/items/{first_item_id}/move",
+            data={"direction": "up"},
+            follow_redirects=True,
+        )
+        # An arbitrary direction is not a third instruction.
+        nonsense = await client.post(
+            f"/playlists/{playlist_id}/items/{first_item_id}/move",
+            data={"direction": "sideways"},
+            follow_redirects=True,
+        )
+        reloaded = await client.get(f"/playlists/{playlist_id}/edit")
+
+    assert moved.status_code == 200
+    assert no_op.status_code == 200
+    assert nonsense.status_code == 200
+
+    def rendered_order(text):
+        return sorted(names, key=lambda name: text.index(html.escape(name)))
+
+    expected = [names[0], names[2], names[1]]
+    assert rendered_order(moved.text) == expected
+    assert rendered_order(reloaded.text) == expected
+
+    after = await queries.playlist_members(raw_conn, playlist_id)
+    assert [m["title_name"] for m in after] == expected
+    assert [m["position"] for m in after] == [0, 1, 2]

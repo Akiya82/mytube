@@ -1011,19 +1011,27 @@ async def remove_playlist_item(conn: asyncpg.Connection, playlist_id, item_id) -
 async def move_playlist_item(
     conn: asyncpg.Connection, playlist_id, item_id, direction: str
 ) -> None:
-    """Swap `item_id` with its "up" or "down" neighbor in position order.
+    """Move `item_id` one place `direction` ("up" or "down") within
+    `playlist_id`, then rewrite every position in the playlist to a
+    contiguous run, in one transaction, scoped to the playlist (T-03-18,
+    T-03-19).
 
-    A swap between two existing positions, not a renumbering of the whole
-    list: the positions `add_playlist_item` hands out are already a
-    contiguous run, so exchanging two of them leaves that run contiguous
-    with no gap and no duplicate. A no-op at either end of the list --
-    there is no neighbor to swap with, and the caller's own UI disables
-    the button that would ask for one.
+    Rewriting the whole run rather than swapping two numbers is
+    deliberate and cheap at this scale: a playlist is tens of rows at
+    most, a single rewrite can never leave a gap or a duplicate behind,
+    and the alternative schemes (fractional positions, gap-based
+    numbering) exist to solve a concurrent-multiple-writer problem this
+    single-operator product does not have. A move at either end of the
+    list, or a direction that is neither "up" nor "down", is a no-op --
+    not an error and not a wrap; the caller's own UI disables the button
+    that would ask for one at either end.
     """
+    if direction not in ("up", "down"):
+        return
+
     async with conn.transaction():
         rows = await conn.fetch(
-            "SELECT id, position FROM playlist_items WHERE playlist_id = $1 "
-            "ORDER BY position",
+            "SELECT id FROM playlist_items WHERE playlist_id = $1 ORDER BY position",
             playlist_id,
         )
         ids = [row["id"] for row in rows]
@@ -1034,19 +1042,14 @@ async def move_playlist_item(
 
         step = 1 if direction == "down" else -1
         neighbor_index = index + step
-        if neighbor_index < 0 or neighbor_index >= len(rows):
+        if neighbor_index < 0 or neighbor_index >= len(ids):
             return
 
-        current, neighbor = rows[index], rows[neighbor_index]
-        await conn.execute(
+        ids[index], ids[neighbor_index] = ids[neighbor_index], ids[index]
+
+        await conn.executemany(
             "UPDATE playlist_items SET position = $2 WHERE id = $1",
-            current["id"],
-            neighbor["position"],
-        )
-        await conn.execute(
-            "UPDATE playlist_items SET position = $2 WHERE id = $1",
-            neighbor["id"],
-            current["position"],
+            [(item_id_, position) for position, item_id_ in enumerate(ids)],
         )
 
 

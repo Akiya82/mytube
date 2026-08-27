@@ -301,6 +301,39 @@ async def remove_playlist_item_route(playlist_id: str, item_id: str, request: Re
     return RedirectResponse(f"/playlists/{playlist_id}/edit", status_code=302)
 
 
+@router.post("/playlists/{playlist_id}/items/{item_id}/move")
+async def move_playlist_item_route(
+    playlist_id: str, item_id: str, request: Request, direction: str = Form(...)
+):
+    """One arrow click, one small POST, one redirect back to the assembly
+    screen -- the whole no-mouse baseline (D-107). This is a plain form
+    post: `static/app.js` intercepts a submit only to run a confirmation
+    dialog and to disable a one-shot button, never to cancel one and swap
+    markup in place, and there is no such machinery in this project to
+    reach for. A route that answered a fragment body here would navigate
+    the browser to that fragment on a script-free click -- an unstyled
+    list with no stylesheet and no navigation -- and reloading it would
+    re-post the move. Every mutating route in this module redirects for
+    exactly this reason; `GET /playlists/{playlist_id}/items` above is the
+    separate, safe-to-refetch address the drag handler reads from instead.
+
+    A `direction` that is neither "up" nor "down" is ignored outright,
+    before `queries.move_playlist_item` gets a chance to also treat it as
+    a no-op (T-03-19) -- belt and suspenders, cheap at this size.
+    """
+    parsed_playlist = _parse_uuid(playlist_id)
+    parsed_item = _parse_uuid(item_id)
+    if parsed_playlist is None or parsed_item is None:
+        return Response(status_code=404)
+
+    if direction in ("up", "down"):
+        pool = request.app.state.db_pool
+        async with pool.acquire() as conn:
+            await queries.move_playlist_item(conn, parsed_playlist, parsed_item, direction)
+
+    return RedirectResponse(f"/playlists/{playlist_id}/edit", status_code=302)
+
+
 @router.get("/p/{slug}")
 async def resolve_playlist_route(slug: str, request: Request):
     pool = request.app.state.db_pool
