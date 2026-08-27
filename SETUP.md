@@ -66,7 +66,10 @@ marked "must be generated".
 | `MYTUBE_PUBLIC_BASE_URL` | The address viewers reach, scheme included, no trailing slash | — | **Required — the service refuses to start without it.** Written into every copied link, so it is never derived from a browser's own address bar |
 | `MYTUBE_ADMIN_FQDN` | The bare hostname the operator interface answers on — no scheme, no trailing slash. Must differ from `MYTUBE_PUBLIC_BASE_URL`'s own host | — | **Required — the interface container refuses to start without it.** `docker compose logs api` names `admin_fqdn` in a validation error: `Field required` if the line is missing from `.env` entirely, `must not be empty` if it is present but blank |
 | `MYTUBE_TRUSTED_PROXY` | The address edge believes a forwarded client address from, so the login rate limit counts real callers instead of counting your reverse proxy once for everybody. An address or CIDR | `172.16.0.0/12` (the range Docker's own bridge gateways fall in) | Optional, and the default is usually right. **Not your proxy's address** — Docker rewrites the source of anything arriving through a published port, so edge sees its bridge gateway instead. See "Reverse proxy" for how to read the address and check which way it is counting |
-| `MYTUBE_SHARE_HOST_PATH` | Host path of the mounted network share, bind-mounted read-only into `api` at `/share` | `./ingest` | Optional |
+| `MYTUBE_SHARE_URL` | Address of the source share, in the form a CIFS mount takes: `//host/share`. The stack mounts it itself and gives `api` a read-only view at `/share` | — | **Required — `api` does not start without a share it can mount** |
+| `MYTUBE_SHARE_USERNAME` | Account the share is mounted as. Read-only access on the server's side is enough | — | Required |
+| `MYTUBE_SHARE_PASSWORD` | That account's password | — | Required |
+| `MYTUBE_SHARE_DOMAIN` | Windows domain, for a domain-joined share | empty | Optional — leave empty for a local account on the machine serving the share |
 | `MYTUBE_STORAGE_QUOTA_BYTES` | Configured storage quota in bytes, `0` means no quota enforced — used only for the interface's usage figure | `0` | Optional |
 
 **About `MYTUBE_S3_UPSTREAM` specifically.** `api` reaches storage through
@@ -97,28 +100,55 @@ read would break that on its own, independent of every other setting here.
 
 ## Network share
 
-The share this stack browses and adds files from is mounted on the **host**
-and bind-mounted read-only into the `api` container at a single mount
-point — the container cannot mount a CIFS/NFS share for itself. Set
-`MYTUBE_SHARE_HOST_PATH` to the host path of an already-mounted share
-before starting the stack.
+The share this stack browses and adds files from is mounted by the stack
+itself, not by the machine it runs on. Nothing has to be mapped, mounted or
+prepared on the host first — give the stack the address and an account and
+it does the rest, which is what makes moving to another machine a matter of
+copying `.env`.
 
-**Linux**, an already-mounted CIFS share under `/mnt`:
-
-```bash
-MYTUBE_SHARE_HOST_PATH=/mnt/media-share
-```
-
-**Windows**, a share already mapped to a drive letter (map it first with
-Windows' own "Map network drive", then point at that drive):
+Four settings, three of them required:
 
 ```bash
-MYTUBE_SHARE_HOST_PATH=//./Z:
+MYTUBE_SHARE_URL=//192.0.2.5/media
+MYTUBE_SHARE_USERNAME=readonly-user
+MYTUBE_SHARE_PASSWORD=the-password
+MYTUBE_SHARE_DOMAIN=
 ```
 
-The share is bind-mounted read-only (`:ro`): nothing this stack does can
-write back to it, including a failed add — the source file on the share is
-never touched by any code path.
+`MYTUBE_SHARE_URL` is the address written the way a CIFS mount wants it:
+forward slashes, no trailing one. A Windows UNC path is the same address the
+other way round — `\\192.0.2.5\media` becomes `//192.0.2.5/media`.
+
+Leave `MYTUBE_SHARE_DOMAIN` empty unless the share is domain-joined; for a
+local account on the machine serving it, a domain is not just unnecessary but
+will make the mount fail.
+
+The share is read-only twice over — once in the mount options, once again on
+the container's own mount. Nothing this stack does can write back to it,
+including a failed add: the source file on the share is never touched by any
+code path.
+
+**The host needs CIFS support in its kernel.** Docker Desktop's own VM has
+it. A bare Linux host usually needs `cifs-utils` installed; without it the
+mount fails with `wrong fs type`.
+
+**Two things about this that will otherwise cost you an evening:**
+
+The mount happens when `api` starts, not when `docker compose` reads its
+configuration. A wrong address, a wrong password or an unreachable server is
+therefore not a configuration error — it is `api` failing to start, and the
+real reason is in `docker compose logs api`.
+
+Changing any of these four settings later is not enough on its own. Docker
+records a named volume's mount options when it first creates the volume and
+keeps using the recorded ones, so an edited `.env` changes nothing until the
+volume is thrown away:
+
+```bash
+docker compose down
+docker volume rm src_share
+docker compose up -d
+```
 
 ## Interface
 

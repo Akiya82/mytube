@@ -75,7 +75,7 @@ services:
     volumes:
       - nginx_logs:/var/log/nginx:ro
       - ./ingest:/ingest
-      - ${MYTUBE_SHARE_HOST_PATH:-./ingest}:/share:ro
+      - share:/share:ro
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=2)\""]
       interval: 5s
@@ -165,3 +165,35 @@ volumes:
   db_data: {}
   storage_data: {}
   nginx_logs: {}
+  # The source share, mounted by the stack itself rather than by the machine
+  # it runs on, so a new host needs no preparation beyond a filled-in .env.
+  #
+  # Mounted read-only twice over: `ro` in the option string below, and `:ro`
+  # again on api's own mount. Nothing in this project writes back to the
+  # source, and a share full of someone's media is the wrong thing to hand a
+  # service write access to on the strength of one of the two being right.
+  #
+  # No uid/gid here on purpose: api runs as root, so the files are readable
+  # whatever the server reports as their owner. That stops being true the day
+  # api drops privileges, and this is where the mapping would go.
+  #
+  # The mount happens when api starts, not when compose reads this file, so a
+  # wrong address or credential surfaces as api failing to start with the
+  # mount error in `docker compose logs api` -- not as a config error.
+  share:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: ${MYTUBE_SHARE_URL}
+      # `vers=3.0` is not a preference, it is required. Docker's local driver
+      # hands this string to the mount syscall directly instead of running
+      # mount.cifs, and that path does no protocol negotiation: without an
+      # explicit version the kernel refuses the mount with a bare "invalid
+      # argument" that says nothing about what is missing. Measured against a
+      # real server -- every version accepted the option and got as far as
+      # authentication; only its absence failed this way.
+      #
+      # `domain=` appears only when one is configured: an empty value is worse
+      # than no option at all, so the `:+` form -- which expands to nothing
+      # when the variable is empty -- is load-bearing rather than tidiness.
+      o: username=${MYTUBE_SHARE_USERNAME},password=${MYTUBE_SHARE_PASSWORD},${MYTUBE_SHARE_DOMAIN:+domain=${MYTUBE_SHARE_DOMAIN},}vers=3.0,ro
