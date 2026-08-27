@@ -115,6 +115,18 @@ server {
         proxy_pass http://orchestrator;
     }
 
+    # The public playlist address (D-101..D-104), shaped identically to /v/
+    # above: it only ever redirects, so it carries no signing, no slicing
+    # and no caching of its own. Public rather than internal because a
+    # video player reopens this address itself, the same reason /v/ and
+    # /refresh/ are public.
+    location /p/ {
+        proxy_intercept_errors on;
+        proxy_set_header X-Forwarded-Host  $http_host;
+        proxy_set_header X-Forwarded-Proto $external_proto;
+        proxy_pass http://orchestrator;
+    }
+
     # Public, NOT internal: the player reopens this address itself (D-04).
     # Prefix match, NOT exact: always /refresh/{uuid}.
     # retry=1 on the /blob/ address is added by the orchestrator's own 302, not edge.
@@ -173,10 +185,16 @@ server {
 
     # Stub clips instead of raw error codes (D-31, Pitfall G): AVPro shows every
     # error code as the same black screen, so every failure mode gets an explicit
-    # =200 override — without it the client won't even try to play the body.
+    # =200 override — without it the client won't even try to play the body. The
+    # fourth entry distinguishes one more failure a video player otherwise cannot
+    # tell apart from a broken server: a playlist the operator has not finished
+    # building yet (D-104). 425 is the application's own
+    # PLAYLIST_NOT_READY_STATUS constant (orchestrator/web/routes_playlists.py) —
+    # tests/test_edge_config.py ties the two together so they cannot drift apart.
     error_page 404             =200 /errors/not-found.mp4;
     error_page 410             =200 /errors/deleted.mp4;
     error_page 403 500 502 503 504 =200 /errors/unavailable.mp4;
+    error_page 425             =200 /errors/playlist-not-ready.mp4;
 
     location /errors/ {
         internal;

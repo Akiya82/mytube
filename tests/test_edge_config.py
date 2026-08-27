@@ -1,18 +1,22 @@
 """Tripwires over `edge/nginx.conf.template` -- a plain unit test module, no
-fixtures. Two of these are red today on purpose, both for the same reason
-this whole phase exists: a comment asking a future phase to remember one
-line is not enforcement, a test that fails at the moment the edit happens
-is.
+fixtures.
 
-- `test_the_delivery_server_block_is_byte_identical_to_the_pinned_digest`
-  fails right now because `SENTINEL` is not in the template yet -- plan 03
-  appends the admin `server` block after it. Once that block lands, this
-  test either keeps passing (nothing before the sentinel moved) or fails
-  loudly (something did), which is the whole point of pinning a digest
-  taken from the file as it stood before any edit.
-- `test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_check`
-  fails right now because `orchestrator.auth` does not exist yet -- the
-  same RED state as `tests/test_auth.py`.
+`test_the_delivery_server_block_is_byte_identical_to_the_pinned_digest` and
+`test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_check`
+were the two red-on-purpose tests an earlier phase wrote against a template
+and an `orchestrator.auth` module that did not exist yet; both have been
+green for two phases now. The digest has since been re-pinned exactly
+once, deliberately, in the same edit that added the playlist address's
+`location /p/` block below the sentinel -- see `DELIVERY_DIGEST`'s own
+comment for what it was taken after. Below both of those is a fifth test,
+new in this phase: this project adopted a pinned digest precisely because
+a comment asking a future reader to remember one line is not enforcement,
+and relying on exactly that to keep an application status constant and a
+template directive in agreement would be the same mistake one file over --
+so `test_the_not_ready_status_the_application_answers_is_mapped_to_a_clip`
+ties `orchestrator.web.routes_playlists.PLAYLIST_NOT_READY_STATUS` to the
+template's own `error_page` mapping, parsed out of the template rather than
+restated as a literal.
 """
 import hashlib
 import re
@@ -21,16 +25,22 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_PATH = REPO_ROOT / "edge" / "nginx.conf.template"
 
-# The line plan 03 appends the admin `server` block directly after. Not one
+# The line the admin `server` block is appended directly after. Not one
 # byte before this line may change -- the admin block is appended, not
 # interleaved.
 SENTINEL = "# ==== admin surface begins here ===="
 
-# Taken from the template as it stood before any edit in this phase, by
-# computing sha256 over its full current contents (UTF-8 bytes) -- pasted
-# here as a literal, never recomputed from the same file at test time,
-# which would make this test always pass.
-DELIVERY_DIGEST = "b715ae0c141ab3f3f0ce20ab3986e401c06dee805ecf9c1f66a468911f0ceb96"
+# Taken from the template by computing sha256 over everything before
+# SENTINEL (UTF-8 bytes) -- pasted here as a literal, never recomputed
+# from the same file at test time, which would make this test always
+# pass. Re-pinned once, deliberately, after the playlist phase's own edit
+# to the delivery block: a fourth `location /p/` block (mirroring `/v/`)
+# and a fourth `error_page 425 ... playlist-not-ready.mp4` mapping. This
+# is that phase's one and only digest re-pin -- the artifact keys under
+# either assembly mechanism have the same shape the delivery block
+# already accepts, so nothing else in the phase touches the head of this
+# file.
+DELIVERY_DIGEST = "090de78a1c175b2cebb353833508e125a05b66bf8a489211a71eb0f34b72a1d3"
 
 # A prefix `location` block (not a regex `location ~ ...` block) whose body
 # proxies to the `orchestrator` upstream. The object-storage location is a
@@ -91,10 +101,6 @@ def test_the_edge_template_never_gains_a_subrequest_authorisation_directive():
 
 
 def test_the_admin_block_does_not_proxy_the_health_endpoint():
-    """Red until plan 03 appends the admin server block after SENTINEL --
-    `tail` is empty on the template as it stands today, so the assertion
-    below fails honestly rather than being skipped past.
-    """
     text = TEMPLATE_PATH.read_text(encoding="utf-8")
     _head, _sep, tail = text.partition(SENTINEL)
 
@@ -106,7 +112,7 @@ def test_the_admin_block_does_not_proxy_the_health_endpoint():
 
 
 def test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_check():
-    from orchestrator.auth import HOST_EXEMPT_PREFIXES  # RED until plan 04
+    from orchestrator.auth import HOST_EXEMPT_PREFIXES
 
     text = TEMPLATE_PATH.read_text(encoding="utf-8")
     head, _sep, _tail = text.partition(SENTINEL)
@@ -114,9 +120,11 @@ def test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_ch
     prefixes = _delivery_location_prefixes(head)
 
     # Pinned so a future change to the regex above cannot silently turn
-    # this test into a no-op that finds nothing and asserts nothing.
-    assert len(prefixes) == 2, (
-        f"expected exactly two delivery locations proxying to orchestrator "
+    # this test into a no-op that finds nothing and asserts nothing. Three
+    # since the playlist phase's own `location /p/` joined `/v/` and
+    # `/refresh/` -- this is that deliberate update, not a future one.
+    assert len(prefixes) == 3, (
+        f"expected exactly three delivery locations proxying to orchestrator "
         f"in the template as it stands, found {prefixes!r} -- if this "
         "assertion is what changed, update the count deliberately rather "
         "than deleting it"
@@ -131,3 +139,30 @@ def test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_ch
             "would be refused with a plain-text 400 it cannot render. Add "
             f"{prefix!r} to HOST_EXEMPT_PREFIXES in src/orchestrator/auth.py"
         )
+
+
+def test_the_not_ready_status_the_application_answers_is_mapped_to_a_clip():
+    """Changing `PLAYLIST_NOT_READY_STATUS` in the application without
+    updating this template's own `error_page` mapping would leave a
+    player receiving a status the delivery block does not map to any
+    clip -- it renders as the black screen the fourth clip exists to
+    abolish, with the whole suite otherwise green. Asserts the number is
+    parsed out of the template, never restated as a literal here.
+    """
+    from orchestrator.web.routes_playlists import PLAYLIST_NOT_READY_STATUS
+
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+
+    match = re.search(
+        r"error_page\s+(\d+)\s+=200\s+/errors/playlist-not-ready\.mp4;", text
+    )
+    assert match, (
+        "no `error_page <code> =200 /errors/playlist-not-ready.mp4;` "
+        "directive found in the template"
+    )
+    assert int(match.group(1)) == PLAYLIST_NOT_READY_STATUS, (
+        f"the template maps status {match.group(1)} to the not-ready clip, "
+        f"but the application's PLAYLIST_NOT_READY_STATUS is "
+        f"{PLAYLIST_NOT_READY_STATUS} -- a player receiving the real status "
+        "would get no mapped clip at all and see a black screen"
+    )
