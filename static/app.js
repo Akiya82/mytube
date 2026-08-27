@@ -133,3 +133,73 @@ function tickCountdown(row) {
 document
   .querySelectorAll('.library-row[data-row-status="pending_delete"]')
   .forEach((row) => tickCountdown(row));
+
+// Playlist reorder: drag-and-drop layered on top of the required up/down
+// arrows (D-107) -- hand-written against native drag events, no library.
+// A drop fires the same one-step move request an arrow's own form
+// submits, repeated once per position crossed (T-03-20): one server-side
+// reorder path, not a client-computed order posted wholesale.
+let _draggedItemId = null;
+
+document.addEventListener("dragstart", (event) => {
+  const row = event.target.closest('.member-row[draggable="true"]');
+  if (row) _draggedItemId = row.getAttribute("data-item-id");
+});
+
+// A drag the operator abandons (Escape, or a drop outside the list) never
+// reaches the drop handler that would otherwise clear this, and a stale id
+// left behind would let the next unrelated drop -- a file dragged in from
+// the desktop, say -- fire a move for a row nobody touched.
+document.addEventListener("dragend", () => {
+  _draggedItemId = null;
+});
+
+document.addEventListener("dragover", (event) => {
+  if (_draggedItemId && event.target.closest(".member-row")) event.preventDefault();
+});
+
+document.addEventListener("drop", (event) => {
+  const targetRow = event.target.closest(".member-row");
+  const list = targetRow && targetRow.closest(".member-list");
+  const itemId = _draggedItemId;
+  _draggedItemId = null;
+  if (!targetRow || !list || !itemId) return;
+  event.preventDefault();
+
+  const rows = Array.from(list.querySelectorAll(".member-row"));
+  const from = rows.findIndex((row) => row.getAttribute("data-item-id") === itemId);
+  const to = rows.indexOf(targetRow);
+  if (from === -1 || to === -1 || from === to) return;
+
+  const playlistId = list.getAttribute("data-playlist-id");
+  reorderPlaylistMember(playlistId, itemId, to > from ? "down" : "up", Math.abs(to - from)).catch(() => {});
+});
+
+// The move POST always redirects (D-107's baseline), success included --
+// res.redirected is true either way, so a dead session is told apart by
+// WHERE it landed (login) rather than whether it redirected at all. A
+// request that fails outright, or lands on login, reloads rather than
+// leaving the drag's visual position uncorrected: nothing here ever
+// reorders the DOM directly, so there is nothing else to roll back.
+async function reorderPlaylistMember(playlistId, itemId, direction, steps) {
+  for (let step = 0; step < steps; step++) {
+    const res = await fetch(`/playlists/${playlistId}/items/${itemId}/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `direction=${direction}`,
+    });
+    if (!res.ok || new URL(res.url).pathname === "/login") return window.location.reload();
+  }
+
+  // Refetch the member fragment (a GET, safe to re-fetch/reload) and
+  // install only its order section -- the fragment route never queries
+  // the picker, so swapping in more than that would blank the picker
+  // already on the page.
+  const res = await fetch(`/playlists/${playlistId}/items`);
+  if (!res.ok || new URL(res.url).pathname === "/login") return window.location.reload();
+  const template = document.createElement("template");
+  template.innerHTML = (await res.text()).trim();
+  const fresh = template.content.querySelector(".playlist-order");
+  const current = document.querySelector(".playlist-order");
+  if (fresh && current) current.replaceWith(fresh);
+}

@@ -656,6 +656,12 @@ button.site-nav__link {
   border-bottom: 1px solid var(--surface-secondary-border);
 }
 
+/* The gap row (D-102): dashed rather than the destructive treatment --
+   nothing failed, the video was deliberately deleted elsewhere. */
+.member-row--gap {
+  border-bottom-style: dashed;
+}
+
 .member-row__drag-handle {
   display: flex;
   align-items: center;

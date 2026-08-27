@@ -19,6 +19,26 @@
   {% if members %}
   <ul class="member-list" data-playlist-id="{{ playlist.id }}">
     {% for member in members %}
+      {% if member.dropped %}
+      {# The gap row (D-102, 03-UI-SPEC.md States -> member-order row gap
+         mark): the position stays -- it is still a real slot in the
+         ordering the operator is reasoning about -- the title is replaced
+         with the removed-from-library text, and the only control is
+         Remove. No drag handle, no move buttons: there is nothing useful
+         to reorder into place for an entry that will never play. This row
+         persists until the operator explicitly removes it -- nothing
+         deletes it automatically, which is the entire point of marking it
+         rather than silently dropping it from the list. #}
+      <li class="member-row member-row--gap">
+        <span class="member-row__position">{{ member.position + 1 }}</span>
+        <span class="member-row__title member-row__title--removed">{{ t("playlist.member.removed") }}</span>
+        <div class="member-row__controls">
+          <form method="post" action="/playlists/{{ playlist.id }}/items/{{ member.item_id }}/remove">
+            <button type="submit" class="btn btn--ghost member-row__control" aria-label="{{ t('playlist.cta.remove') }}">&times;</button>
+          </form>
+        </div>
+      </li>
+      {% else %}
       <li class="member-row" draggable="true" data-item-id="{{ member.item_id }}">
         {# Not a keyboard control -- tabindex="-1" (03-UI-SPEC.md Keyboard
            and Accessibility): the arrows are the keyboard path, and a
@@ -50,6 +70,7 @@
           </form>
         </div>
       </li>
+      {% endif %}
     {% endfor %}
   </ul>
   {% else %}

@@ -512,16 +512,20 @@ def test_app_js_has_a_poll_timer_and_stays_short():
     text = (REPO_ROOT / "static" / "app.js").read_text(encoding="utf-8")
     assert "setTimeout" in text
     # Code lines only. What this guard is watching for is a client library
-    # creeping in, and a vendored one passes 80 lines of actual code on its
-    # own -- a comment explaining why a fallback exists is not the thing to
-    # ration, and counting it pushes the next person toward deleting the
-    # explanation rather than the complexity.
+    # creeping in, and a vendored one passes far more than this ceiling on
+    # its own -- a comment explaining why a fallback exists is not the
+    # thing to ration, and counting it pushes the next person toward
+    # deleting the explanation rather than the complexity. Raised from 80
+    # once hand-written drag-and-drop reordering (D-107) landed alongside
+    # the poller, the countdown and the copy handler; still well under a
+    # vendored drag library's own line count, so the guard still catches
+    # what it was built to catch.
     code = [
         line
         for line in text.splitlines()
         if line.strip() and not line.strip().startswith("//")
     ]
-    assert len(code) < 80
+    assert len(code) < 140
 
 
 def test_no_htmx_or_cdn_references():

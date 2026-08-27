@@ -688,9 +688,15 @@ async def test_assembly_marks_a_member_whose_video_was_deleted(monkeypatch, clie
     assert "Removed from the library" in resp.text
     assert "1" in resp.text  # keeps its position number
 
-    # No drag handle, no move buttons on the gap row -- only Remove.
-    gap_section = resp.text[resp.text.index("Removed from the library"):]
-    assert "Move up" not in gap_section.split("Removed from the library")[1][:200] or True
+    # No drag handle and no move buttons on the gap row -- only Remove.
+    # There is nothing useful to reorder into place for an entry that will
+    # never play, so the row carries exactly one control.
+    row_start = resp.text.rindex("<li", 0, resp.text.index("Removed from the library"))
+    gap_row = resp.text[row_start : resp.text.index("</li>", row_start)]
+    assert "Move up" not in gap_row
+    assert "Move down" not in gap_row
+    assert "drag-handle" not in gap_row
+    assert gap_row.count("aria-label") == 1
 
 
 async def test_assembly_shows_the_timing_note_on_both_create_and_edit(monkeypatch, client, signed_in):
