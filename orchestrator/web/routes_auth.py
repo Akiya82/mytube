@@ -49,12 +49,23 @@ def _notice_key(request: Request) -> str | None:
 
 
 # Same shape as `_notice_key` above, and the same argument: `error` is a
-# flag read off the query string, mapped through a fixed allow-list to
-# catalogue keys never interpolated into the page, so a hand-crafted link
-# can at worst show the operator one of the four sentences the screen
-# already shows on its own. Two maps, not one shared map, so
-# `/login?error=password_mismatch` cannot borrow a create-password
-# sentence for the sign-in screen.
+# flag read off the query string, mapped through a fixed allow-list, and
+# what the banner renders is catalogue copy chosen by that map -- never the
+# submitted value. A hand-crafted link can at worst show the operator one of
+# the four sentences the screen already shows on its own. Two maps, not one
+# shared map, so `/login?error=password_mismatch` cannot borrow a
+# create-password sentence for the sign-in screen.
+#
+# Be precise about what that does *not* claim, because the obvious reading is
+# wrong and someone will act on it. The submitted value does reach the page:
+# `templates.render` rebuilds `current_url` out of the request's own query
+# string verbatim, and `base.html` puts it inside both language-switcher
+# hrefs. `/login?error=<anything>` therefore returns a body containing that
+# text. What makes it inert is the `urlencode` filter overridden in
+# `templates.py` plus Jinja's autoescaping -- not this allow-map, which only
+# governs which sentence the banner shows. Weaken either of those and this
+# comment stops being true, so they are load-bearing security machinery
+# rather than the formatting nicety their own docstring makes them sound.
 #
 # The typed username deliberately does not travel with this flag. It was
 # weighed against carrying it and rejected: echoing operator-submitted
@@ -72,6 +83,24 @@ _SETUP_ERROR_KEYS = {
 
 def _error_key(request: Request, allowed: dict[str, str]) -> str | None:
     return allowed.get(request.query_params.get("error", ""))
+
+
+def _error_flag(flag: str, allowed: dict[str, str]) -> tuple[str, str]:
+    """The query fragment and the catalogue key for `flag`, from one place.
+
+    A failing branch has to state the same fact twice -- the flag it writes
+    into the switcher's address, and the key it hands the template to render
+    right now -- and the two are only correct while they agree. Written as
+    separate literals they drift silently and in the one direction nobody
+    tests: the failing submission still shows its banner, and only the page
+    that comes back from a language switch renders bare, which is the exact
+    defect this flag was added to close.
+
+    Taking the key out of the same map the reader looks in leaves the flag as
+    the only thing a branch spells out, and turns a mistyped one into a
+    KeyError here rather than a missing banner somewhere else.
+    """
+    return f"&error={flag}", allowed[flag]
 
 
 @router.get("/login")
@@ -134,7 +163,8 @@ async def _reject_login(request: Request, username: str, next_value: str):
     # current_url would otherwise be bare /login and switching language
     # after a mistake would throw away the destination the operator was
     # heading to.
-    current_url = f"/login?next={quote(next_url, safe='')}&error=invalid_credentials"
+    error_query, error_key = _error_flag("invalid_credentials", _LOGIN_ERROR_KEYS)
+    current_url = f"/login?next={quote(next_url, safe='')}{error_query}"
 
     return render(
         request,
@@ -142,7 +172,7 @@ async def _reject_login(request: Request, username: str, next_value: str):
         status_code=200,
         next_url=next_url,
         minimal_header=True,
-        error_key="login.error.invalid_credentials",
+        error_key=error_key,
         username_value=username,
         current_url=current_url,
     )
@@ -381,6 +411,7 @@ async def setup_submit_route(
     # the login form is the name that was saved.
     username = username.strip()
     if not username:
+        error_query, error_key = _error_flag("username_required", _SETUP_ERROR_KEYS)
         return render(
             request,
             "setup.html",
@@ -390,11 +421,12 @@ async def setup_submit_route(
             token=token,
             username_value=username,
             min_password_length=auth.MIN_PASSWORD_LENGTH,
-            error_key="setup.error.username_required",
-            current_url=f"{current_url}&error=username_required",
+            error_key=error_key,
+            current_url=f"{current_url}{error_query}",
         )
 
     if password != password_confirm:
+        error_query, error_key = _error_flag("password_mismatch", _SETUP_ERROR_KEYS)
         return render(
             request,
             "setup.html",
@@ -404,11 +436,12 @@ async def setup_submit_route(
             token=token,
             username_value=username,
             min_password_length=auth.MIN_PASSWORD_LENGTH,
-            error_key="setup.error.password_mismatch",
-            current_url=f"{current_url}&error=password_mismatch",
+            error_key=error_key,
+            current_url=f"{current_url}{error_query}",
         )
 
     if len(password) < auth.MIN_PASSWORD_LENGTH:
+        error_query, error_key = _error_flag("password_too_short", _SETUP_ERROR_KEYS)
         return render(
             request,
             "setup.html",
@@ -418,8 +451,8 @@ async def setup_submit_route(
             token=token,
             username_value=username,
             min_password_length=auth.MIN_PASSWORD_LENGTH,
-            error_key="setup.error.password_too_short",
-            current_url=f"{current_url}&error=password_too_short",
+            error_key=error_key,
+            current_url=f"{current_url}{error_query}",
         )
 
     operator_id = uuid.uuid4()

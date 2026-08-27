@@ -486,8 +486,13 @@ async def test_a_failed_login_survives_a_language_switch(
 
     assert 'lang="ru"' in switched.text
     assert "banner--error" in switched.text
-    assert 'type="password"' in switched.text
+    assert 'id="login-password"' in switched.text
     assert re.search(r'<input[^>]*id="login-username"[^>]*value=""', switched.text)
+    # Not the same claim as the empty field above: this one fails if the name
+    # reappears anywhere at all -- a hidden input, a switcher href, a log line
+    # rendered into the page -- which is what "it does not travel" has to mean
+    # for the reason it was decided (browser history, the edge access log).
+    assert "someone" not in switched.text
 
 
 async def test_a_failed_password_setup_survives_a_language_switch(
@@ -510,6 +515,40 @@ async def test_a_failed_password_setup_survives_a_language_switch(
     assert "banner--error" in switched.text
     assert re.search(r'<input[^>]*id="setup-username"[^>]*value=""', switched.text)
     assert 'name="token" value="test-setup-token"' in switched.text
+    assert "someone" not in switched.text
+
+
+async def test_an_error_flag_cannot_cross_between_the_two_screens(
+    client, operator_present
+):
+    """The two allow-maps are separate on purpose, and nothing else notices.
+
+    Collapsing `_LOGIN_ERROR_KEYS` and `_SETUP_ERROR_KEYS` into one map is the
+    obvious tidying edit -- they sit together, hold disjoint keys and have the
+    same shape -- and the whole suite stays green while the sign-in screen
+    starts accepting create-password errors from anyone who can get the
+    operator to open a link. This is the test that goes red instead.
+    """
+    async with client:
+        borrowed = await client.get("/login?error=password_mismatch")
+        invented = await client.get("/login?error=no-such-flag")
+        hostile = await client.get("/login?error=<script>alert(1)</script>")
+        genuine = await client.get("/login?error=invalid_credentials")
+
+    assert "banner--error" not in borrowed.text
+    assert "banner--error" not in invented.text
+    assert "banner--error" not in hostile.text
+    assert "banner--error" in genuine.text
+    # A crafted value still reaches the page, inside the switcher's own href,
+    # and asserting it is absent would be asserting the wrong thing. What it
+    # must never do is arrive there as markup: percent-encoded is the whole
+    # defence, and the page carries a legitimate <script> tag of its own, so
+    # the payload is what gets named here rather than the tag.
+    assert "<script>alert" not in hostile.text
+    # Encoded twice, and that is correct rather than a quirk: the flag is
+    # already a query value inside `current_url`, and `current_url` is then
+    # itself a query value inside the switcher's `next=`.
+    assert "%253Cscript%253Ealert" in hostile.text
 
 
 # --- Integration half ----------------------------------------------------
