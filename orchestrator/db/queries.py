@@ -5,6 +5,8 @@ Every function takes an already-open `asyncpg.Connection` (or a connection
 acquired from a pool) as its first argument -- pool lifecycle is
 `orchestrator.db.create_pool`'s job, not this module's.
 """
+import json
+
 import asyncpg
 
 
@@ -397,16 +399,36 @@ async def set_edition_technical(
     audio_language: str | None,
     audio_title: str | None,
     audio_reencoded: bool,
+    fps: float | None = None,
+    video_profile: str | None = None,
+    video_level: int | None = None,
+    pix_fmt: str | None = None,
+    audio_codec: str | None = None,
+    audio_sample_rate: int | None = None,
+    audio_channel_layout: str | None = None,
 ) -> None:
     """Record the technical detail ffprobe already produced (D-60) -- the
     library row's size/duration/resolution/audio-track line, all of it
     known before a single byte is remuxed.
+
+    The seven keyword-only parameters from `fps` on describe the STORED
+    object, not the source file the caller probed -- the video stream is
+    always copied so its four parameters carry over unchanged, but the
+    audio does not, since the remux re-encodes it to one codec whenever
+    the source is not already that codec. The caller does that
+    reconciliation (see `orchestrator.media.compat.effective_audio_codec`)
+    before calling this; a caller that passes the raw probe output here is
+    passing the wrong thing. All seven default to `None` so a caller that
+    predates this phase (or a row this phase's migration left null) keeps
+    working unchanged.
     """
     await conn.execute(
         """
         UPDATE editions
         SET size_bytes = $2, duration_seconds = $3, width = $4, height = $5,
-            audio_language = $6, audio_title = $7, audio_reencoded = $8
+            audio_language = $6, audio_title = $7, audio_reencoded = $8,
+            fps = $9, video_profile = $10, video_level = $11, pix_fmt = $12,
+            audio_codec = $13, audio_sample_rate = $14, audio_channel_layout = $15
         WHERE id = $1
         """,
         edition_id,
@@ -417,6 +439,13 @@ async def set_edition_technical(
         audio_language,
         audio_title,
         audio_reencoded,
+        fps,
+        video_profile,
+        video_level,
+        pix_fmt,
+        audio_codec,
+        audio_sample_rate,
+        audio_channel_layout,
     )
 
 
@@ -651,8 +680,10 @@ async def delete_failed_title(conn: asyncpg.Connection, title_id) -> None:
 
 async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     """Every object_key and every non-null poster_key a *live* title still
-    points at, each row carrying `key`, `kind` ('video' or 'poster'),
-    `title_name`, `slug` (the title's current slug) and `title_status`.
+    points at, plus every artifact a *live* playlist has built, each row
+    carrying `key`, `kind` ('video', 'poster' or 'playlist'), `title_name`
+    (a playlist's own name for the third kind), `slug` (the title's or
+    playlist's current address) and `title_status`.
 
     Not a bare set of keys: the reconciliation report has to name a
     missing object by the /v/{slug} address it breaks, because that is the
@@ -671,6 +702,19 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     still in `pending_delete` stays in the set: its objects are untouched
     while the deletion can still be undone, so a bucket missing them
     genuinely is a broken address.
+
+    The third branch is a playlist artifact -- `playlist_artifacts.
+    object_key`, excluded only once its playlist is `'deleted'`, for the
+    same reason as the two branches above. **Superseded artifacts are
+    included on purpose**: they are still in the bucket while a viewer's
+    signed address handed out before a rebuild can still reach them, and
+    an audit calling one garbage would be telling the operator to delete
+    something that is still playing. This lands here, one more UNION ALL
+    branch rather than a second query, because the reconciliation
+    function, the library header's counts and the audit report all read
+    this one result -- and because it is where `playlist_artifacts` is
+    created; nothing has produced an artifact yet on a fresh database, so
+    the branch is inert until the first build.
     """
     return await conn.fetch(
         """
@@ -691,6 +735,252 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
         JOIN titles t ON t.id = s.title_id
         LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
         WHERE e.poster_key IS NOT NULL AND t.status != 'deleted'
+        UNION ALL
+        SELECT pa.object_key AS key, 'playlist' AS kind,
+               p.name AS title_name, p.slug AS slug, p.status AS title_status
+        FROM playlist_artifacts pa
+        JOIN playlists p ON p.id = pa.playlist_id
+        WHERE p.status != 'deleted'
+        """
+    )
+
+
+# --- Playlist queries (0004_playlists.py) ---------------------------------
+
+
+async def create_playlist(conn: asyncpg.Connection, name: str, slug: str):
+    """Insert a new playlist row, `mode='pending'`, no artifact yet --
+    returns its id.
+    """
+    return await conn.fetchval(
+        "INSERT INTO playlists (name, slug) VALUES ($1, $2) RETURNING id",
+        name,
+        slug,
+    )
+
+
+async def resolve_playlist_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | None:
+    """Resolve a playlist slug to the row the public `/p/{slug}` address
+    reads -- a direct lookup on `playlists.slug`, not a newest-wins join
+    over a history table, because playlists keep no history (D-103).
+
+    `built_object_key` is a **joined alias**, not a column: a left join
+    against `playlist_artifacts` restricted to `superseded_at IS NULL AND
+    position IS NULL`, which is at most one row -- the current single
+    assembled file, or nothing at all under the mechanism that produces
+    segments. There is exactly one place that knows which artifact is
+    current, and this is it. The value carries its extension (mirroring
+    `editions.object_key`'s own stored shape) and is passed to the signer
+    as-is -- see `orchestrator.signing`'s module docstring for what
+    appending a second one would do.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT
+            p.id AS id,
+            p.status AS status,
+            p.mode AS mode,
+            p.built_at AS built_at,
+            p.name AS name,
+            p.slug AS slug,
+            pa.object_key AS built_object_key
+        FROM playlists p
+        LEFT JOIN playlist_artifacts pa
+            ON pa.playlist_id = p.id
+           AND pa.superseded_at IS NULL
+           AND pa.position IS NULL
+        WHERE p.slug = $1
+        """,
+        slug,
+    )
+
+
+async def taken_playlist_slugs(conn: asyncpg.Connection) -> set[str]:
+    """Every playlist slug already in use -- `/p/` and `/v/` are separate
+    path prefixes and separate namespaces, so this is read from
+    `playlists.slug` alone, never `slug_history`.
+    """
+    rows = await conn.fetch("SELECT slug FROM playlists")
+    return {row["slug"] for row in rows}
+
+
+def _playlist_row_from_record(row: asyncpg.Record) -> dict:
+    """Turn one raw `playlists`-joined record into the dict shape the
+    Library screen and the public address both read -- parses
+    `build_failure_params` (stored as jsonb, returned by asyncpg as raw
+    JSON text since this pool registers no jsonb codec) into a plain dict,
+    and derives `refused` from whether a failure reason was ever recorded.
+    """
+    data = dict(row)
+    params_raw = data.pop("build_failure_params_raw")
+    reason_key = data["refused_reason_key"]
+    data["refused"] = reason_key is not None
+    data["refused_reason_params"] = json.loads(params_raw) if reason_key is not None else None
+    return data
+
+
+_PLAYLIST_ROW_COLUMNS = """
+    p.id AS playlist_id, p.name AS name, p.slug AS slug, p.status AS status,
+    p.delete_at AS delete_at, p.built_at AS built_at, p.created_at AS created_at,
+    p.build_failure_reason AS refused_reason_key,
+    p.build_failure_params::text AS build_failure_params_raw,
+    count(pi.id) AS member_count,
+    CASE WHEN count(pi.id) FILTER (WHERE e.duration_seconds IS NULL) = 0
+         THEN sum(e.duration_seconds) ELSE NULL END AS duration_seconds
+"""
+_PLAYLIST_ROW_FROM = """
+    FROM playlists p
+    LEFT JOIN playlist_items pi ON pi.playlist_id = p.id
+    LEFT JOIN editions e ON e.id = pi.edition_id
+"""
+_PLAYLIST_ROW_GROUP_BY = "GROUP BY p.id"
+
+
+async def playlist_rows(conn: asyncpg.Connection) -> list[dict]:
+    """Every non-deleted playlist with its member count and, when every
+    member's duration is known, their sum -- the Library screen's
+    playlist-row data source, newest first, parallel to `library_rows`.
+    """
+    rows = await conn.fetch(
+        f"SELECT {_PLAYLIST_ROW_COLUMNS} {_PLAYLIST_ROW_FROM} "
+        f"WHERE p.status != 'deleted' {_PLAYLIST_ROW_GROUP_BY} "
+        "ORDER BY p.created_at DESC"
+    )
+    return [_playlist_row_from_record(row) for row in rows]
+
+
+async def playlist_row(conn: asyncpg.Connection, playlist_id) -> dict | None:
+    """One playlist row by id, same shape as `playlist_rows` -- the
+    membership/assembly screen's data source.
+    """
+    row = await conn.fetchrow(
+        f"SELECT {_PLAYLIST_ROW_COLUMNS} {_PLAYLIST_ROW_FROM} "
+        f"WHERE p.id = $1 {_PLAYLIST_ROW_GROUP_BY}",
+        playlist_id,
+    )
+    return _playlist_row_from_record(row) if row is not None else None
+
+
+async def add_playlist_item(conn: asyncpg.Connection, playlist_id, edition_id) -> None:
+    """Append `edition_id` to the end of `playlist_id`'s member list.
+    Repeats are allowed (D-101) -- a position is its own entity, not a
+    reference, so the same edition can be inserted more than once with no
+    special case.
+    """
+    await conn.execute(
+        """
+        INSERT INTO playlist_items (playlist_id, edition_id, position)
+        VALUES (
+            $1, $2,
+            COALESCE(
+                (SELECT max(position) + 1 FROM playlist_items WHERE playlist_id = $1),
+                0
+            )
+        )
+        """,
+        playlist_id,
+        edition_id,
+    )
+
+
+async def playlist_members(conn: asyncpg.Connection, playlist_id) -> list[asyncpg.Record]:
+    """Every member of `playlist_id`, in position order -- `item_id`,
+    `edition_id`, `position`.
+    """
+    return await conn.fetch(
+        "SELECT id AS item_id, edition_id, position FROM playlist_items "
+        "WHERE playlist_id = $1 ORDER BY position",
+        playlist_id,
+    )
+
+
+async def move_playlist_item(
+    conn: asyncpg.Connection, playlist_id, item_id, direction: str
+) -> None:
+    """Swap `item_id` with its "up" or "down" neighbor in position order.
+
+    A swap between two existing positions, not a renumbering of the whole
+    list: the positions `add_playlist_item` hands out are already a
+    contiguous run, so exchanging two of them leaves that run contiguous
+    with no gap and no duplicate. A no-op at either end of the list --
+    there is no neighbor to swap with, and the caller's own UI disables
+    the button that would ask for one.
+    """
+    async with conn.transaction():
+        rows = await conn.fetch(
+            "SELECT id, position FROM playlist_items WHERE playlist_id = $1 "
+            "ORDER BY position",
+            playlist_id,
+        )
+        ids = [row["id"] for row in rows]
+        try:
+            index = ids.index(item_id)
+        except ValueError:
+            return
+
+        step = 1 if direction == "down" else -1
+        neighbor_index = index + step
+        if neighbor_index < 0 or neighbor_index >= len(rows):
+            return
+
+        current, neighbor = rows[index], rows[neighbor_index]
+        await conn.execute(
+            "UPDATE playlist_items SET position = $2 WHERE id = $1",
+            current["id"],
+            neighbor["position"],
+        )
+        await conn.execute(
+            "UPDATE playlist_items SET position = $2 WHERE id = $1",
+            neighbor["id"],
+            current["position"],
+        )
+
+
+async def mark_playlist_for_delete(conn: asyncpg.Connection, playlist_id, grace_seconds: int) -> None:
+    """Flip a playlist to `pending_delete` with `delete_at = now() +
+    grace_seconds` -- the same shape `mark_for_delete` already gives a
+    title. `GET /p/{slug}` answers 404 for this status immediately (D-103:
+    no tombstone), the grace window only delays the reaper's physical
+    delete.
+    """
+    await conn.execute(
+        """
+        UPDATE playlists
+        SET status = 'pending_delete', delete_at = now() + make_interval(secs => $2)
+        WHERE id = $1
+        """,
+        playlist_id,
+        grace_seconds,
+    )
+
+
+async def finish_delete_playlist(conn: asyncpg.Connection, playlist_id) -> None:
+    """Mark a playlist deleted once its artifacts have been reclaimed."""
+    await conn.execute("UPDATE playlists SET status = 'deleted' WHERE id = $1", playlist_id)
+
+
+async def editions_missing_technical(conn: asyncpg.Connection) -> list[asyncpg.Record]:
+    """Every active edition whose `fps` is still null -- what the
+    `backfill-technical` command reads to fill in the seven joinability
+    columns for a row added before this migration. Carries the identifier,
+    the title's name, the source path and the three facts the probe/remux
+    reconciliation needs (the selected audio stream index, its channel
+    count and whether it was re-encoded).
+    """
+    return await conn.fetch(
+        """
+        SELECT
+            e.id AS edition_id,
+            t.name AS title_name,
+            e.source_path AS source_path,
+            e.audio_stream_index AS audio_stream_index,
+            e.audio_channels AS audio_channels,
+            e.audio_reencoded AS audio_reencoded
+        FROM editions e
+        JOIN episodes ep ON ep.id = e.episode_id
+        JOIN seasons s ON s.id = ep.season_id
+        JOIN titles t ON t.id = s.title_id
+        WHERE t.status = 'active' AND e.fps IS NULL
         """
     )
 

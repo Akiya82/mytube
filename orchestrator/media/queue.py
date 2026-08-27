@@ -312,6 +312,28 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 audio_language=selected_track.language if selected_track else None,
                 audio_title=selected_track.title if selected_track else None,
                 audio_reencoded=verdict.audio_needs_reencode,
+                # The four video parameters come straight from the verdict:
+                # the video stream is always copied, so its parameters
+                # already describe the stored object. The audio sample rate
+                # and channel layout come straight from the selected track
+                # for the same reason -- no downmix and no resample argument
+                # is ever emitted. The audio codec is reconciled to what the
+                # remux actually stores (compat.effective_audio_codec), since
+                # the probed source codec is not what ends up in the bucket
+                # whenever the track is re-encoded.
+                fps=verdict.fps,
+                video_profile=verdict.video_profile,
+                video_level=verdict.video_level,
+                pix_fmt=verdict.pix_fmt,
+                audio_codec=(
+                    compat.effective_audio_codec(
+                        selected_track.codec, verdict.audio_needs_reencode
+                    )
+                    if selected_track
+                    else None
+                ),
+                audio_sample_rate=selected_track.sample_rate if selected_track else None,
+                audio_channel_layout=selected_track.channel_layout if selected_track else None,
             )
             if poster_key is not None:
                 await queries.set_edition_poster(conn, job.edition_id, poster_key)

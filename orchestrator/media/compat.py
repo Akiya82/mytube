@@ -118,6 +118,8 @@ class AudioTrack:
     channels: int
     language: str | None
     title: str | None
+    sample_rate: int | None = None
+    channel_layout: str | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +132,21 @@ class Verdict:
     True. `audio_needs_reencode` reflects the *selected* track only: it is
     the audio half of the "video untouched, audio converted" line (D-39),
     independent of whether the video itself is eligible.
+
+    The seven fields below (`fps` through `audio_channel_layout`) exist
+    for the playlist joinability check: `-f concat -c copy` needs two
+    members' streams to agree on these, and the catalog could not answer
+    the question until now. All seven describe the *source* as this probe
+    saw it -- `None` for a missing, malformed or not-yet-measured value,
+    never invented. `fps` is parsed from the video stream's average
+    frame-rate fraction string into a float; `video_profile`/
+    `video_level`/`pix_fmt` are the same video-stream fields
+    `_video_eligibility` already inspects, not a second probe. The three
+    `audio_*` fields describe the *selected* track only (the only one
+    that survives into the output, D-42) -- reconciling the codec to what
+    the remux actually stores is `effective_audio_codec`'s job, not this
+    dataclass's: this module describes the source, and the caller that
+    knows the remux's own outcome does the reconciliation.
     """
 
     eligible: bool
@@ -143,6 +160,13 @@ class Verdict:
     width: int | None
     height: int | None
     size_bytes: int | None
+    fps: float | None
+    video_profile: str | None
+    video_level: int | None
+    pix_fmt: str | None
+    audio_codec: str | None
+    audio_sample_rate: int | None
+    audio_channel_layout: str | None
 
 
 def probe(path) -> dict:
@@ -214,6 +238,8 @@ def audio_tracks(probe_json: dict) -> list[AudioTrack]:
                 channels=stream.get("channels", 0),
                 language=tags.get("language"),
                 title=tags.get("title"),
+                sample_rate=_maybe_number(stream.get("sample_rate"), int),
+                channel_layout=stream.get("channel_layout"),
             )
         )
     return tracks
@@ -225,6 +251,41 @@ def _default_track_index(tracks: list[AudioTrack]) -> int | None:
         if track.codec == "aac":
             return track.index
     return tracks[0].index if tracks else None
+
+
+def _parse_frame_rate(value) -> float | None:
+    """Parse ffprobe's `avg_frame_rate` fraction string ("24/1",
+    "24000/1001", "0/0") into a float. `None` for a missing, malformed or
+    zero-denominator value -- in the spirit of `_maybe_number` below,
+    never invented.
+    """
+    if not value:
+        return None
+    parts = value.split("/")
+    if len(parts) != 2:
+        return None
+    try:
+        numerator, denominator = float(parts[0]), float(parts[1])
+    except ValueError:
+        return None
+    if denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def effective_audio_codec(source_codec: str, reencoded: bool) -> str:
+    """The codec the stored object actually carries, not the source's.
+
+    `build_remux_command` emits `-c:a aac` whenever the audio is
+    re-encoded, so a member whose source was AC-3 and a member whose
+    source was already AAC end up as the same codec in the bucket --
+    recording the probed source codec for both would make two identical
+    stored objects look like a mismatch and refuse a list that would have
+    joined perfectly. `Verdict.audio_codec` keeps carrying the probed
+    source value unchanged; this function is where the reconciliation
+    happens, once the caller knows the remux's own outcome.
+    """
+    return "aac" if reencoded else source_codec
 
 
 def _maybe_number(value, cast):
@@ -351,4 +412,11 @@ def analyze(
         width=video.get("width") if video else None,
         height=video.get("height") if video else None,
         size_bytes=_maybe_number(fmt.get("size"), int),
+        fps=_parse_frame_rate(video.get("avg_frame_rate") if video else None),
+        video_profile=video.get("profile") if video else None,
+        video_level=video.get("level") if video else None,
+        pix_fmt=video.get("pix_fmt") if video else None,
+        audio_codec=selected_track.codec if selected_track else None,
+        audio_sample_rate=selected_track.sample_rate if selected_track else None,
+        audio_channel_layout=selected_track.channel_layout if selected_track else None,
     )
