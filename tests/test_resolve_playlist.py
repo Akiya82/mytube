@@ -56,9 +56,9 @@ def client():
 
 def _built_row(slug="vecher-klipov", built_object_key="a1b2c3d4-0000-0000-0000-000000000000.mp4"):
     """An active, concat-built playlist row. `built_object_key` is the full
-    storage key, extension included -- the contract this phase freezes (see
-    03-01-PLAN.md's objective). Visibly ends in `.mp4` so a reader of this
-    file cannot mistake it for a bare identifier.
+    storage key, extension included, mirroring how `editions.object_key` is
+    already stored. Visibly ends in `.mp4` so a reader of this file cannot
+    mistake it for a bare identifier.
     """
     return {
         "id": PLAYLIST_ID,

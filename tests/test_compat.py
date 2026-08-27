@@ -335,3 +335,86 @@ def test_audio_is_safe_true_only_for_aac():
     assert audio_is_safe({"codec_name": "ac3"}) is False
     assert audio_is_safe({"codec_name": "eac3"}) is False
     assert audio_is_safe({"codec_name": "dts"}) is False
+
+
+# --- Verdict's widened fields: concat parity needs these -------------------
+# The raw probe output already carries every one of these fields (see this
+# module's own docstring and tests/fixtures/probe/compatible.json) -- only
+# Verdict/set_edition_technical don't carry them through yet. No new ffprobe
+# invocation is needed anywhere below.
+
+
+def test_the_verdict_carries_the_video_stream_parameters_concat_cares_about():
+    data = _load("compatible.json")
+    video = next(s for s in data["streams"] if s["codec_type"] == "video")
+
+    verdict = analyze(data)
+
+    assert verdict.fps == pytest.approx(24.0), (
+        "fps is parsed from the fractional r_frame_rate string "
+        f"({video['r_frame_rate']!r}) into a float, not stored as the raw string"
+    )
+    assert verdict.video_profile == video["profile"]
+    assert verdict.video_level == video["level"]
+    assert verdict.pix_fmt == video["pix_fmt"]
+
+
+def test_the_verdict_carries_the_selected_audio_track_detail():
+    """mixed_codecs.json's first stream (index 1) is ac3; its second
+    (index 2) is aac and becomes the default-selected track. Asserting
+    against that fixture, rather than compatible.json's single-track one,
+    proves the verdict reads the *selected* track's detail and not simply
+    the first audio stream in the file.
+    """
+    data = _load("mixed_codecs.json")
+    selected_stream = next(
+        s
+        for s in data["streams"]
+        if s.get("codec_type") == "audio" and s.get("codec_name") == "aac"
+    )
+
+    verdict = analyze(data)
+
+    assert verdict.audio_codec == "aac"
+    assert verdict.audio_codec != "ac3"
+    assert verdict.audio_sample_rate == int(selected_stream["sample_rate"])
+    assert verdict.audio_channel_layout == selected_stream["channel_layout"]
+
+
+def test_the_verdict_leaves_a_missing_parameter_as_none():
+    data = _load("compatible.json")
+    video = next(s for s in data["streams"] if s["codec_type"] == "video")
+    del video["profile"]
+
+    verdict = analyze(data)
+
+    assert verdict.video_profile is None, (
+        "a verdict must not invent a value it did not find"
+    )
+
+
+@pytest.mark.parametrize(
+    "source_codec,reencoded",
+    [
+        ("ac3", True),
+        ("aac", False),
+    ],
+    ids=["reencoded_ac3_becomes_aac", "already_aac_stays_aac"],
+)
+def test_the_effective_audio_codec_describes_the_stored_object_not_the_source(
+    source_codec, reencoded
+):
+    """`build_remux_command` emits `-c:a aac` whenever the audio is
+    re-encoded, so recording the probed source codec would make two
+    identical stored objects look like a mismatch, and the joinability
+    check would refuse a list that would have joined perfectly. In a
+    library of as-is rips this is the most common case there is, and it
+    is exactly the refusal this phase promises to make trustworthy.
+
+    The video parameters need no such reconciliation -- the video stream
+    is always copied -- and the audio sample rate and channel layout
+    survive too, because no downmix or resample argument is ever emitted.
+    """
+    from orchestrator.media.compat import effective_audio_codec
+
+    assert effective_audio_codec(source_codec, reencoded) == "aac"

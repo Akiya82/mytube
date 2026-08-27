@@ -61,11 +61,10 @@ PLAYLIST_ID = uuid.uuid4()
 
 
 def _playlist_row(**over):
-    """One row of what `playlist_rows` hands the Library screen. Fixed here
-    as this plan's own contract for the row-list query -- distinct from the
-    `resolve_playlist_slug` row shape task 1 pins, which the public /p/
-    route reads. `refused_reason_key`/`refused_reason_params` follow the
-    same pattern add_form.html already uses for an incompatible video
+    """One row of what `playlist_rows` hands the Library screen -- distinct
+    from the `resolve_playlist_slug` row shape the public /p/ route reads.
+    `refused_reason_key`/`refused_reason_params` follow the same pattern
+    add_form.html already uses for an incompatible video
     (`verdict.reason_key`/`verdict.reason_params`), never a rendered
     sentence.
     """
@@ -208,7 +207,7 @@ async def test_assembly_create_escapes_a_name_that_looks_like_markup(monkeypatch
         assert "&lt;script&gt;" in resp.text
 
 
-# --- The library row (D-108) ----------------------------------------------
+# --- The library row: a playlist lives next to videos, same row shape (D-108) --
 
 
 async def test_library_shows_playlists_and_videos_in_one_list(monkeypatch, client, signed_in):
@@ -406,7 +405,8 @@ async def test_a_playlist_row_detail_line_degrades_when_a_duration_is_unknown(
     assert "2 clips" in unknown_resp.text
 
 
-# --- Membership and ordering (D-101, D-102, D-107) -------------------------
+# --- Membership and ordering: repeats allowed, gaps marked, arrows first --
+# (D-101, D-102, D-107) --------------------------------------------------
 
 
 async def test_assembly_picker_lists_every_active_video_with_an_add_button(

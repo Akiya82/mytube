@@ -464,6 +464,169 @@ async def test_a_second_episode_does_not_duplicate_the_library_row(raw_conn):
     assert row["edition_id"] == first_edition
 
 
+
+# --- Widened technical detail, playlist CRUD, and the artifact union ------
+# branch -- extends referenced_objects's existing UNION ALL rather than a
+# second query. Every function called below is new; none exists yet, so
+# each test fails on its own first call to `queries` rather than at
+# collection.
+
+
+async def test_set_edition_technical_persists_the_stream_parameters(raw_conn):
+    edition_id = uuid.uuid4()
+    await queries.create_title_with_edition(
+        raw_conn, "Stream Parameters Title", "stream-parameters-title-slug",
+        edition_id, f"{edition_id}.mp4",
+    )
+
+    await queries.set_edition_technical(
+        raw_conn, edition_id,
+        size_bytes=123456, duration_seconds=90.5, width=1920, height=1080,
+        audio_language="jpn", audio_title="Original", audio_reencoded=False,
+        fps=23.976, video_profile="High", video_level=41, pix_fmt="yuv420p",
+        audio_codec="aac", audio_sample_rate=48000, audio_channel_layout="stereo",
+    )
+
+    row = await raw_conn.fetchrow(
+        "SELECT fps, video_profile, video_level, pix_fmt, audio_codec, "
+        "audio_sample_rate, audio_channel_layout FROM editions WHERE id = $1",
+        edition_id,
+    )
+    assert row["fps"] == pytest.approx(23.976)
+    assert row["video_profile"] == "High"
+    assert row["video_level"] == 41
+    assert row["pix_fmt"] == "yuv420p"
+    assert row["audio_codec"] == "aac"
+    assert row["audio_sample_rate"] == 48000
+    assert row["audio_channel_layout"] == "stereo"
+
+
+async def test_playlist_create_and_resolve_round_trip(raw_conn):
+    playlist_id = await queries.create_playlist(raw_conn, "Round Trip Playlist", "round-trip-playlist-slug")
+
+    row = await queries.resolve_playlist_slug(raw_conn, "round-trip-playlist-slug")
+
+    assert row is not None
+    assert row["id"] == playlist_id
+    assert row["mode"] == "pending"
+    assert row["built_object_key"] is None
+    assert row["built_at"] is None
+
+
+async def test_playlist_items_keep_their_order_and_allow_repeats(raw_conn):
+    playlist_id = await queries.create_playlist(raw_conn, "Ordered Playlist", "ordered-playlist-slug")
+    edition_id = uuid.uuid4()
+    await queries.create_title_with_edition(
+        raw_conn, "Ordered Member", "ordered-member-slug", edition_id, f"{edition_id}.mp4"
+    )
+
+    await queries.add_playlist_item(raw_conn, playlist_id, edition_id)
+    await queries.add_playlist_item(raw_conn, playlist_id, edition_id)
+
+    members = await queries.playlist_members(raw_conn, playlist_id)
+
+    assert len(members) == 2
+    assert [m["edition_id"] for m in members] == [edition_id, edition_id]
+    positions = [m["position"] for m in members]
+    assert positions == sorted(positions)
+
+
+async def test_moving_a_playlist_item_rewrites_positions_without_gaps(raw_conn):
+    playlist_id = await queries.create_playlist(raw_conn, "Movable Playlist", "movable-playlist-slug")
+    edition_ids = [uuid.uuid4() for _ in range(3)]
+    for i, edition_id in enumerate(edition_ids):
+        await queries.create_title_with_edition(
+            raw_conn, f"Movable Member {i}", f"movable-member-{i}-slug", edition_id, f"{edition_id}.mp4"
+        )
+        await queries.add_playlist_item(raw_conn, playlist_id, edition_id)
+
+    members = await queries.playlist_members(raw_conn, playlist_id)
+    first_item_id = members[0]["item_id"]
+
+    await queries.move_playlist_item(raw_conn, playlist_id, first_item_id, "down")
+
+    after = await queries.playlist_members(raw_conn, playlist_id)
+    positions = sorted(m["position"] for m in after)
+    base = positions[0]
+    assert positions == list(range(base, base + len(after))), (
+        "positions must be a contiguous run with no duplicate after a move"
+    )
+    assert len(set(positions)) == len(positions)
+
+
+async def test_a_built_artifact_reads_as_referenced_from_the_real_query(raw_conn):
+    """Against the real query over the migrated database, not a hand-built
+    row: storage.reconcile reads only key/kind/title_name/slug and is
+    entirely kind-agnostic, so a hand-built row carrying a playlist kind
+    would pass today, before a line of this phase is written, and would
+    keep passing if the union branch were never added. Assert the key is
+    the full storage key with its extension, byte-identical to what a
+    bucket listing holds.
+    """
+    playlist_id = await queries.create_playlist(
+        raw_conn, "Referenced Artifact Playlist", "referenced-artifact-playlist-slug"
+    )
+    artifact_key = f"{uuid.uuid4()}.mp4"
+    await raw_conn.execute(
+        "INSERT INTO playlist_artifacts (id, playlist_id, object_key, superseded_at) "
+        "VALUES ($1, $2, $3, NULL)",
+        uuid.uuid4(), playlist_id, artifact_key,
+    )
+
+    rows = await queries.referenced_objects(raw_conn)
+
+    match = next((r for r in rows if r["key"] == artifact_key), None)
+    assert match is not None
+    assert match["kind"] == "playlist"
+
+
+async def test_a_superseded_artifact_stays_referenced_until_it_is_reclaimed(raw_conn):
+    playlist_id = await queries.create_playlist(
+        raw_conn, "Superseded Artifact Playlist", "superseded-artifact-playlist-slug"
+    )
+    current_key = f"{uuid.uuid4()}.mp4"
+    superseded_key = f"{uuid.uuid4()}.mp4"
+    await raw_conn.execute(
+        "INSERT INTO playlist_artifacts (id, playlist_id, object_key, superseded_at) "
+        "VALUES ($1, $2, $3, NULL)",
+        uuid.uuid4(), playlist_id, current_key,
+    )
+    await raw_conn.execute(
+        "INSERT INTO playlist_artifacts (id, playlist_id, object_key, superseded_at) "
+        "VALUES ($1, $2, $3, now())",
+        uuid.uuid4(), playlist_id, superseded_key,
+    )
+
+    keys = {r["key"] for r in await queries.referenced_objects(raw_conn)}
+
+    assert current_key in keys
+    assert superseded_key in keys, (
+        "the superseded artifact is still in the bucket while an address "
+        "handed out before the rebuild can still reach it -- an audit "
+        "calling it garbage would be wrong"
+    )
+
+
+async def test_a_finished_playlist_deletion_leaves_nothing_referenced(raw_conn):
+    playlist_id = await queries.create_playlist(
+        raw_conn, "Finished Deletion Playlist", "finished-deletion-playlist-slug"
+    )
+    artifact_key = f"{uuid.uuid4()}.mp4"
+    await raw_conn.execute(
+        "INSERT INTO playlist_artifacts (id, playlist_id, object_key, superseded_at) "
+        "VALUES ($1, $2, $3, NULL)",
+        uuid.uuid4(), playlist_id, artifact_key,
+    )
+    await queries.mark_playlist_for_delete(raw_conn, playlist_id, grace_seconds=0)
+    await queries.finish_delete_playlist(raw_conn, playlist_id)
+
+    keys = {r["key"] for r in await queries.referenced_objects(raw_conn)}
+
+    assert artifact_key not in keys, (
+        "a completed deletion must not be reported forever as a broken address"
+    )
+
+
 async def test_job_row_takes_the_first_episodes_default_edition(raw_conn):
     first_edition = uuid.uuid4()
     title_id = await queries.create_title_with_edition(

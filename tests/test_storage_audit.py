@@ -165,3 +165,36 @@ async def test_no_slug_reports_address_unknown_instead_of_a_bare_key(monkeypatch
     out = capsys.readouterr().out
     assert code == 1
     assert "gone.mp4" in out
+
+
+# --- format_address(kind, slug): the report names a broken address by the --
+# kind of thing that broke, not always by the video prefix.
+
+
+@pytest.mark.parametrize(
+    "kind,slug,expected_prefix",
+    [
+        ("video", "gone-slug", "/v/gone-slug"),
+        ("poster", "gone-slug", "/v/gone-slug"),
+        ("playlist", "gone-playlist-slug", "/p/gone-playlist-slug"),
+    ],
+    ids=["video", "poster", "playlist"],
+)
+def test_a_broken_address_is_reported_under_the_prefix_its_kind_actually_uses(
+    kind, slug, expected_prefix
+):
+    from orchestrator.cli.storage_audit import format_address
+
+    assert format_address(kind, slug) == expected_prefix, (
+        "the report currently hardcodes the video prefix for every kind -- "
+        "the operator chasing a broken playlist must not be sent to a "
+        "/v/ link that was never the one that broke"
+    )
+
+
+def test_a_row_with_no_slug_still_reports_something_readable():
+    from orchestrator.cli.storage_audit import format_address
+
+    for kind in ("video", "poster", "playlist"):
+        result = format_address(kind, None)
+        assert result and "None" not in result
