@@ -15,7 +15,7 @@
   </div>
 </div>
 
-<form class="add-form" method="post" action="/playlists">
+<form class="add-form" method="post" action="{{ '/playlists/' ~ playlist.id if editing else '/playlists' }}">
   <div class="form-field">
     <label class="form-field__label" for="playlist-name">{{ t("add.field.name") }}</label>
     <input class="form-field__input" type="text" id="playlist-name" name="name" value="{{ name_value }}">
@@ -36,7 +36,13 @@
 
   <button type="submit" class="btn btn--primary">{{ t("playlist.cta.save") }}</button>
 </form>
-{# The order section (playlist.members.heading) and the picker section
-   (playlist.picker.heading) arrive in the next plan -- this file gains
-   them there rather than being replaced. #}
+
+{# The order section and the picker section only exist once a playlist
+   does -- there is nowhere to add a member before the row that owns them
+   has an id. `GET /playlists/new` renders no member fragment at all
+   (one primary button on that screen, proven by this file's own frozen
+   behaviour spec); `GET /playlists/{id}/edit` always does. #}
+{% if editing %}
+{% include "partials/playlist_members.html" %}
+{% endif %}
 {% endblock %}

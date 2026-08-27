@@ -1,0 +1,73 @@
+{#
+  The playlist order list and the member picker, as one file rendered two
+  ways (D-107, 03-UI-SPEC.md Screen 5 items 4-5): included by
+  playlist_form.html on the full assembly screen, and rendered standalone
+  by GET /playlists/{id}/items for the drop handler's own read-only
+  refetch -- the same "one file, two ways in" shape
+  partials/library_row.html already established for the 4-second poll,
+  byte-identical markup for the same member data either way.
+
+  `editions` defaults to an empty list when this file is rendered by the
+  fragment route: a drop only ever needs the order section re-rendered,
+  never the picker, so that route never queries `active_editions_for_
+  picker` at all (see routes_playlists.py's own comment on it).
+#}
+<section class="playlist-order" aria-labelledby="playlist-order-heading">
+  <h2 id="playlist-order-heading" class="section-heading">{{ t("playlist.members.heading") }}</h2>
+
+  {% if members %}
+  <ul class="member-list" data-playlist-id="{{ playlist.id }}">
+    {% for member in members %}
+      <li class="member-row" data-item-id="{{ member.item_id }}">
+        <span class="member-row__position">{{ member.position + 1 }}</span>
+        <span class="member-row__title">{{ member.title_name }}</span>
+        {% if member.duration_seconds is not none %}
+          <span class="member-row__duration">{{ member.duration_seconds | duration_hms }}</span>
+        {% endif %}
+        {# Remove is the whole cluster for now; the reorder controls
+           land beside it once there is a server-side path to move a row.
+           Icon-only with an accessible name from aria-label, the one
+           deliberate exception this interface makes (03-UI-SPEC.md
+           Spacing Scale). #}
+        <div class="member-row__controls">
+          <form method="post" action="/playlists/{{ playlist.id }}/items/{{ member.item_id }}/remove">
+            <button type="submit" class="btn btn--ghost member-row__control" aria-label="{{ t('playlist.cta.remove') }}">&times;</button>
+          </form>
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">
+    <p class="empty-state__heading">{{ t("playlist.members.empty.heading") }}</p>
+    <p class="empty-state__body">{{ t("playlist.members.empty.body") }}</p>
+  </div>
+  {% endif %}
+</section>
+
+<section class="playlist-picker" aria-labelledby="playlist-picker-heading">
+  <h2 id="playlist-picker-heading" class="section-heading">{{ t("playlist.picker.heading") }}</h2>
+  {# Dense .share-row density (40px), not the taller Library row -- this
+     list runs to dozens of entries and its job is fast scanning
+     (03-UI-SPEC.md Component Inventory). No already-added marker and no
+     greying out: a repeat is a supported case (D-101), so a video already
+     in the ordered list above still shows a plain Add button. #}
+  <ul class="share-listing">
+    {% for edition in editions | default([]) %}
+    <li class="share-row">
+      <div class="picker-row">
+        <span class="share-row__meta">
+          <span class="share-row__name">{{ edition.title_name }}</span>
+        </span>
+        {% if edition.duration_seconds is not none %}
+          <span class="share-row__size">{{ edition.duration_seconds | duration_hms }}</span>
+        {% endif %}
+        <form method="post" action="/playlists/{{ playlist.id }}/items">
+          <input type="hidden" name="edition_id" value="{{ edition.edition_id }}">
+          <button type="submit" class="btn btn--ghost">{{ t("playlist.cta.add_member") }}</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>

@@ -629,6 +629,90 @@ button.site-nav__link {
   overflow-wrap: anywhere;
 }
 
+/* Playlist assembly screen (03-UI-SPEC.md Screen 5) -- the member-order
+   list, its icon-only control cluster, and the picker below it. Reuses
+   the spacing scale and the .share-row density already established
+   above; no new custom property, no new colour. */
+.section-heading {
+  font-size: var(--text-heading-size);
+  font-weight: var(--text-heading-weight);
+  line-height: var(--text-heading-line);
+  margin: var(--space-xl) 0 var(--space-md);
+}
+
+.member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--surface-secondary-border);
+}
+
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: 44px;
+  padding: var(--space-sm) var(--space-xs);
+  border-bottom: 1px solid var(--surface-secondary-border);
+}
+
+.member-row__position {
+  flex-shrink: 0;
+  width: 24px;
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.member-row__title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.member-row__title--removed {
+  color: var(--text-muted);
+}
+
+.member-row__duration {
+  flex-shrink: 0;
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+}
+
+.member-row__controls {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+/* Each control's own <form> must not introduce a box between the flex
+   container and the button it wraps -- same fix .site-nav form already
+   applies for the same reason. */
+.member-row__controls form {
+  display: contents;
+}
+
+/* The one deliberate icon-only exception in this interface (03-UI-SPEC.md
+   Spacing Scale): square rather than the default .btn padding, same 44px
+   floor, accessible name from aria-label rather than a visible label. */
+.member-row__control {
+  width: 44px;
+  padding: 0;
+}
+
+/* Member picker row -- the dense .share-row shape (40px), not the taller
+   Library row; this list can run to dozens of entries. */
+.picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  min-height: 40px;
+  padding: var(--space-sm) var(--space-xs);
+}
+
 /* Accessible-but-invisible label text (the missing-thumbnail placeholder's
    "No preview available", read by a screen reader, seen by no one). */
 .visually-hidden {

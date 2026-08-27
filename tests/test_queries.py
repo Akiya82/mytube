@@ -554,6 +554,78 @@ async def test_moving_a_playlist_item_rewrites_positions_without_gaps(raw_conn):
     assert len(set(positions)) == len(positions)
 
 
+async def test_removing_a_playlist_item_renumbers_the_remainder_contiguously(raw_conn):
+    playlist_id = await queries.create_playlist(raw_conn, "Trimmable Playlist", "trimmable-playlist-slug")
+    edition_ids = [uuid.uuid4() for _ in range(3)]
+    for i, edition_id in enumerate(edition_ids):
+        await queries.create_title_with_edition(
+            raw_conn, f"Trimmable Member {i}", f"trimmable-member-{i}-slug", edition_id, f"{edition_id}.mp4"
+        )
+        await queries.add_playlist_item(raw_conn, playlist_id, edition_id)
+
+    members = await queries.playlist_members(raw_conn, playlist_id)
+    middle_item_id = members[1]["item_id"]
+
+    await queries.remove_playlist_item(raw_conn, playlist_id, middle_item_id)
+
+    after = await queries.playlist_members(raw_conn, playlist_id)
+    positions = sorted(m["position"] for m in after)
+    assert len(after) == 2
+    assert positions == list(range(positions[0], positions[0] + 2))
+    assert middle_item_id not in [m["item_id"] for m in after]
+
+
+async def test_removing_a_playlist_item_from_the_wrong_playlist_changes_nothing(raw_conn):
+    """T-03-18: an item identifier scoped to one playlist must not delete
+    anything when presented against a different one.
+    """
+    playlist_a = await queries.create_playlist(raw_conn, "Playlist A", "playlist-a-slug")
+    playlist_b = await queries.create_playlist(raw_conn, "Playlist B", "playlist-b-slug")
+    edition_id = uuid.uuid4()
+    await queries.create_title_with_edition(
+        raw_conn, "Cross Playlist Member", "cross-playlist-member-slug", edition_id, f"{edition_id}.mp4"
+    )
+    await queries.add_playlist_item(raw_conn, playlist_a, edition_id)
+    members = await queries.playlist_members(raw_conn, playlist_a)
+    item_id = members[0]["item_id"]
+
+    with pytest.raises(LookupError):
+        await queries.remove_playlist_item(raw_conn, playlist_b, item_id)
+
+    still_there = await queries.playlist_members(raw_conn, playlist_a)
+    assert [m["item_id"] for m in still_there] == [item_id]
+
+
+async def test_a_member_whose_title_was_deleted_reports_itself_as_dropped(raw_conn):
+    """The gap mark (D-102) is a column the query computes, not a status
+    value the template is expected to recognise -- so the thing worth
+    proving against real Postgres is that deleting a title actually flips
+    it, and that the member keeps its slot rather than disappearing from
+    the list.
+    """
+    playlist_id = await queries.create_playlist(raw_conn, "Evening With A Hole", "evening-with-a-hole")
+    kept_edition, doomed_edition = uuid.uuid4(), uuid.uuid4()
+    await queries.create_title_with_edition(
+        raw_conn, "Kept Clip", "kept-clip-slug", kept_edition, f"{kept_edition}.mp4"
+    )
+    doomed_title = await queries.create_title_with_edition(
+        raw_conn, "Doomed Clip", "doomed-clip-slug", doomed_edition, f"{doomed_edition}.mp4"
+    )
+    await queries.add_playlist_item(raw_conn, playlist_id, kept_edition)
+    await queries.add_playlist_item(raw_conn, playlist_id, doomed_edition)
+
+    before = await queries.playlist_members(raw_conn, playlist_id)
+    assert [m["dropped"] for m in before] == [False, False]
+
+    await queries.finish_delete(raw_conn, doomed_title)
+
+    after = await queries.playlist_members(raw_conn, playlist_id)
+    assert len(after) == 2, "the member keeps its slot; it does not vanish"
+    assert [m["dropped"] for m in after] == [False, True]
+    assert [m["position"] for m in after] == [m["position"] for m in before]
+    assert after[0]["title_name"] == "Kept Clip"
+
+
 async def test_a_built_artifact_reads_as_referenced_from_the_real_query(raw_conn):
     """Against the real query over the migrated database, not a hand-built
     row: storage.reconcile reads only key/kind/title_name/slug and is

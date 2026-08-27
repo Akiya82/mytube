@@ -21,7 +21,9 @@ tombstone and an address that stops working stops working outright --
 `GET /p/{slug}` never answers 410, unlike `/v/{slug}`.
 """
 import asyncio
+import uuid
 
+import asyncpg
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse, Response
 
@@ -123,6 +125,180 @@ async def create_playlist_route(
         await queries.create_playlist(conn, clean_name, chosen)
 
     return RedirectResponse("/library", status_code=302)
+
+
+def _parse_uuid(value: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
+
+
+@router.get("/playlists/{playlist_id}/edit")
+async def edit_playlist_form_route(playlist_id: str, request: Request):
+    """The assembly screen's edit entry point (03-UI-SPEC.md Screen 5) --
+    name/address fields pre-filled, the timing note, the ordered member
+    list and the picker. A playlist that does not exist, or one whose
+    status is not `active`, answers 404 -- `.get("status", "active")`
+    rather than a bare index so a hand-built test double that omits the
+    field (this screen's own frozen behaviour spec does, throughout) is
+    treated as active rather than raising.
+    """
+    parsed = _parse_uuid(playlist_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        playlist = await queries.playlist_detail(conn, parsed)
+        if playlist is None or playlist.get("status", "active") != "active":
+            return Response(status_code=404)
+        members = await queries.playlist_members(conn, parsed)
+        editions = await queries.active_editions_for_picker(conn)
+
+    return render(
+        request,
+        "playlist_form.html",
+        editing=True,
+        playlist=playlist,
+        name_value=playlist["name"],
+        slug_value=playlist["slug"],
+        slug_plan=None,
+        members=members,
+        editions=editions,
+    )
+
+
+@router.post("/playlists/{playlist_id}")
+async def update_playlist_route(
+    playlist_id: str, request: Request, name: str = Form(...), slug: str = Form("")
+):
+    """Save a changed name and/or address. The slug goes through the same
+    `normalize_slug`/`pick_unique_slug` path `create_playlist_route` uses,
+    with this playlist's own current slug excluded from the taken set --
+    saving without changing the address must not collide with itself.
+    """
+    parsed = _parse_uuid(playlist_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        playlist = await queries.playlist_detail(conn, parsed)
+        if playlist is None or playlist.get("status", "active") != "active":
+            return Response(status_code=404)
+
+        clean_name = name.strip()
+        try:
+            candidate = normalize_slug(slug) if slug.strip() else normalize_slug(clean_name)
+        except SlugError:
+            members = await queries.playlist_members(conn, parsed)
+            editions = await queries.active_editions_for_picker(conn)
+            return render(
+                request,
+                "playlist_form.html",
+                status_code=400,
+                editing=True,
+                playlist=playlist,
+                name_value=clean_name,
+                slug_value=slug,
+                slug_plan=None,
+                slug_error=True,
+                members=members,
+                editions=editions,
+            )
+
+        taken = await queries.taken_playlist_slugs(conn)
+        taken.discard(playlist["slug"])
+        chosen, _similar = pick_unique_slug(candidate, taken)
+        await queries.update_playlist(conn, parsed, clean_name, chosen)
+
+    return RedirectResponse(f"/playlists/{playlist_id}/edit", status_code=302)
+
+
+@router.get("/playlists/{playlist_id}/items")
+async def playlist_items_fragment_route(playlist_id: str, request: Request):
+    """The member section alone, no document or navigation element around
+    it -- the drop handler's own read-only refetch address, and generally
+    the standalone half of the "one file, two ways in" shape
+    `partials/library_row.html` already established for the 4-second poll.
+    Read-only, session-gated like every route in this module, and it
+    changes nothing.
+
+    Deliberately does not query the picker's editions: a drop only ever
+    needs the order section re-rendered, never the picker, so this route
+    never touches `active_editions_for_picker` at all -- the partial
+    tolerates the omission with a plain empty default (see its own
+    docstring).
+    """
+    parsed = _parse_uuid(playlist_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        playlist = await queries.playlist_detail(conn, parsed)
+        if playlist is None or playlist.get("status", "active") != "active":
+            return Response(status_code=404)
+        members = await queries.playlist_members(conn, parsed)
+
+    return render(request, "partials/playlist_members.html", playlist=playlist, members=members)
+
+
+@router.post("/playlists/{playlist_id}/items")
+async def add_playlist_item_route(
+    playlist_id: str, request: Request, edition_id: str = Form(...)
+):
+    """Append `edition_id` to the member list and redirect back to the
+    assembly screen -- never a fragment body (see the module-level note
+    below `move_playlist_item_route`, which every mutating route in this
+    module follows for the same reason). Repeats are allowed (D-101): no
+    lookup here refuses an edition already present.
+
+    Both identifiers arrive from the browser and both are foreign keys, so
+    a well-formed one naming a playlist or an edition that does not exist
+    reaches the statement and comes back as a foreign key violation. That
+    is a bad request, not a broken server, so it is answered as 404 here
+    rather than escaping as a 500. Caught rather than pre-checked because
+    the check and the insert would race anyway, and the constraint is the
+    only thing that actually decides.
+    """
+    parsed_playlist = _parse_uuid(playlist_id)
+    parsed_edition = _parse_uuid(edition_id)
+    if parsed_playlist is None or parsed_edition is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        try:
+            await queries.add_playlist_item(conn, parsed_playlist, parsed_edition)
+        except asyncpg.exceptions.ForeignKeyViolationError:
+            return Response(status_code=404)
+
+    return RedirectResponse(f"/playlists/{playlist_id}/edit", status_code=302)
+
+
+@router.post("/playlists/{playlist_id}/items/{item_id}/remove")
+async def remove_playlist_item_route(playlist_id: str, item_id: str, request: Request):
+    """Remove one member and redirect back to the assembly screen.
+    `queries.remove_playlist_item` scopes its DELETE to this playlist id
+    as well as the item id (T-03-18) and raises `LookupError` when the
+    item belongs to a different playlist -- answered here as 404, not a
+    redirect that silently changed nothing.
+    """
+    parsed_playlist = _parse_uuid(playlist_id)
+    parsed_item = _parse_uuid(item_id)
+    if parsed_playlist is None or parsed_item is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        try:
+            await queries.remove_playlist_item(conn, parsed_playlist, parsed_item)
+        except LookupError:
+            return Response(status_code=404)
+
+    return RedirectResponse(f"/playlists/{playlist_id}/edit", status_code=302)
 
 
 @router.get("/p/{slug}")

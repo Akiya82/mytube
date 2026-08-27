@@ -47,6 +47,27 @@ def _app_env(settings):
     get_settings.cache_clear()
 
 
+async def _fake_empty_picker(conn):
+    return []
+
+
+@pytest.fixture(autouse=True)
+def _picker_stub(monkeypatch):
+    """`GET /playlists/{id}/edit` always renders the picker section, so
+    every test in this file that reaches that route needs
+    `active_editions_for_picker` stubbed even when the picker's own
+    content is not what the test is about -- most of this file's assembly
+    tests are about membership, ordering and the gap mark rather than the
+    picker, and were written before the picker existed. Rather than repeat
+    the same patch in every one of them, it lives here, autoused; the one
+    test that asserts on picker content
+    (test_assembly_picker_lists_every_active_video_with_an_add_button)
+    overrides it with its own patch, applied through the same monkeypatch
+    fixture instance, so the override simply wins.
+    """
+    monkeypatch.setattr(queries, "active_editions_for_picker", _fake_empty_picker, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _storage_stub(monkeypatch):
     """`GET /library` -- exercised by several tests in this file, since a
@@ -660,6 +681,7 @@ async def test_assembly_marks_a_member_whose_video_was_deleted(monkeypatch, clie
 
     assert "Removed from the library" in resp.text
     assert "1" in resp.text  # keeps its position number
+
     # No drag handle, no move buttons on the gap row -- only Remove.
     gap_section = resp.text[resp.text.index("Removed from the library"):]
     assert "Move up" not in gap_section.split("Removed from the library")[1][:200] or True

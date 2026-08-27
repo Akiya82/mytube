@@ -883,15 +883,129 @@ async def add_playlist_item(conn: asyncpg.Connection, playlist_id, edition_id) -
     )
 
 
-async def playlist_members(conn: asyncpg.Connection, playlist_id) -> list[asyncpg.Record]:
-    """Every member of `playlist_id`, in position order -- `item_id`,
-    `edition_id`, `position`.
+async def playlist_detail(conn: asyncpg.Connection, playlist_id) -> dict | None:
+    """One playlist row by id -- the assembly screen's own data source,
+    same column set `resolve_playlist_slug` selects (minus the joined
+    artifact key, which the assembly screen has no use for) plus the
+    creation time.
     """
-    return await conn.fetch(
-        "SELECT id AS item_id, edition_id, position FROM playlist_items "
-        "WHERE playlist_id = $1 ORDER BY position",
+    row = await conn.fetchrow(
+        """
+        SELECT id, status, mode, built_at, name, slug, created_at
+        FROM playlists
+        WHERE id = $1
+        """,
         playlist_id,
     )
+    return dict(row) if row is not None else None
+
+
+async def update_playlist(conn: asyncpg.Connection, playlist_id, name: str, slug: str) -> None:
+    """Save a changed name and/or address -- the slug has already gone
+    through the same `normalize_slug`/`pick_unique_slug` path the create
+    route uses, with this playlist's own current slug excluded from the
+    taken set (see routes_playlists.py's update route).
+    """
+    await conn.execute(
+        "UPDATE playlists SET name = $2, slug = $3 WHERE id = $1",
+        playlist_id,
+        name,
+        slug,
+    )
+
+
+async def playlist_members(conn: asyncpg.Connection, playlist_id) -> list[dict]:
+    """Every member of `playlist_id`, in position order -- `item_id`,
+    `edition_id`, `position`, `title_name`, `duration_seconds`, and
+    `dropped` (whether the underlying title has been deleted).
+
+    `dropped` is computed here, not inferred by the template (03-UI-SPEC.md
+    States -> member-order row gap mark): the template must not have to
+    know which status values mean gone. A title's edition rows survive its
+    own deletion (see `referenced_objects`'s docstring -- only
+    `titles.status` flips), so this is a LEFT JOIN all the way down and
+    `dropped` reads the joined title's status directly rather than the
+    presence of a row.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT
+            pi.id AS item_id,
+            pi.position AS position,
+            pi.edition_id AS edition_id,
+            t.name AS title_name,
+            e.duration_seconds AS duration_seconds,
+            (t.id IS NULL OR t.status = 'deleted') AS dropped
+        FROM playlist_items pi
+        LEFT JOIN editions e ON e.id = pi.edition_id
+        LEFT JOIN episodes ep ON ep.id = e.episode_id
+        LEFT JOIN seasons s ON s.id = ep.season_id
+        LEFT JOIN titles t ON t.id = s.title_id
+        WHERE pi.playlist_id = $1
+        ORDER BY pi.position
+        """,
+        playlist_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def active_editions_for_picker(conn: asyncpg.Connection) -> list[dict]:
+    """Every active title's default edition, newest first -- the assembly
+    screen's member picker. Same default-edition-per-title shape
+    `library_rows` already establishes (`_LIBRARY_ROW_FROM`'s own LATERAL
+    join), restricted to active titles and narrowed to the three fields
+    the picker row needs.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT e.id AS edition_id, t.name AS title_name,
+               e.duration_seconds AS duration_seconds
+        FROM titles t
+        JOIN LATERAL (
+            SELECT ep.default_edition_id
+            FROM episodes ep
+            JOIN seasons s ON s.id = ep.season_id
+            WHERE s.title_id = t.id
+            ORDER BY s.number, ep.number
+            LIMIT 1
+        ) first_ep ON true
+        JOIN editions e ON e.id = first_ep.default_edition_id
+        WHERE t.status = 'active'
+        ORDER BY t.created_at DESC
+        """
+    )
+    return [dict(row) for row in rows]
+
+
+async def remove_playlist_item(conn: asyncpg.Connection, playlist_id, item_id) -> None:
+    """Delete `item_id` from `playlist_id` and renumber the remainder to a
+    contiguous run, in one statement, scoped to the playlist so an item
+    identifier from a different playlist cannot delete anything here
+    (T-03-18). Raises `LookupError` when no row matched that scoping --
+    the caller answers 404 rather than a silent no-op redirect.
+    """
+    async with conn.transaction():
+        result = await conn.execute(
+            "DELETE FROM playlist_items WHERE id = $1 AND playlist_id = $2",
+            item_id,
+            playlist_id,
+        )
+        if result == "DELETE 0":
+            raise LookupError("item not in this playlist")
+
+        await conn.execute(
+            """
+            UPDATE playlist_items AS pi
+            SET position = renumbered.new_position
+            FROM (
+                SELECT id, row_number() OVER (ORDER BY position) - 1 AS new_position
+                FROM playlist_items
+                WHERE playlist_id = $1
+            ) AS renumbered
+            WHERE pi.id = renumbered.id
+            """,
+            playlist_id,
+        )
 
 
 async def move_playlist_item(
