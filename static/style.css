@@ -589,6 +589,23 @@ button.site-nav__link {
   color: var(--status-failed-text);
 }
 
+/* Playlist row states (03-UI-SPEC.md Color) -- three tints reused from
+   existing meanings, no new custom property and no new hex value. */
+.chip--empty {
+  background: var(--status-info-bg);
+  color: var(--status-info-text);
+}
+
+.chip--building {
+  background: var(--status-preparing-bg);
+  color: var(--status-preparing-text);
+}
+
+.chip--refused {
+  background: var(--status-failed-bg);
+  color: var(--status-failed-text);
+}
+
 /* Check page (Screen 4) -- video, address, copy button, hairpin-NAT note.
    Deliberately minimal: no related list, no comments, no recommendations. */
 .check-page__video {

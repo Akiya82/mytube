@@ -71,6 +71,10 @@ class _QueriesStub:
     failed_keys_by_id: dict = field(default_factory=dict)
     dismiss_calls: list = field(default_factory=list)
     referenced: list = field(default_factory=list)
+    # The seventh query library_route now calls, alongside library_rows --
+    # defaulting to empty so every test in this file keeps describing a
+    # library of videos alone and keeps passing unchanged.
+    playlist_rows: list = field(default_factory=list)
 
 
 @pytest.fixture
@@ -97,12 +101,16 @@ def queries_stub(monkeypatch):
     async def _referenced_objects(conn):
         return stub.referenced
 
+    async def _playlist_rows(conn):
+        return stub.playlist_rows
+
     monkeypatch.setattr(queries, "library_rows", _library_rows)
     monkeypatch.setattr(queries, "library_row", _library_row)
     monkeypatch.setattr(queries, "count_preparing_ahead", _count_preparing_ahead)
     monkeypatch.setattr(queries, "failed_title_object_keys", _failed_title_object_keys)
     monkeypatch.setattr(queries, "delete_failed_title", _delete_failed_title)
     monkeypatch.setattr(queries, "referenced_objects", _referenced_objects)
+    monkeypatch.setattr(queries, "playlist_rows", _playlist_rows, raising=False)
     return stub
 
 

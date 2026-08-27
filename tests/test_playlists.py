@@ -5,6 +5,7 @@ here requests the `signed_in` fixture because these screens are behind the
 session, same as every other operator screen in this suite
 (tests/test_library.py, tests/test_deletion.py).
 """
+import html
 import uuid
 
 import httpx
@@ -13,6 +14,8 @@ import pytest
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
+from orchestrator.storage import StorageUsage
+from orchestrator.web import routes_titles
 
 from conftest import SESSION_COOKIE
 
@@ -42,6 +45,24 @@ def _app_env(settings):
     get_settings.cache_clear()
     yield settings
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _storage_stub(monkeypatch):
+    """`GET /library` -- exercised by several tests in this file, since a
+    playlist row lives there (D-108) -- always calls `storage_usage()` for
+    the header's used/free figure, same as it always has for a library of
+    videos alone. This module drives no real storage (see its own
+    docstring), so that call is stubbed here exactly the way
+    `tests/test_library.py`'s own `storage_stub` fixture already stubs it,
+    autoused rather than requested per-test since it has nothing to do
+    with what any individual test in this file is about.
+    """
+    monkeypatch.setattr(
+        routes_titles,
+        "storage_usage",
+        lambda: StorageUsage(total_bytes=0, object_count=0, free_bytes=None, listing={}),
+    )
 
 
 @pytest.fixture
@@ -329,7 +350,10 @@ async def test_a_playlist_row_states_which_of_its_four_states_it_is_in(
     if expected_chip is None:
         assert "chip--" not in resp.text.split("library-row")[1]
     else:
-        assert expected_chip in resp.text
+        # Jinja's autoescaping renders the copy's apostrophe as `&#39;` --
+        # unescape before comparing so this asserts against the text a
+        # browser would show, not against the raw HTML source.
+        assert expected_chip in html.unescape(resp.text)
     if row["refused"]:
         # The reason is produced by looking up a catalogue key with
         # parameters, never by rendering a stored English sentence -- the
@@ -387,18 +411,21 @@ async def test_a_playlist_row_detail_line_degrades_when_a_duration_is_unknown(
             )
         ]
 
-    _patch(monkeypatch, "playlist_rows", fake_playlist_rows_known)
-    async with client:
-        known_resp = await client.get("/library")
-    assert "clips" in known_resp.text and "180" not in known_resp.text or "clips" in known_resp.text
-
     async def fake_playlist_rows_unknown(conn):
         return [
             _playlist_row(built_at="2026-08-27T12:00:00Z", member_count=2, duration_seconds=None)
         ]
 
-    _patch(monkeypatch, "playlist_rows", fake_playlist_rows_unknown)
+    # Both requests share the one client instance the fixture hands out --
+    # httpx.AsyncClient refuses to be reopened as a context manager once
+    # closed, so both GETs run inside the same `async with` block, with
+    # the second monkeypatch applied between them.
+    _patch(monkeypatch, "playlist_rows", fake_playlist_rows_known)
     async with client:
+        known_resp = await client.get("/library")
+        assert "clips" in known_resp.text and "180" not in known_resp.text or "clips" in known_resp.text
+
+        _patch(monkeypatch, "playlist_rows", fake_playlist_rows_unknown)
         unknown_resp = await client.get("/library")
 
     assert unknown_resp.status_code == 200

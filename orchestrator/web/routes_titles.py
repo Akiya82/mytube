@@ -42,6 +42,7 @@ enumeration on a cold cache run bare stops both for its whole duration.
 """
 import asyncio
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from botocore.exceptions import ClientError
@@ -61,6 +62,10 @@ from orchestrator.web.routes_share import _resolve_share_path, _unreachable_resp
 from orchestrator.web.templates import humanize_seconds, render
 
 router = APIRouter()
+
+# The sort fallback library_route uses for a merged row missing
+# created_at -- see that route's own docstring.
+_EPOCH_FALLBACK = datetime.min.replace(tzinfo=timezone.utc)
 
 
 @router.post("/add/{path:path}")
@@ -305,11 +310,35 @@ async def _row_context(conn, settings, row) -> dict:
 
 @router.get("/library")
 async def library_route(request: Request):
+    """The library merges two sources into one newest-first list (D-108):
+    every video row from `library_rows` and every playlist row from
+    `playlist_rows`, each tagged with a `kind` the row partial dispatches
+    on. Sorting falls back to the earliest possible timestamp for a row
+    missing `created_at` (never observed against a real database, where
+    both queries always select it -- only a hand-built test stub can omit
+    it) rather than raising, so one malformed row cannot take the whole
+    screen down, the same tolerance this route already extends to a row's
+    optional technical fields.
+    """
     settings = get_settings()
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
         raw_rows = await queries.library_rows(conn)
-        rows = [await _row_context(conn, settings, row) for row in raw_rows]
+        video_rows = [await _row_context(conn, settings, row) for row in raw_rows]
+        for row in video_rows:
+            row["kind"] = "video"
+
+        raw_playlist_rows = await queries.playlist_rows(conn)
+        playlist_rows = [dict(row) for row in raw_playlist_rows]
+        for row in playlist_rows:
+            row["kind"] = "playlist"
+
+        rows = sorted(
+            [*video_rows, *playlist_rows],
+            key=lambda row: row.get("created_at") or _EPOCH_FALLBACK,
+            reverse=True,
+        )
+
         referenced = await queries.referenced_objects(conn)
 
     # The reconciliation costs one catalog query and no extra bucket

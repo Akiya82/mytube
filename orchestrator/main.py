@@ -36,6 +36,7 @@ from orchestrator.reaper import run_reaper
 from orchestrator.resolve import router as resolve_router
 from orchestrator.storage import abort_dangling_multipart, delete_object
 from orchestrator.web.routes_auth import router as auth_router
+from orchestrator.web.routes_playlists import router as playlists_router
 from orchestrator.web.routes_share import router as share_router
 from orchestrator.web.routes_titles import router as titles_router
 
@@ -264,6 +265,7 @@ app.include_router(resolve_router)
 app.include_router(share_router)
 app.include_router(titles_router)
 app.include_router(auth_router)
+app.include_router(playlists_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 

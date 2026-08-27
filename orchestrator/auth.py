@@ -51,10 +51,10 @@ SESSION_COOKIE_NAME = "mytube_session"
 # edge/nginx.conf.template), so a viewer reaching one of these through the
 # delivery hostname must never be refused by the interface hostname check
 # `auth_gate` runs below -- that check is skipped entirely for these
-# prefixes. The playlist address `/p/` joins this tuple when playlists
-# arrive -- one line to change, and the playlist phase does not have to
-# reason about authentication at all. State the failure this note prevents:
-# a video player handed a redirect to a login form it cannot render.
+# prefixes. The playlist address `/p/` is in this tuple for the same
+# reason `/v/` is: a video player handed a redirect to a login form it
+# cannot render is the failure this line prevents, and it protects the
+# public playlist address exactly as it already protects the video one.
 #
 # That note is not the guard. A comment asking a future phase to remember
 # one line is the same class of protection this phase already rejected for
@@ -62,11 +62,11 @@ SESSION_COOKIE_NAME = "mytube_session"
 # not edit this". `tests/test_edge_config.py::
 # test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_check`
 # reads the delivery block's proxied `location` prefixes out of the edge
-# template and asserts every one of them is in this tuple -- the day the
-# playlist phase adds `location /p/` to the delivery block, that test fails
-# until this line is changed, at the moment the edit is made rather than
+# template and asserts every one of them is in this tuple -- the day a
+# proxied location is added to the delivery block without a matching
+# entry here, that test fails at the moment the edit is made rather than
 # the first time a player is handed HTML.
-HOST_EXEMPT_PREFIXES: tuple[str, ...] = ("/v/", "/refresh/")
+HOST_EXEMPT_PREFIXES: tuple[str, ...] = ("/v/", "/refresh/", "/p/")
 
 # Addresses that need no session but have no reason to arrive on a foreign
 # hostname, so they are checked for one (see auth_gate's ordering below).

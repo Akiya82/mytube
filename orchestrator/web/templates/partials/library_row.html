@@ -1,12 +1,105 @@
-{% from "partials/icons.html" import copy as copy_icon, film_placeholder %}
+{% from "partials/icons.html" import copy as copy_icon, film_placeholder, queue_placeholder %}
 {#
-  One Library row, in all four of its states (D-60, 02-UI-SPEC.md Screen 3
-  and States). This exact fragment is also what GET /library/{id}/row
-  returns for the 4-second poll (D-49) -- library.html includes it via
-  {% include %} inside its loop, the poll route renders it standalone, and
-  both produce byte-identical markup for the same row so a row can never
-  look different depending on how it was fetched.
+  One Library row. Two kinds share this partial (D-108): a video row, in
+  all four of its own states (D-60, 02-UI-SPEC.md Screen 3 and States),
+  and a playlist row, in its own four states (03-UI-SPEC.md Screen 3
+  addendum and States). library_route tags every row with `row.kind`
+  before this partial ever sees it -- the branch below dispatches on that
+  first, and everything under the video branch is unchanged from before
+  playlists existed.
+
+  This exact fragment is also what GET /library/{id}/row returns for the
+  4-second poll (D-49) -- library.html includes it via {% include %}
+  inside its loop, the poll route renders it standalone, and both produce
+  byte-identical markup for the same row so a row can never look
+  different depending on how it was fetched. That poller is a video-row
+  mechanism only (it binds on data-row-status="preparing" and reads
+  data-title-id to fetch a title's row fragment) -- a playlist row
+  carries neither attribute, and says why in its own comment below.
 #}
+{% if row.kind == "playlist" %}
+<li class="library-row{% if row.refused %} library-row--failed{% endif %}">
+  <div class="library-row__thumb library-row__thumb--placeholder">
+    {{ queue_placeholder(cls="library-row__thumb-icon") }}
+    <span class="visually-hidden">{{ t("library.thumbnail.placeholder_label") }}</span>
+  </div>
+
+  <div class="library-row__body">
+    <h2 class="library-row__title">{{ row.name }}</h2>
+
+    {# The four playlist states (03-UI-SPEC.md States -> Playlist row):
+       Empty wins over everything else because a build is never attempted
+       against zero members; Refused only fires once the operator has
+       actually tried; Building is "has members, not built yet"; absence
+       of a chip is the done signal, the same rule a finished video row
+       already follows. #}
+    {% if row.member_count == 0 %}
+      <span class="chip chip--empty">{{ t("playlist.state.empty") }}</span>
+    {% elif row.refused %}
+      <span class="chip chip--refused">{{ t("playlist.state.refused") }}</span>
+    {% elif row.built_at is none %}
+      <span class="chip chip--building">{{ t("playlist.state.building") }}</span>
+    {% endif %}
+
+    {# Same address-line shape a video row already has (Screen 3 addendum
+       item 5), /p/{slug} instead of /v/{slug}, the same copy-link keys
+       reused unchanged. The copy button is disabled/ghost while nothing
+       has been built yet, the same layout-stability reasoning the video
+       row's own Preparing sub-state already established -- copying an
+       address that answers "not ready" is not useful yet. #}
+    <p class="library-row__address">
+      {{ public_base_url }}/p/{{ row.slug }}
+      <button
+        type="button"
+        class="btn btn--ghost library-row__copy"
+        data-copy-text="{{ public_base_url }}/p/{{ row.slug }}"
+        data-copy-done-label="{{ t('library.cta.copy_link_done') }}"
+        {% if not row.built_at %}disabled aria-disabled="true"{% endif %}
+      >{{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}</button>
+    </p>
+
+    {% if row.refused %}
+      {# Reuses the video Failed row's reason-line class and the same
+         reason_key/reason_params pattern the add form's incompatible-
+         video banner already uses -- the sentence names the actual
+         mismatching members and parameters, never a stored English
+         sentence, and Jinja's autoescaping covers whatever member titles
+         are interpolated into it (03-UI-SPEC.md Security-Visible
+         Contracts item 3). #}
+      <p class="library-row__reason">
+        {{ t("playlist.refused.reason_prefix").format(reason=(row.refused_reason_params.values() | join(", ")) if row.refused_reason_params else "") }}
+      </p>
+    {% elif row.member_count > 0 %}
+      <p class="library-row__detail">
+        {% if row.duration_seconds is not none %}
+          {{ t("playlist.row.detail_with_duration").format(n=row.member_count, duration=row.duration_seconds | duration_hms) }}
+        {% else %}
+          {{ t("playlist.row.detail_count_only").format(n=row.member_count) }}
+        {% endif %}
+      </p>
+    {% endif %}
+  </div>
+
+  {# No data-row-status and no data-title-id on this row's own <li>
+     (unlike the video branch below): the four-second poller looks for a
+     row whose status is the video-side "preparing" value and fetches a
+     title's row fragment from it, and a playlist row that claimed those
+     attributes would poll an address that does not exist and remove
+     itself from the list on the first 404. The building chip's own copy
+     tells the operator to reload instead -- an assembly can run for
+     minutes on a multi-gigabyte list, and a chip that sits still next to
+     a video row that updates itself would otherwise read as a stall. If
+     live updates are wanted later, the cheap path is a fragment address
+     on the row and a poller that reads it from an attribute instead of
+     building it from a title identifier. #}
+  <div class="library-row__actions">
+    <a class="btn btn--ghost" href="/playlists/{{ row.playlist_id }}/edit">{{ t("library.cta.edit") }}</a>
+    <form method="post" action="/playlists/{{ row.playlist_id }}/delete">
+      <button type="submit" class="btn btn--destructive">{{ t("library.cta.delete") }}</button>
+    </form>
+  </div>
+</li>
+{% else %}
 <li class="library-row{% if row.title_status == 'failed' %} library-row--failed{% endif %}" data-title-id="{{ row.title_id }}" data-row-status="{{ row.title_status }}"{% if row.title_status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
 {% if row.title_status == "failed" %}
   {# No thumbnail slot at all on a failed row (02-UI-SPEC.md States ->
@@ -114,3 +207,4 @@
   {% endif %}
 {% endif %}
 </li>
+{% endif %}
