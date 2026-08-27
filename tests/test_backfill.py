@@ -285,8 +285,17 @@ def _no_real_connect(monkeypatch):
 def _env(monkeypatch, tmp_path):
     from orchestrator.config import get_settings
 
+    from conftest import ADMIN_FQDN
+
     monkeypatch.setenv("MYTUBE_SECURE_LINK_SECRET", "test-secret-do-not-use-in-prod")
     monkeypatch.setenv("MYTUBE_DATABASE_URL", "postgresql://test:test@localhost/test")
+    monkeypatch.setenv("MYTUBE_S3_ENDPOINT", "http://storage:8333")
+    monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
+    monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
+    monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
+    monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
+    # The share fixture builds its tree under the same tmp_path, so the
+    # command reads the same directory the routine tests use.
     monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(tmp_path))
     get_settings.cache_clear()
     yield
@@ -296,10 +305,6 @@ def _env(monkeypatch, tmp_path):
 async def test_the_command_exits_zero_when_nothing_was_left_unmeasured(
     monkeypatch, share, recorded, _no_real_connect, capsys
 ):
-    monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(share))
-    from orchestrator.config import get_settings
-
-    get_settings.cache_clear()
     _stub_probe(monkeypatch, _probe_json())
     _stub_rows(monkeypatch, [_row()])
 
@@ -312,10 +317,6 @@ async def test_the_command_exits_zero_when_nothing_was_left_unmeasured(
 async def test_the_command_exits_non_zero_and_names_what_it_could_not_measure(
     monkeypatch, share, recorded, _no_real_connect, capsys
 ):
-    monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(share))
-    from orchestrator.config import get_settings
-
-    get_settings.cache_clear()
     _stub_rows(
         monkeypatch, [_row(title_name="Control Clip", source_path="tv/gone.mkv")]
     )

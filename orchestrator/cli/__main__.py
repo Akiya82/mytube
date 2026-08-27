@@ -18,6 +18,9 @@ import asyncpg
 import typer
 
 from orchestrator.cli.auth import _audit, _create_operator, _reset_password
+from orchestrator.cli.backfill_technical import (
+    run_backfill_technical as _backfill_technical,
+)
 from orchestrator.cli.cache_report import cache_report as _cache_report
 from orchestrator.cli.cache_warm import DEFAULT_BASE_URL, cache_warm as _cache_warm
 from orchestrator.cli.storage_audit import run_storage_audit as _storage_audit
@@ -255,6 +258,16 @@ def cache_report_command(
 )
 def storage_audit_command() -> None:
     raise typer.Exit(_storage_audit())
+
+
+@app.command(
+    "backfill-technical",
+    help="Measure the stream parameters of videos added before the catalog "
+    "recorded them, so they can be checked for joinability. Reads their "
+    "sources on the share; changes no file and no stored object.",
+)
+def backfill_technical_command() -> None:
+    raise typer.Exit(_backfill_technical())
 
 
 @app.command("create-operator")

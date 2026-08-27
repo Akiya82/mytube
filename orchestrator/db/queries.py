@@ -1083,6 +1083,12 @@ async def editions_missing_technical(conn: asyncpg.Connection) -> list[asyncpg.R
     the title's name, the source path and the three facts the probe/remux
     reconciliation needs (the selected audio stream index, its channel
     count and whether it was re-encoded).
+
+    It also carries the six values `set_edition_technical` writes that this
+    row already has. That writer updates all fifteen columns in one
+    statement, so a backfill has to hand back what it is not there to
+    change -- above all `size_bytes`, which describes the object in storage
+    and is not the size of the source file the backfill probes.
     """
     return await conn.fetch(
         """
@@ -1092,7 +1098,13 @@ async def editions_missing_technical(conn: asyncpg.Connection) -> list[asyncpg.R
             e.source_path AS source_path,
             e.audio_stream_index AS audio_stream_index,
             e.audio_channels AS audio_channels,
-            e.audio_reencoded AS audio_reencoded
+            e.audio_reencoded AS audio_reencoded,
+            e.size_bytes AS size_bytes,
+            e.duration_seconds AS duration_seconds,
+            e.width AS width,
+            e.height AS height,
+            e.audio_language AS audio_language,
+            e.audio_title AS audio_title
         FROM editions e
         JOIN episodes ep ON ep.id = e.episode_id
         JOIN seasons s ON s.id = ep.season_id
