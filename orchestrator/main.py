@@ -5,7 +5,9 @@ D-09), plus the delayed-delete reaper (D-13) running as a background task
 for the lifetime of the process. Also the share-browsing interface (D-57
 onward): /static/ assets and the share router. The add worker (D-49/D-50)
 is a second lifespan-scoped background task, started and cancelled exactly
-the way the reaper task already is -- see orchestrator.media.queue.
+the way the reaper task already is -- see orchestrator.media.queue. The
+playlist build worker is a third, in the same shape -- see
+orchestrator.media.playlist_queue.
 
 Two pieces of middleware run here, in this order (D-75, D-83):
 `auth.auth_gate`, registered last and therefore outermost, closes the
@@ -31,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import create_pool, queries
+from orchestrator.media.playlist_queue import PlaylistBuildQueue
 from orchestrator.media.queue import AddJob, AddQueue
 from orchestrator.reaper import run_reaper
 from orchestrator.resolve import router as resolve_router
@@ -122,6 +125,11 @@ async def _sweep_preparing_titles(pool: asyncpg.Pool, add_queue: AddQueue) -> No
 async def lifespan(app: FastAPI):
     app.state.db_pool = await create_pool()
     app.state.add_queue = AddQueue()
+    # A second one-at-a-time worker, started and cancelled exactly the
+    # way the add worker below is. Its own queue rather than a shared
+    # one: a playlist build and an add have nothing to say to each
+    # other, and one queue would make a long add block a save.
+    app.state.playlist_queue = PlaylistBuildQueue()
 
     async with app.state.db_pool.acquire() as conn:
         app.state.operator_exists = await queries.operator_exists(conn)
@@ -159,6 +167,9 @@ async def lifespan(app: FastAPI):
     await _sweep_preparing_titles(app.state.db_pool, app.state.add_queue)
 
     add_worker_task = asyncio.create_task(app.state.add_queue.run(app.state.db_pool))
+    playlist_worker_task = asyncio.create_task(
+        app.state.playlist_queue.run(app.state.db_pool)
+    )
     reaper_task = asyncio.create_task(run_reaper(app.state.db_pool))
     try:
         yield
@@ -166,6 +177,9 @@ async def lifespan(app: FastAPI):
         add_worker_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await add_worker_task
+        playlist_worker_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await playlist_worker_task
         reaper_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reaper_task

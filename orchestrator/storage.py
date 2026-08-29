@@ -66,6 +66,23 @@ def get_object_bytes(key: str) -> bytes:
     return response["Body"].read()
 
 
+def download_object_to_file(key: str, destination: str) -> None:
+    """Stream object `key` onto local disk, the mirror of
+    `put_object_from_file` above and the managed transfer's own download
+    half -- chunked, resumable in the same way the upload is, and it never
+    holds the body in memory.
+
+    It exists next to `get_object_bytes` rather than instead of it because
+    the two answer different sizes. That function reads a whole body into
+    the process, which is right for a poster measured in tens of kilobytes
+    and says so in its own docstring; a playlist member is measured in
+    gigabytes, and reading one that way would take the container's memory
+    with it while also stalling every request this process is serving.
+    """
+    settings = get_settings()
+    get_s3_client().download_file(settings.s3_bucket, key, destination)
+
+
 def head_object(key: str) -> dict:
     settings = get_settings()
     return get_s3_client().head_object(Bucket=settings.s3_bucket, Key=key)

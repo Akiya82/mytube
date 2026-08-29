@@ -1076,6 +1076,196 @@ async def finish_delete_playlist(conn: asyncpg.Connection, playlist_id) -> None:
     await conn.execute("UPDATE playlists SET status = 'deleted' WHERE id = $1", playlist_id)
 
 
+async def playlist_build_inputs(conn: asyncpg.Connection, playlist_id) -> list[dict]:
+    """Everything one build needs about one playlist's members, in
+    position order, from a single round trip: the stored object key, its
+    size and duration, the title's name, the seven recorded stream
+    parameters, and whether the title has been deleted.
+
+    One query rather than a member-by-member fan-out on purpose. The
+    caller runs on the event loop that also answers `GET /p/{slug}` and
+    `/healthz`, and a fan-out there costs one round trip per member before
+    anything else in this process gets a turn.
+
+    `dropped` reads the joined title's status directly, exactly as
+    `playlist_members` does -- an edition row survives its own title's
+    deletion, so presence proves nothing.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT
+            pi.position AS position,
+            e.id AS edition_id,
+            e.object_key AS object_key,
+            e.size_bytes AS size_bytes,
+            e.duration_seconds AS duration_seconds,
+            t.name AS title_name,
+            e.fps AS fps,
+            e.video_profile AS video_profile,
+            e.video_level AS video_level,
+            e.pix_fmt AS pix_fmt,
+            e.audio_codec AS audio_codec,
+            e.audio_sample_rate AS audio_sample_rate,
+            e.audio_channel_layout AS audio_channel_layout,
+            (t.id IS NULL OR t.status = 'deleted') AS dropped
+        FROM playlist_items pi
+        LEFT JOIN editions e ON e.id = pi.edition_id
+        LEFT JOIN episodes ep ON ep.id = e.episode_id
+        LEFT JOIN seasons s ON s.id = ep.season_id
+        LEFT JOIN titles t ON t.id = s.title_id
+        WHERE pi.playlist_id = $1
+        ORDER BY pi.position
+        """,
+        playlist_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def set_playlist_built(
+    conn: asyncpg.Connection, playlist_id, mode: str, artifacts
+) -> bool:
+    """Point a playlist at what a build just produced. **One transaction,
+    and its shape is the fix for two races** -- returns False when the
+    build must be thrown away, True when the swap happened.
+
+    `artifacts` is a sequence of mappings carrying `object_key` (the full
+    storage key, extension included, mirroring `editions.object_key`),
+    `position` (null for a single assembled file, the segment's place
+    otherwise) and `duration_seconds`.
+
+    The playlist row is taken inside the transaction with a row lock and
+    its status read there. If it is no longer active the operator deleted
+    it while this build ran and the reaper has already finished the row:
+    nothing is written and False comes back, because inserting an artifact
+    for a deleted playlist points a dead row at an object that is excluded
+    from the referenced set and has already been swept past -- nothing
+    would ever reclaim it. The caller deletes what it uploaded instead.
+
+    The previous generation is identified by that same in-transaction
+    read, never by a key the job carried from when it was constructed. Two
+    saves in a row are ordinary here: the second job was built before the
+    first one committed, so a key captured then names an artifact that is
+    already gone and misses the one that is actually live -- deleting one
+    that was already deleted and leaking the other. Superseding by
+    statement, inside the lock, makes both races impossible rather than
+    unlikely. Do not simplify the lock away.
+    """
+    async with conn.transaction():
+        status = await conn.fetchval(
+            "SELECT status FROM playlists WHERE id = $1 FOR UPDATE", playlist_id
+        )
+        if status != "active":
+            return False
+
+        await conn.execute(
+            """
+            UPDATE playlist_artifacts SET superseded_at = now()
+            WHERE playlist_id = $1 AND superseded_at IS NULL
+            """,
+            playlist_id,
+        )
+        await conn.executemany(
+            """
+            INSERT INTO playlist_artifacts
+                (playlist_id, object_key, position, duration_seconds)
+            VALUES ($1, $2, $3, $4)
+            """,
+            [
+                (
+                    playlist_id,
+                    artifact["object_key"],
+                    artifact.get("position"),
+                    artifact.get("duration_seconds"),
+                )
+                for artifact in artifacts
+            ],
+        )
+        await conn.execute(
+            """
+            UPDATE playlists
+            SET mode = $2,
+                built_at = now(),
+                build_failure_reason = NULL,
+                build_failure_params = '{}'::jsonb
+            WHERE id = $1
+            """,
+            playlist_id,
+            mode,
+        )
+        return True
+
+
+async def set_playlist_build_failed(
+    conn: asyncpg.Connection, playlist_id, reason_key: str, reason_params: dict
+) -> None:
+    """Record a refusal as a translation catalogue key plus the values its
+    sentence substitutes -- never an assembled sentence and never raw tool
+    output, the same rule the title failure column already carries.
+
+    Touches no artifact row and does not clear `built_at`: a rebuild that
+    failed leaves the previous generation serving, which is the whole
+    promise that a rebuild never interrupts what someone is watching.
+    """
+    await conn.execute(
+        """
+        UPDATE playlists
+        SET build_failure_reason = $2, build_failure_params = $3::jsonb
+        WHERE id = $1
+        """,
+        playlist_id,
+        reason_key,
+        json.dumps(reason_params or {}),
+    )
+
+
+async def playlist_artifact_sections(conn: asyncpg.Connection, playlist_id) -> list[dict]:
+    """The current generation's artifacts in play order -- what the public
+    address renders its document from, and the same rows its validation
+    reads. One query, so the address never fans out.
+
+    Restricted to `superseded_at IS NULL`: the generation a rebuild
+    replaced stays in the bucket for anyone still reading it, but it is
+    never listed again.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT object_key, position, duration_seconds
+        FROM playlist_artifacts
+        WHERE playlist_id = $1 AND superseded_at IS NULL
+        ORDER BY position NULLS FIRST
+        """,
+        playlist_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def due_for_reclaim_artifacts(
+    conn: asyncpg.Connection, older_than_seconds: int
+) -> list[asyncpg.Record]:
+    """Every artifact a rebuild superseded longer ago than
+    `older_than_seconds`, with its key and its own row identifier.
+
+    Superseded artifacts only. A deleted playlist's artifacts are the
+    deletion sweep's business and are read by playlist; one query
+    answering both questions would have to return two different shapes.
+
+    Defined next to the writer that creates these rows rather than beside
+    the sweep that consumes them: the retention rule is a property of how
+    a rebuild swaps generations, and stated far from that it drifts. The
+    age to pass is the signing lifetime -- the longest a link handed out
+    before the rebuild can still be valid.
+    """
+    return await conn.fetch(
+        """
+        SELECT id, object_key, playlist_id
+        FROM playlist_artifacts
+        WHERE superseded_at IS NOT NULL
+          AND superseded_at < now() - make_interval(secs => $1)
+        """,
+        older_than_seconds,
+    )
+
+
 async def editions_missing_technical(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     """Every active edition whose `fps` is still null -- what the
     `backfill-technical` command reads to fill in the seven joinability
