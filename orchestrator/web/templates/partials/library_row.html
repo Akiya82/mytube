@@ -67,7 +67,7 @@
          are interpolated into it (03-UI-SPEC.md Security-Visible
          Contracts item 3). #}
       <p class="library-row__reason">
-        {{ t("playlist.refused.reason_prefix").format(reason=(row.refused_reason_params.values() | join(", ")) if row.refused_reason_params else "") }}
+        {{ reason_text(row.refused_reason_key, row.refused_reason_params) }}
       </p>
     {% elif row.member_count > 0 %}
       <p class="library-row__detail">

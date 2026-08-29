@@ -81,6 +81,35 @@ _templates.env.filters["humanize_seconds"] = humanize_seconds
 _templates.env.filters["urlencode"] = urlencode_strict
 
 
+def reason_text_for(t):
+    """One refusal sentence, built from a catalogue key and the values it
+    substitutes -- never from a stored English sentence.
+
+    A key the catalogs carry wins and is filled in with its own
+    parameters, which is what makes "not enough free space" read as that
+    and not as a sentence about clips that cannot play together. A key
+    with no catalogue line falls back to the generic prefix plus whatever
+    values were recorded, so an operator still sees which of their clips
+    is involved instead of a bare identifier.
+    """
+
+    def reason_text(key, params):
+        values = params or {}
+        if not key:
+            return ""
+        sentence = t(key)
+        if sentence == key:
+            return t("playlist.refused.reason_prefix").format(
+                reason=", ".join(str(value) for value in values.values())
+            )
+        try:
+            return sentence.format(**values)
+        except (KeyError, IndexError):
+            return sentence
+
+    return reason_text
+
+
 def resolve_lang(request: Request) -> str:
     """The `mytube_lang` cookie value, or DEFAULT_LOCALE for anything the
     catalogs don't have -- an unknown or missing cookie never raises.
@@ -128,6 +157,7 @@ def render(request: Request, template_name: str, status_code: int = 200, **conte
         current_url += "?" + request.url.query
     ctx = {
         "t": translator(lang),
+        "reason_text": reason_text_for(translator(lang)),
         "lang": lang,
         "public_base_url": settings.public_base_url,
         "current_url": current_url,

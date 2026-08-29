@@ -31,6 +31,7 @@ from fastapi.responses import RedirectResponse, Response
 from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import queries
+from orchestrator.media import playlist_build
 from orchestrator.media.playlist_queue import PlaylistBuildJob
 from orchestrator.resolve import external_base_url
 from orchestrator.signing import blob_path, sign_object_key
@@ -62,24 +63,33 @@ async def _acquire_and(pool, work):
         return await work(conn)
 
 
-def _sign_redirect(request: Request, object_key: str) -> RedirectResponse:
-    """Build the signed `/blob/` redirect for a built playlist artifact.
+def _signed_blob_url(request: Request, object_key: str) -> str:
+    """The one place this module turns a stored key into a delivery
+    address, whether that address ends up in a redirect or inside a
+    generated document.
 
     `object_key` is handed straight through to `sign_object_key`/
     `blob_path` with nothing appended -- it already carries its extension,
     mirroring `editions.object_key`'s own stored shape (see
     `orchestrator.signing`'s module docstring for what appending a second
-    one would do to the address).
+    one would do to the address). There is no second signing formula here
+    and there must never be: the expression has to mirror the edge's own
+    character for character, and a mismatch is a signature failure with no
+    diagnostic at all.
     """
     settings = get_settings()
     sig, exp = sign_object_key(
         object_key, settings.secure_link_secret, settings.sign_ttl_seconds
     )
-    location = (
+    return (
         f"{external_base_url(request)}{blob_path(object_key)}"
         f"?exp={exp}&sig={sig}"
     )
-    return RedirectResponse(location, status_code=302)
+
+
+def _sign_redirect(request: Request, object_key: str) -> RedirectResponse:
+    """The signed `/blob/` redirect for a playlist assembled as one file."""
+    return RedirectResponse(_signed_blob_url(request, object_key), status_code=302)
 
 
 async def _enqueue_build(request: Request, playlist_id) -> None:
@@ -363,12 +373,88 @@ async def move_playlist_item_route(
     return RedirectResponse(f"/playlists/{playlist_id}/edit", status_code=302)
 
 
+async def _read_for_delivery(conn, slug: str):
+    """Everything the public address needs, on one connection: the
+    playlist row, and -- only when a generated document is what it will
+    answer with -- the artifacts that document lists.
+
+    The second read is what the validation checks its keys against, so
+    both come from the same place and neither is a second fan-out on the
+    shared event loop. It is skipped entirely for a row that will answer
+    404, not-ready, or a plain redirect, which is every row that has no
+    document to render.
+    """
+    row = await queries.resolve_playlist_slug(conn, slug)
+    if (
+        row is None
+        or row["status"] != "active"
+        or row["built_at"] is None
+        or row["mode"] != "hls"
+    ):
+        return row, None
+    return row, await queries.playlist_artifact_sections(conn, row["id"])
+
+
+def _manifest_response(request: Request, row, artifacts) -> Response:
+    """Generate this playlist's document, per request, and refuse to send
+    it if it does not validate.
+
+    Generated rather than stored, because a stored one carries signatures
+    that age out partway through an evening and there is no refresh path
+    for a document the way there is for a blob address. It buys nothing
+    for a session already playing -- the player reads the list once, at
+    open, and never again, which was measured rather than assumed -- but
+    it is what keeps the address working for the next person to open it.
+
+    **Nothing that fails validation is ever sent, and there is no
+    fall-back-and-send-it-anyway branch.** A malformed document does not
+    fail for one viewer; it hangs every player in the instance. The
+    not-ready status goes out instead, which the edge already answers with
+    a clip a person can actually read, and the specific failure goes to
+    the log with enough detail to fix it.
+
+    Marked unstorable because its contents are only valid for as long as
+    the signatures inside it.
+    """
+    sections = [
+        playlist_build.Section(
+            title_name=artifact["title_name"] or "",
+            segments=(
+                playlist_build.Segment(
+                    object_key=artifact["object_key"],
+                    duration_seconds=artifact["duration_seconds"] or 0.0,
+                    url=_signed_blob_url(request, artifact["object_key"]),
+                ),
+            ),
+        )
+        for artifact in (artifacts or [])
+    ]
+    document = playlist_build.render_manifest(sections)
+    known = {artifact["object_key"] for artifact in (artifacts or [])}
+
+    verdict = playlist_build.validate_manifest(sections, known, document=document)
+    if not verdict.ok:
+        logger.error(
+            "refusing to serve the playlist at /p/%s: %s %s",
+            row["slug"],
+            verdict.reason_key,
+            verdict.reason_params,
+        )
+        return Response(status_code=PLAYLIST_NOT_READY_STATUS)
+
+    return Response(
+        content=document,
+        media_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/p/{slug}")
 async def resolve_playlist_route(slug: str, request: Request):
     pool = request.app.state.db_pool
     try:
-        row = await asyncio.wait_for(
-            _acquire_and(pool, lambda conn: queries.resolve_playlist_slug(conn, slug)),
+        row, artifacts = await asyncio.wait_for(
+            _acquire_and(pool, lambda conn: _read_for_delivery(conn, slug)),
             timeout=auth.ACQUIRE_TIMEOUT_SECONDS,
         )
     except TimeoutError:
@@ -395,7 +481,4 @@ async def resolve_playlist_route(slug: str, request: Request):
     if row["mode"] == "concat":
         return _sign_redirect(request, row["built_object_key"])
 
-    # mode == "hls": the manifest-generating branch the mechanism plan
-    # fills in. Unreachable today -- built_at stays null for this mode
-    # until that plan lands, so this row never reaches this point.
-    return Response(status_code=PLAYLIST_NOT_READY_STATUS)
+    return _manifest_response(request, row, artifacts)

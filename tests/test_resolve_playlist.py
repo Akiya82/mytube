@@ -284,3 +284,123 @@ async def test_a_short_playlist_link_opened_on_the_interface_hostname_redirects_
         )
 
     assert resp.headers["location"].startswith(settings.public_base_url)
+
+
+def _manifest_row(slug="vecher-klipov"):
+    """An active playlist built as a generated list. There is no single
+    artifact to redirect to -- `built_object_key` stays null, because the
+    join behind it only ever finds a single assembled file.
+    """
+    return {
+        "id": PLAYLIST_ID,
+        "status": "active",
+        "mode": "hls",
+        "built_object_key": None,
+        "built_at": "2026-08-28T12:00:00Z",
+        "name": "Vecher klipov",
+        "slug": slug,
+    }
+
+
+def _artifact(key, position, duration=8.0, title_name="Clip"):
+    return {
+        "object_key": key,
+        "position": position,
+        "duration_seconds": duration,
+        "title_name": title_name,
+    }
+
+
+def _patch_delivery(monkeypatch, row, artifacts):
+    async def fake_resolve_playlist_slug(conn, slug):
+        return row
+
+    async def fake_sections(conn, playlist_id):
+        return artifacts
+
+    monkeypatch.setattr(
+        queries, "resolve_playlist_slug", fake_resolve_playlist_slug, raising=False
+    )
+    monkeypatch.setattr(
+        queries, "playlist_artifact_sections", fake_sections, raising=False
+    )
+
+
+async def test_a_generated_list_is_answered_with_signed_addresses_and_marked_unstorable(
+    monkeypatch, client, settings
+):
+    keys = [
+        "a1b2c3d4-0000-0000-0000-00000000000{}.mp4".format(index) for index in range(2)
+    ]
+    _patch_delivery(
+        monkeypatch,
+        _manifest_row(),
+        [_artifact(keys[0], 0, 8.0, "Clip A"), _artifact(keys[1], 1, 12.0, "Clip B")],
+    )
+
+    async with client:
+        resp = await client.get(
+            "/p/vecher-klipov", headers={"host": "mytube.example"}, follow_redirects=False
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/vnd.apple.mpegurl")
+    # The document is only valid for as long as the signatures inside it,
+    # so no intermediary may keep a copy past that.
+    assert "no-store" in resp.headers["cache-control"]
+
+    body = resp.text
+    assert body.startswith("#EXTM3U")
+    assert body.count("#EXT-X-DISCONTINUITY") == 1
+    assert body.rstrip().endswith("#EXT-X-ENDLIST")
+
+    for key in keys:
+        # Signed by the one existing signer, and carrying the stored key's
+        # extension exactly once -- doubled, the edge serves the not-found
+        # clip forever behind a signature that verifies.
+        assert f"https://mytube.example/blob/{key}?exp=" in body
+        assert f"{key}.mp4" not in body
+
+    sig, _exp = sign_blob_url(
+        keys[0], settings.secure_link_secret, settings.sign_ttl_seconds
+    )
+    assert f"sig={sig}" in body
+
+
+async def test_a_generated_list_with_nothing_left_in_it_is_never_sent(monkeypatch, client):
+    """The playlist is built, but every member has since dropped out. An
+    empty list is malformed, and a malformed one does not fail for one
+    viewer -- it hangs every player in the instance. So it is not sent at
+    all: the not-ready status goes out, which the edge answers with a clip.
+    """
+    from orchestrator.web.routes_playlists import PLAYLIST_NOT_READY_STATUS
+
+    _patch_delivery(monkeypatch, _manifest_row(), [])
+
+    async with client:
+        resp = await client.get("/p/vecher-klipov", follow_redirects=False)
+
+    assert resp.status_code == PLAYLIST_NOT_READY_STATUS
+    assert resp.content == b""
+
+
+async def test_a_generated_list_naming_a_segment_that_is_not_there_is_never_sent(
+    monkeypatch, client
+):
+    """A duration of zero cannot be scheduled, so the document it renders
+    into is malformed. Same answer, same reason: nothing that failed
+    validation reaches a room full of players.
+    """
+    from orchestrator.web.routes_playlists import PLAYLIST_NOT_READY_STATUS
+
+    _patch_delivery(
+        monkeypatch,
+        _manifest_row(),
+        [_artifact("a1b2c3d4-0000-0000-0000-000000000000.mp4", 0, duration=None)],
+    )
+
+    async with client:
+        resp = await client.get("/p/vecher-klipov", follow_redirects=False)
+
+    assert resp.status_code == PLAYLIST_NOT_READY_STATUS
+    assert resp.content == b""

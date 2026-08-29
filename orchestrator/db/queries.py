@@ -1221,18 +1221,46 @@ async def set_playlist_build_failed(
 async def playlist_artifact_sections(conn: asyncpg.Connection, playlist_id) -> list[dict]:
     """The current generation's artifacts in play order -- what the public
     address renders its document from, and the same rows its validation
-    reads. One query, so the address never fans out.
+    reads its known keys from. **One query**, because that address runs on
+    the event loop this whole process shares: a fan-out there stalls the
+    video addresses and `/healthz` alongside it.
 
     Restricted to `superseded_at IS NULL`: the generation a rebuild
     replaced stays in the bucket for anyone still reading it, but it is
     never listed again.
+
+    A member whose title has since been deleted is left out here, which is
+    the whole of "a deleted clip drops out and the rest keep playing". The
+    document is generated per request, so the next person to open the
+    address simply gets a list without it, and anyone already watching
+    keeps the copy they downloaded. Nothing is rebuilt and nothing is
+    marked for the operator to fix.
+
+    An artifact is matched to its member by position, which is what one
+    segment per member buys. The pairing goes stale if the operator
+    reorders or removes members without saving -- the artifacts still
+    belong to the previous membership. That case keeps playing what was
+    actually built (`pi.id IS NULL` admits an artifact with no member at
+    its position) rather than refusing a working link, and the next save
+    puts the two back in step.
     """
     rows = await conn.fetch(
         """
-        SELECT object_key, position, duration_seconds
-        FROM playlist_artifacts
-        WHERE playlist_id = $1 AND superseded_at IS NULL
-        ORDER BY position NULLS FIRST
+        SELECT pa.object_key AS object_key,
+               pa.position AS position,
+               pa.duration_seconds AS duration_seconds,
+               t.name AS title_name
+        FROM playlist_artifacts pa
+        LEFT JOIN playlist_items pi
+            ON pi.playlist_id = pa.playlist_id AND pi.position = pa.position
+        LEFT JOIN editions e ON e.id = pi.edition_id
+        LEFT JOIN episodes ep ON ep.id = e.episode_id
+        LEFT JOIN seasons s ON s.id = ep.season_id
+        LEFT JOIN titles t ON t.id = s.title_id
+        WHERE pa.playlist_id = $1
+          AND pa.superseded_at IS NULL
+          AND (pi.id IS NULL OR t.id IS NULL OR t.status != 'deleted')
+        ORDER BY pa.position NULLS FIRST
         """,
         playlist_id,
     )
