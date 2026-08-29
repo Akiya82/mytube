@@ -165,10 +165,11 @@ The follow-up round was watched in two named players rather than one:
 
 | | Resolution | Frame rate | Audio layout | Repeat |
 |---|---|---|---|---|
-| VizVid | passes | picture lags | passes | **picture does not switch after the end** |
+| YamaPlayer | passes | picture lags | passes | correct |
 | USharpVideo v1.0.1 | passes | picture lags | passes | correct |
+| VizVid | passes | picture lags | passes | **picture does not switch after the end** |
 
-No black frame at any boundary in either player.
+No black frame at any boundary in any of the three.
 
 The repeat defect is the new finding, and it belongs to the player rather than
 to either mechanism: it reproduces identically on the continuous stream and on
@@ -176,17 +177,21 @@ the generated list, so nothing chosen here avoids it. In VizVid, a source whose
 parameters change partway through leaves the picture stuck when the player
 loops back to the start; USharpVideo loops the same source correctly.
 
-This matters more than its size suggests. Looping is not a capability this
-service builds — the world's player owns that setting — but an evening runs
-longer than a list, so a loop that leaves a frozen picture is exactly the
-manual intervention the product exists to remove. The honest statement for the
-setup notes is that playlists loop correctly in USharpVideo, and that VizVid
-has a defect on repeat that this service cannot fix from its side.
+A third player settled how much it matters. YamaPlayer, the most widely used
+of the three, loops correctly, as does USharpVideo. The defect is one player in
+three, and not the common one.
+
+The owner's decision on it is to record it and leave it alone: the affected
+player's version was not established, it is not widely used, and building a
+workaround for it would mean shaping the service around a defect it cannot
+observe or verify. Setup notes should say that a playlist loops correctly in
+the common players, and name the one where the picture freezes on repeat, so
+someone who hits it recognises it instead of suspecting the service.
 
 **Not measured:** whether the same defect appears when every member shares its
 parameters. Every source tested here was deliberately heterogeneous. A uniform
-list may well loop correctly in VizVid too; nothing here establishes that, and
-it should not be assumed in the setup notes.
+list may well loop correctly in the affected player too; nothing here
+establishes that, and it should not be assumed in the setup notes.
 
 ## What was not measured
 
