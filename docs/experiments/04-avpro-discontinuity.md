@@ -125,6 +125,69 @@ eager whole-list retrieval, not progressive streaming.
 The owner confirmed that the world's own video player exposes a loop setting in
 its own controls, and deliberately did not use it during this test.
 
+## A follow-up round: one continuous stream, and two named players
+
+After the first round settled the mechanism, a second question came up worth
+answering while the rig was still standing: rather than handing the player a
+list it reads once, could the server hand it a single continuous byte stream
+and decide what to send next as it sends it? That would put the server back in
+control of what plays, which is the thing a read-once list gives away.
+
+It is buildable. Concatenating the segment files byte-wise does **not** work —
+the second clip's timestamps restart, and the result reports eight seconds
+where sixteen were joined. Remuxing does: a stream copy into one transport
+stream produces a continuous timeline, needs no re-encode, and runs at roughly
+two thousand times realtime. A frame decoded from the second half of the
+resolution pair comes back at the second clip's size, so a parameter change
+does survive the seam.
+
+It fails on frame rate, and fails by arithmetic rather than by chance. A
+continuous stream carries one declared frame rate for its whole timeline, so
+the second clip's frames are paced at the first clip's rate:
+
+| Pair | Video track | Audio track |
+|---|---|---|
+| Resolution differs | 16.00 s | 16.01 s |
+| Frame rate differs | **20.00 s** | 16.01 s |
+
+Four seconds of divergence over sixteen. Observed in the world as the picture
+running behind the sound — which is the one failure this project's own bar
+refuses to accept. Correcting it means bringing members to a common frame
+rate, which is a re-encode, which this stage deliberately does not do.
+
+So the continuous stream is not rejected on merit. It is deferred: it becomes
+the better mechanism once re-encoding is available, and it cannot be built
+before then. The generated list stands.
+
+### Two players, and a defect in one of them
+
+The follow-up round was watched in two named players rather than one:
+
+| | Resolution | Frame rate | Audio layout | Repeat |
+|---|---|---|---|---|
+| VizVid | passes | picture lags | passes | **picture does not switch after the end** |
+| USharpVideo v1.0.1 | passes | picture lags | passes | correct |
+
+No black frame at any boundary in either player.
+
+The repeat defect is the new finding, and it belongs to the player rather than
+to either mechanism: it reproduces identically on the continuous stream and on
+the generated list, so nothing chosen here avoids it. In VizVid, a source whose
+parameters change partway through leaves the picture stuck when the player
+loops back to the start; USharpVideo loops the same source correctly.
+
+This matters more than its size suggests. Looping is not a capability this
+service builds — the world's player owns that setting — but an evening runs
+longer than a list, so a loop that leaves a frozen picture is exactly the
+manual intervention the product exists to remove. The honest statement for the
+setup notes is that playlists loop correctly in USharpVideo, and that VizVid
+has a defect on repeat that this service cannot fix from its side.
+
+**Not measured:** whether the same defect appears when every member shares its
+parameters. Every source tested here was deliberately heterogeneous. A uniform
+list may well loop correctly in VizVid too; nothing here establishes that, and
+it should not be assumed in the setup notes.
+
 ## What was not measured
 
 Recorded plainly rather than left as a gap a later reader would read as a pass:
