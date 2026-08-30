@@ -715,7 +715,10 @@ async def test_assembly_shows_the_timing_note_on_both_create_and_edit(monkeypatc
     _patch(monkeypatch, "playlist_detail", fake_playlist_detail)
     _patch(monkeypatch, "playlist_members", fake_playlist_members)
 
-    timing_note = "Changes apply from the next clip, not this instant, for anyone already watching."
+    timing_note = (
+        "Changes apply the next time someone opens this link. Anyone already "
+        "watching keeps playing the list as it was when they started."
+    )
 
     async with client:
         create_resp = await client.get("/playlists/new")

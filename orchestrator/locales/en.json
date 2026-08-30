@@ -71,7 +71,7 @@
   "playlist.cta.remove": "Remove",
   "playlist.cta.save": "Save playlist",
   "playlist.edit.heading": "Edit playlist",
-  "playlist.edit.timing_note": "Changes apply from the next clip, not this instant, for anyone already watching.",
+  "playlist.edit.timing_note": "Changes apply the next time someone opens this link. Anyone already watching keeps playing the list as it was when they started.",
   "playlist.member.removed": "Removed from the library",
   "playlist.members.empty.body": "Add clips from the library below.",
   "playlist.members.empty.heading": "No clips yet",

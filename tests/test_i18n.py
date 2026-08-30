@@ -1,5 +1,6 @@
-"""Both locale catalogs carry the same key set, and every key the
-templates and the worker reference actually exists in both.
+"""Both locale catalogs carry the same key set and the same
+substitutions per key, and every key the templates and the worker
+reference actually exists in both.
 
 Planning identifiers in catalog values are checked by
 `test_no_planning_traces.py` instead -- it owns the full identifier
@@ -18,6 +19,9 @@ _TEMPLATE_KEY_PATTERN = re.compile(r"""t\(\s*["']([^"']+)["']""")
 # A reason key as it appears in source: quoted, so the same identifier
 # mentioned in a docstring or a comment is not collected.
 _REASON_KEY_PATTERN = re.compile(r"""["']((?:failed\.)?reason\.[a-z_]+)["']""")
+# A substitution as `format`/`str.format` sees it: `{name}`. Anything else
+# inside braces is not a parameter the renderer supplies.
+_PLACEHOLDER_PATTERN = re.compile(r"{([A-Za-z_][A-Za-z0-9_]*)}")
 
 
 def _load(lang: str) -> dict[str, str]:
@@ -26,6 +30,29 @@ def _load(lang: str) -> dict[str, str]:
 
 def test_catalogs_have_identical_key_sets():
     assert _load("en").keys() == _load("ru").keys()
+
+
+def test_catalogs_substitute_the_same_placeholders_for_every_key():
+    """The same key set is only half of the agreement between the two
+    catalogs. A value that references a substitution its counterpart does
+    not is a render-time failure for the viewers of that one language, and
+    nobody testing in English ever sees it.
+    """
+    en = _load("en")
+    ru = _load("ru")
+
+    parametrised = 0
+    for key in sorted(en.keys() & ru.keys()):
+        en_names = set(_PLACEHOLDER_PATTERN.findall(en[key]))
+        ru_names = set(_PLACEHOLDER_PATTERN.findall(ru[key]))
+        parametrised += bool(en_names or ru_names)
+        assert en_names == ru_names, (
+            f"{key!r} substitutes different names: en={sorted(en_names)} "
+            f"ru={sorted(ru_names)}"
+        )
+
+    # A catalog pair that collected nothing would otherwise pass silently.
+    assert parametrised, "expected at least one key carrying a substitution"
 
 
 def test_every_template_translation_key_exists_in_both_catalogs():

@@ -71,7 +71,7 @@
   "playlist.cta.remove": "Убрать",
   "playlist.cta.save": "Сохранить плейлист",
   "playlist.edit.heading": "Изменить плейлист",
-  "playlist.edit.timing_note": "Изменения вступят в силу со следующего ролика, а не сразу — для тех, кто уже смотрит.",
+  "playlist.edit.timing_note": "Изменения вступят в силу при следующем открытии ссылки. У тех, кто уже смотрит, список останется таким, каким был в момент запуска.",
   "playlist.member.removed": "Удалено из библиотеки",
   "playlist.members.empty.body": "Добавьте ролики из библиотеки ниже.",
   "playlist.members.empty.heading": "Пока нет роликов",
