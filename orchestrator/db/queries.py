@@ -1127,6 +1127,16 @@ async def playlist_artifact_keys(conn: asyncpg.Connection, playlist_id) -> list[
     return [row["object_key"] for row in rows]
 
 
+async def delete_playlist_artifact(conn: asyncpg.Connection, artifact_id) -> None:
+    """Drop one `playlist_artifacts` row, once its object is gone from
+    the bucket. Object first, row second, never the reverse: this row is
+    the only record of the key, so a failure between the two steps has to
+    leave something the next cycle can retry against rather than an object
+    nothing can name.
+    """
+    await conn.execute("DELETE FROM playlist_artifacts WHERE id = $1", artifact_id)
+
+
 async def playlist_build_inputs(conn: asyncpg.Connection, playlist_id) -> list[dict]:
     """Everything one build needs about one playlist's members, in
     position order, from a single round trip: the stored object key, its

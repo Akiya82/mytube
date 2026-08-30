@@ -238,8 +238,11 @@ class UnreferencedObject:
 @dataclass(frozen=True)
 class MissingObject:
     """A catalog row whose key is absent from the bucket listing --
-    carries the slug through, since the reconciliation report has to name
-    the /v/{slug} address it breaks, not just the bare key.
+    carries the slug and the kind through, since the reconciliation report
+    has to name the address it breaks rather than just the bare key, and
+    the two address families it can belong to (/v/{slug} for a title's
+    video or poster, /p/{slug} for a playlist's artifact) are told apart
+    by the kind.
     """
 
     key: str

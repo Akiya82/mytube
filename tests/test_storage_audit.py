@@ -198,3 +198,24 @@ def test_a_row_with_no_slug_still_reports_something_readable():
     for kind in ("video", "poster", "playlist"):
         result = format_address(kind, None)
         assert result and "None" not in result
+
+
+async def test_a_missing_playlist_artifact_names_the_playlist_address_not_a_video_one(
+    monkeypatch, capsys
+):
+    """An operator sent to a /v/ link that works cannot act on the report,
+    and the link that actually broke stays hidden.
+    """
+    referenced = [
+        {"key": "gone-video.mp4", "kind": "video", "title_name": "V", "slug": "v-slug"},
+        {"key": "gone-artifact.mp4", "kind": "playlist", "title_name": "P", "slug": "p-slug"},
+    ]
+    _stub(monkeypatch, referenced, {})
+
+    code = await storage_audit.storage_audit()
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "/p/p-slug" in out
+    assert "/v/v-slug" in out
+    assert "/v/p-slug" not in out

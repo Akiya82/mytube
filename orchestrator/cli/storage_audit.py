@@ -14,7 +14,11 @@ definitions of the same word would eventually disagree.
 
 The catalog side goes through `queries.referenced_objects`, which carries
 each key's kind, title name and current slug -- a missing object is named
-by the `/v/{slug}` address it breaks, not only by a key nobody recognises.
+by the address it breaks, not only by a key nobody recognises. Two
+address families reach this report, `/v/` and `/p/`, and `format_address`
+below picks between them from the kind the row carries: an operator sent
+to a video link that works cannot act on the report, and the playlist
+link that actually broke stays hidden.
 The bucket side goes through `storage.storage_usage()`, the same
 sixty-second cache the library header reads, rather than a second full
 enumeration of the bucket -- this module never lists the bucket itself.
@@ -40,6 +44,22 @@ from orchestrator.storage import reconcile, storage_usage
 
 OK_EXIT_CODE = 0
 DISCREPANCY_EXIT_CODE = 1
+
+_ADDRESS_PREFIXES = {"playlist": "/p/"}
+_DEFAULT_ADDRESS_PREFIX = "/v/"
+
+
+def format_address(kind: str, slug: str | None) -> str:
+    """The public address a referenced object's kind actually lives under.
+
+    Pure, so the report's wording is testable with no database and no
+    bucket. A video and its poster share the title's `/v/` address -- the
+    poster is not separately addressable and the thing that breaks is the
+    title's link either way. A playlist artifact belongs to `/p/`.
+    """
+    if slug is None:
+        return "address unknown (no current slug)"
+    return _ADDRESS_PREFIXES.get(kind, _DEFAULT_ADDRESS_PREFIX) + slug
 
 
 async def storage_audit() -> int:
@@ -86,7 +106,7 @@ async def storage_audit() -> int:
     if result.missing:
         typer.echo("addresses whose object is missing from storage:")
         for obj in result.missing:
-            address = f"/v/{obj.slug}" if obj.slug else "address unknown (no current slug)"
+            address = format_address(obj.kind, obj.slug)
             typer.echo(f"  {address} is broken -- {obj.title_name} ({obj.kind}), key {obj.key}")
     else:
         typer.echo("no broken addresses")

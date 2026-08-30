@@ -27,6 +27,7 @@ import logging
 
 import asyncpg
 
+from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.storage import delete_object
 
@@ -80,6 +81,15 @@ async def reap_playlists_once(pool: asyncpg.Pool) -> None:
     rule the title sweep above states, for the same named reason: a row
     recorded as deleted with bytes still in the bucket leaves an object
     nothing will ever point at or clean up again.
+
+    Two jobs, not one. The second is the generation a rebuild replaced: a
+    rebuild marks the previous artifacts superseded rather than deleting
+    them inline, so a viewer holding an address handed out before the
+    rebuild still gets bytes. That address stays valid for exactly the
+    signing lifetime, which is why that is the age passed below --
+    reclaiming sooner takes the file out from under somebody mid-evening,
+    and never reclaiming means every rebuild leaks a full copy of the list
+    onto a stack that has run out of space twice.
     """
     async with pool.acquire() as conn:
         for row in await queries.due_for_reaping_playlists(conn):
@@ -99,6 +109,18 @@ async def reap_playlists_once(pool: asyncpg.Pool) -> None:
                 # Stays pending_delete so the next cycle retries.
                 continue
             await queries.finish_delete_playlist(conn, playlist_id)
+
+        sign_ttl_seconds = get_settings().sign_ttl_seconds
+        for artifact in await queries.due_for_reclaim_artifacts(conn, sign_ttl_seconds):
+            try:
+                await asyncio.to_thread(delete_object, artifact["object_key"])
+            except Exception:
+                logger.exception(
+                    "reaper: failed to delete superseded artifact %s",
+                    artifact["object_key"],
+                )
+                continue
+            await queries.delete_playlist_artifact(conn, artifact["id"])
 
 
 async def sweep_sessions_once(pool: asyncpg.Pool) -> None:
