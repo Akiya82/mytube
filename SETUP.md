@@ -14,6 +14,7 @@ explicitly marked as not run.
 ## Quick index
 
 - [Interface](#interface) — how to reach it, first run, changing the password
+- [Playlists](#playlists) — what the link does, and what the world player has to be set to
 - [What to expose to the reverse proxy](#what-to-expose-to-the-reverse-proxy) — a worked config block
 - [Upgrading](#upgrading) — pulling a change into a running deployment
 - [Rolling back](#rolling-back) — reverting one
@@ -204,6 +205,47 @@ docker compose exec api python -m orchestrator.cli create-operator --username <n
 ```
 
 It refuses if an operator already exists.
+
+## Playlists
+
+A playlist has an address of its own, the same shape as a video's but under a
+different prefix: `https://<delivery-hostname>/p/<name>`. Paste it into a
+world's video player and the clips play one after another. It is one link and
+it does not change when the list is edited, so a link already pasted somewhere
+keeps working.
+
+Three things about it are worth knowing before somebody asks you about them in
+a world.
+
+**An edit reaches people the next time they open the link, not while they are
+watching.** The player fetches the whole list once, at the moment the address
+is opened, and never asks again for the rest of the session. Reordering,
+adding or removing clips is therefore invisible to anyone already playing;
+they finish the list as it was when they started, and everyone who opens the
+link afterwards gets the new one. This is a property of the player, not a
+setting, and there is nothing on this side that changes it.
+
+**Deleting a video from the library takes it out of every playlist it was in,
+by itself.** The remaining clips keep playing and nothing has to be rebuilt.
+On the operator's side the playlist keeps a marked gap where that clip used to
+be, so the list does not quietly change shape behind your back; take the gap
+out once you have seen it.
+
+**Repeating at the end is the world player's own loop control, not something
+this service does.** The service hands over a list that ends. Whether it
+starts again is a setting in the player's own menu, and this service builds
+nothing for it — a list that ends is all either half of the arrangement can
+express. With that control on, the list repeats correctly in the common
+players. One player behaves differently: in VizVid the picture freezes after
+the end when it loops back while the sound carries on. That was seen with a
+list whose clips differ from one another in resolution, frame rate or audio
+layout; whether a list of uniform clips does the same there has not been
+checked. If somebody reports a frozen picture on repeat, ask which player the
+world uses before suspecting the service.
+
+**In a browser, a playlist address does not play yet.** Playlists are a
+VRChat capability for the moment. A single video's address plays in a browser
+exactly as it always has and is not affected by any of this.
 
 ## Storage capacity
 
