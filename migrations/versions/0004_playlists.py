@@ -49,6 +49,13 @@ def upgrade() -> None:
             -- Which mechanism produced what is in playlist_artifacts:
             -- 'pending' means nothing yet, 'concat' means one row,
             -- 'hls' means one row per segment in position order.
+            -- Only 'pending' and 'hls' are ever written: physical joining
+            -- was ruled out by measurement, so nothing produces a
+            -- 'concat' row and no code reads for one. The value is kept
+            -- in the check deliberately -- narrowing it costs a migration
+            -- for no behavioural gain, and a re-encoding stage could want
+            -- it back. Its presence here is not evidence that anything
+            -- writes it.
             mode        text NOT NULL DEFAULT 'pending'
                         CHECK (mode IN ('pending', 'concat', 'hls')),
             -- The readiness signal, deliberately separate from anything

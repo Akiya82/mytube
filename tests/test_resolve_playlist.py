@@ -1,8 +1,9 @@
 """Unit tests for /p/{slug} -- the db.queries layer is monkeypatched, no real
 database involved (see conftest.py's `settings` fixture for the env vars this
-needs). Mirrors tests/test_resolve.py's scaffold verbatim: this is the same
-acquire/sign/redirect shape as the video address, with one deliberate
-divergence pinned by this module -- playlist addresses are never tombstoned.
+needs). Mirrors tests/test_resolve.py's scaffold verbatim: the same
+acquire-and-sign shape as the video address, with two deliberate divergences
+pinned by this module -- a playlist address is never tombstoned, and it
+answers a generated document rather than a redirect to one file.
 """
 import uuid
 
@@ -54,23 +55,6 @@ def client():
     return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
 
-def _built_row(slug="vecher-klipov", built_object_key="a1b2c3d4-0000-0000-0000-000000000000.mp4"):
-    """An active, concat-built playlist row. `built_object_key` is the full
-    storage key, extension included, mirroring how `editions.object_key` is
-    already stored. Visibly ends in `.mp4` so a reader of this file cannot
-    mistake it for a bare identifier.
-    """
-    return {
-        "id": PLAYLIST_ID,
-        "status": "active",
-        "mode": "concat",
-        "built_object_key": built_object_key,
-        "built_at": "2026-08-27T12:00:00Z",
-        "name": "Vecher klipov",
-        "slug": slug,
-    }
-
-
 def _pending_row(slug="vecher-klipov", member_count=0):
     """An active row that has not finished building yet -- `built_at` is
     `None`. `member_count` distinguishes the two not-ready cases the route
@@ -81,76 +65,13 @@ def _pending_row(slug="vecher-klipov", member_count=0):
     return {
         "id": PLAYLIST_ID,
         "status": "active",
-        "mode": "concat",
+        "mode": "pending",
         "built_object_key": None,
         "built_at": None,
         "name": "Vecher klipov",
         "slug": slug,
         "member_count": member_count,
     }
-
-
-async def test_a_built_playlist_redirects_to_its_signed_artifact(monkeypatch, client, settings):
-    row = _built_row()
-
-    async def fake_resolve_playlist_slug(conn, slug):
-        assert slug == "vecher-klipov"
-        return row
-
-    monkeypatch.setattr(
-        queries, "resolve_playlist_slug", fake_resolve_playlist_slug, raising=False
-    )
-
-    async with client:
-        resp = await client.get(
-            "/p/vecher-klipov", headers={"host": "mytube.example"}, follow_redirects=False
-        )
-
-    assert resp.status_code == 302
-    location = resp.headers["location"]
-    # https, not http: external_base_url defaults the forwarded protocol to
-    # https, and test_resolve.py already asserts exactly that for the same
-    # header set -- reused here rather than re-derived.
-    assert location.startswith(f"https://mytube.example/blob/{row['built_object_key']}?")
-
-    sig, exp = sign_blob_url(
-        row["built_object_key"], settings.secure_link_secret, settings.sign_ttl_seconds
-    )
-    query = location.split("?", 1)[1]
-    params = dict(p.split("=") for p in query.split("&"))
-    assert params["sig"] == sig
-    # exp is a wall-clock timestamp computed independently by the fixture's
-    # own sign call and the route -- assert closeness, not equality.
-    assert abs(int(params["exp"]) - exp) <= 2
-
-
-async def test_the_signed_playlist_address_carries_the_extension_exactly_once(
-    monkeypatch, client
-):
-    row = _built_row()
-
-    async def fake_resolve_playlist_slug(conn, slug):
-        return row
-
-    monkeypatch.setattr(
-        queries, "resolve_playlist_slug", fake_resolve_playlist_slug, raising=False
-    )
-
-    async with client:
-        resp = await client.get("/p/vecher-klipov", follow_redirects=False)
-
-    location = resp.headers["location"]
-    path = location.split("://", 1)[1].split("/", 1)[1]
-    path = "/" + path.split("?", 1)[0]
-    # Delivery block's own pattern: /blob/, a dash-separated hex identifier,
-    # .mp4, end. A doubled extension (…mp4.mp4) misses this and serves the
-    # not-found clip forever behind a signature that verifies; a missing one
-    # makes the reclamation call a no-op.
-    assert path == f"/blob/{row['built_object_key']}", (
-        "the Location must carry the stored object key's .mp4 extension "
-        "exactly once -- doubled, it serves the not-found clip forever "
-        "behind a signature that verifies; missing, reclamation deletes nothing"
-    )
 
 
 async def test_an_unknown_playlist_slug_is_a_plain_404(monkeypatch, client):
@@ -171,14 +92,14 @@ async def test_an_unknown_playlist_slug_is_a_plain_404(monkeypatch, client):
     "row",
     [
         None,
-        {"id": PLAYLIST_ID, "status": "deleted", "mode": "concat",
+        {"id": PLAYLIST_ID, "status": "deleted", "mode": "hls",
          "built_object_key": None, "built_at": None, "name": "x", "slug": "gone"},
         # The grace window: the playlist still exists and its bytes are
         # still in the bucket. A reader would otherwise assume this falls
         # through to the built branch and starts serving a playlist the
         # operator has already deleted.
-        {"id": PLAYLIST_ID, "status": "pending_delete", "mode": "concat",
-         "built_object_key": "a1b2c3d4-0000-0000-0000-000000000000.mp4",
+        {"id": PLAYLIST_ID, "status": "pending_delete", "mode": "hls",
+         "built_object_key": None,
          "built_at": "2026-08-27T12:00:00Z", "name": "x", "slug": "gone"},
     ],
     ids=["unknown", "deleted", "pending_delete"],
@@ -248,7 +169,7 @@ async def test_a_saturated_pool_answers_503_rather_than_waiting(monkeypatch, cli
 
     async def fake_resolve_playlist_slug(conn, slug):
         await asyncio.sleep(0.2)
-        return _built_row()
+        return _manifest_row()
 
     monkeypatch.setattr(
         queries, "resolve_playlist_slug", fake_resolve_playlist_slug, raising=False
@@ -260,21 +181,16 @@ async def test_a_saturated_pool_answers_503_rather_than_waiting(monkeypatch, cli
     assert resp.status_code == 503
 
 
-async def test_a_short_playlist_link_opened_on_the_interface_hostname_redirects_to_the_delivery_address(
+async def test_a_short_playlist_link_opened_on_the_interface_hostname_uses_the_delivery_address(
     monkeypatch, client, settings
 ):
     """Same special case external_base_url already handles for the video
     address: reusing that function rather than writing a second one is what
-    this test pins.
+    this test pins. The addresses it applies to are the segment addresses
+    inside the generated document, since that is where this route signs.
     """
-    row = _built_row()
-
-    async def fake_resolve_playlist_slug(conn, slug):
-        return row
-
-    monkeypatch.setattr(
-        queries, "resolve_playlist_slug", fake_resolve_playlist_slug, raising=False
-    )
+    key = "a1b2c3d4-0000-0000-0000-000000000000.mp4"
+    _patch_delivery(monkeypatch, _manifest_row(), [_artifact(key, 0)])
 
     async with client:
         resp = await client.get(
@@ -283,13 +199,15 @@ async def test_a_short_playlist_link_opened_on_the_interface_hostname_redirects_
             follow_redirects=False,
         )
 
-    assert resp.headers["location"].startswith(settings.public_base_url)
+    assert resp.status_code == 200
+    assert f"{settings.public_base_url}/blob/{key}?exp=" in resp.text
 
 
 def _manifest_row(slug="vecher-klipov"):
-    """An active playlist built as a generated list. There is no single
-    artifact to redirect to -- `built_object_key` stays null, because the
-    join behind it only ever finds a single assembled file.
+    """An active, built playlist -- the only shape the build worker ever
+    writes. `built_object_key` stays null: the build produces one segment
+    object per member and the document names them all, so there is no
+    single file for the column to point at.
     """
     return {
         "id": PLAYLIST_ID,

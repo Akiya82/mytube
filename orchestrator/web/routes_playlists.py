@@ -88,11 +88,6 @@ def _signed_blob_url(request: Request, object_key: str) -> str:
     )
 
 
-def _sign_redirect(request: Request, object_key: str) -> RedirectResponse:
-    """The signed `/blob/` redirect for a playlist assembled as one file."""
-    return RedirectResponse(_signed_blob_url(request, object_key), status_code=302)
-
-
 async def _enqueue_build(request: Request, playlist_id) -> None:
     """Hand the assembly off to the background worker and come straight
     back, the way the add route returns before its own work happens.
@@ -478,9 +473,6 @@ async def resolve_playlist_route(slug: str, request: Request):
 
     if row["built_at"] is None:
         return Response(status_code=PLAYLIST_NOT_READY_STATUS)
-
-    if row["mode"] == "concat":
-        return _sign_redirect(request, row["built_object_key"])
 
     return _manifest_response(request, row, artifacts)
 
