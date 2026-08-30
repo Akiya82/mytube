@@ -18,7 +18,16 @@
   carries neither attribute, and says why in its own comment below.
 #}
 {% if row.kind == "playlist" %}
-<li class="library-row{% if row.refused %} library-row--failed{% endif %}">
+{# The pending-delete state reuses the video row's markup verbatim, and
+   the reuse is the point rather than a coincidence: the same row-status
+   and deadline attributes on the <li>, the same countdown chip carrying
+   the same template attribute, and the same confirmation forms. Because
+   they match, the countdown tick and the
+   confirmation handler in static/app.js already cover this row and no
+   browser code was added for playlists. A playlist status is never the
+   video-side "preparing" value, so data-row-status here can never bind
+   the four-second poller (see the comment further down). #}
+<li class="library-row{% if row.refused %} library-row--failed{% endif %}" data-row-status="{{ row.status }}"{% if row.status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
   <div class="library-row__thumb library-row__thumb--placeholder">
     {{ queue_placeholder(cls="library-row__thumb-icon") }}
     <span class="visually-hidden">{{ t("library.thumbnail.placeholder_label") }}</span>
@@ -33,7 +42,11 @@
        actually tried; Building is "has members, not built yet"; absence
        of a chip is the done signal, the same rule a finished video row
        already follows. #}
-    {% if row.member_count == 0 %}
+    {% if row.status == "pending_delete" %}
+      <span class="chip chip--deleting" data-countdown-template="{{ t('library.delete.countdown') }}">
+        {{ t("library.delete.countdown").format(mm="--", ss="--") }}
+      </span>
+    {% elif row.member_count == 0 %}
       <span class="chip chip--empty">{{ t("playlist.state.empty") }}</span>
     {% elif row.refused %}
       <span class="chip chip--refused">{{ t("playlist.state.refused") }}</span>
@@ -80,24 +93,37 @@
     {% endif %}
   </div>
 
-  {# No data-row-status and no data-title-id on this row's own <li>
-     (unlike the video branch below): the four-second poller looks for a
-     row whose status is the video-side "preparing" value and fetches a
-     title's row fragment from it, and a playlist row that claimed those
-     attributes would poll an address that does not exist and remove
-     itself from the list on the first 404. The building chip's own copy
+  {# No data-title-id on this row's own <li>, unlike the video branch
+     below, and its data-row-status can never read "preparing": the
+     four-second poller binds on that exact status and then fetches a
+     title's row fragment from the identifier, so a playlist row carrying
+     both would poll an address that does not exist and remove itself
+     from the list on the first 404. A playlist has only three statuses
+     and none of them is that one, which is what makes the attribute safe
+     to carry for the countdown's sake. The building chip's own copy
      tells the operator to reload instead -- an assembly can run for
      minutes on a multi-gigabyte list, and a chip that sits still next to
      a video row that updates itself would otherwise read as a stall. If
      live updates are wanted later, the cheap path is a fragment address
      on the row and a poller that reads it from an attribute instead of
      building it from a title identifier. #}
+  {% if row.status == "pending_delete" %}
+  <div class="library-row__actions">
+    <form method="post" action="/playlists/{{ row.playlist_id }}/undo" data-confirm="{{ t('library.delete.confirm_undo_playlist') }}">
+      <button type="submit" class="btn btn--secondary">{{ t("library.cta.undo") }}</button>
+    </form>
+    <form method="post" action="/playlists/{{ row.playlist_id }}/purge" data-confirm="{{ t('library.delete.confirm_purge') }}">
+      <button type="submit" class="btn btn--destructive">{{ t("library.cta.purge_now") }}</button>
+    </form>
+  </div>
+  {% else %}
   <div class="library-row__actions">
     <a class="btn btn--ghost" href="/playlists/{{ row.playlist_id }}/edit">{{ t("library.cta.edit") }}</a>
     <form method="post" action="/playlists/{{ row.playlist_id }}/delete">
       <button type="submit" class="btn btn--destructive">{{ t("library.cta.delete") }}</button>
     </form>
   </div>
+  {% endif %}
 </li>
 {% else %}
 <li class="library-row{% if row.title_status == 'failed' %} library-row--failed{% endif %}" data-title-id="{{ row.title_id }}" data-row-status="{{ row.title_status }}"{% if row.title_status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>

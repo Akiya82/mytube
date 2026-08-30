@@ -1076,6 +1076,57 @@ async def finish_delete_playlist(conn: asyncpg.Connection, playlist_id) -> None:
     await conn.execute("UPDATE playlists SET status = 'deleted' WHERE id = $1", playlist_id)
 
 
+async def cancel_delete_playlist(conn: asyncpg.Connection, playlist_id) -> None:
+    """Undo `mark_playlist_for_delete` -- back to active, `delete_at`
+    cleared, `GET /p/{slug}` resolving again immediately. The same shape
+    `cancel_delete` gives a title, and the same reason it exists: the
+    grace window is only useful if something can call it off.
+    """
+    await conn.execute(
+        "UPDATE playlists SET status = 'active', delete_at = NULL WHERE id = $1",
+        playlist_id,
+    )
+
+
+async def due_for_reaping_playlists(conn: asyncpg.Connection) -> list[asyncpg.Record]:
+    """Playlists whose `delete_at` has passed -- identifiers only.
+
+    **Deliberately not one key per playlist**, unlike `due_for_reaping`'s
+    aggregated `object_keys`. A playlist's objects live in
+    `playlist_artifacts`, one row per stored object: one mechanism
+    produces a single assembled file, the other a segment per member, and
+    a rebuild leaves a superseded generation behind that is reclaimed on
+    its own schedule. The sweep reads those rows through
+    `playlist_artifact_keys`. A signature returning one key per playlist
+    would silently reclaim one object out of fifty and record the deletion
+    as done with the rest of the bytes still in the bucket -- so the shape
+    is stated here rather than left to be simplified back.
+    """
+    return await conn.fetch(
+        """
+        SELECT id AS playlist_id
+        FROM playlists
+        WHERE status = 'pending_delete' AND delete_at <= now()
+        """
+    )
+
+
+async def playlist_artifact_keys(conn: asyncpg.Connection, playlist_id) -> list[str]:
+    """Every stored object one playlist has produced -- current and
+    superseded generations both, since a deletion reclaims all of them.
+
+    Full storage keys including the extension, exactly as
+    `playlist_artifacts.object_key` holds them: deleting with a bare
+    identifier is a silent no-op against the object store, and the audit
+    would go on reporting the surviving object as garbage forever.
+    """
+    rows = await conn.fetch(
+        "SELECT object_key FROM playlist_artifacts WHERE playlist_id = $1",
+        playlist_id,
+    )
+    return [row["object_key"] for row in rows]
+
+
 async def playlist_build_inputs(conn: asyncpg.Connection, playlist_id) -> list[dict]:
     """Everything one build needs about one playlist's members, in
     position order, from a single round trip: the stored object key, its

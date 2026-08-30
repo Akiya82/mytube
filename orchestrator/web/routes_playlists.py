@@ -33,6 +33,7 @@ from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media import playlist_build
 from orchestrator.media.playlist_queue import PlaylistBuildJob
+from orchestrator.reaper import reap_playlists_once
 from orchestrator.resolve import external_base_url
 from orchestrator.signing import blob_path, sign_object_key
 from orchestrator.slugs import SlugError, normalize_slug, pick_unique_slug
@@ -482,3 +483,80 @@ async def resolve_playlist_route(slug: str, request: Request):
         return _sign_redirect(request, row["built_object_key"])
 
     return _manifest_response(request, row, artifacts)
+
+
+@router.post("/playlists/{playlist_id}/delete")
+async def delete_playlist_route(playlist_id: str, request: Request):
+    """Start the grace window, the same gesture and the same window a
+    title's delete uses. `GET /p/{slug}` stops resolving the instant this
+    returns: the resolve route answers 404 for any status that is not
+    active, so nothing there had to change.
+
+    Only an active playlist can be marked (T-03-33) -- a playlist that is
+    not active has no live address to protect a mouse slip against.
+    """
+    parsed = _parse_uuid(playlist_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    settings = get_settings()
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.playlist_row(conn, parsed)
+        if row is None or row["status"] != "active":
+            return Response(status_code=404)
+        await queries.mark_playlist_for_delete(conn, parsed, settings.delete_grace_seconds)
+
+    return RedirectResponse("/library", status_code=302)
+
+
+@router.post("/playlists/{playlist_id}/undo")
+async def undo_playlist_delete_route(playlist_id: str, request: Request):
+    """Call the deletion off. Only a playlist currently pending deletion
+    may be undone (T-03-33): a stale page cannot revive one that was
+    already purged, nor re-decide anything about one nobody deleted.
+    """
+    parsed = _parse_uuid(playlist_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.playlist_row(conn, parsed)
+        if row is None:
+            return Response(status_code=404)
+        if row["status"] != "pending_delete":
+            return Response(status_code=400)
+        await queries.cancel_delete_playlist(conn, parsed)
+
+    return RedirectResponse("/library", status_code=302)
+
+
+@router.post("/playlists/{playlist_id}/purge")
+async def purge_playlist_route(playlist_id: str, request: Request):
+    """Skip the wait: reuse the marking path with a zero-second window
+    rather than write a second deletion path -- two paths that must agree
+    eventually do not -- then await one sweep cycle inline so every object
+    is actually gone and the row is actually finished before this response
+    returns, rather than sometime within the next poll.
+
+    Only a playlist already pending deletion may be purged (T-03-33):
+    delete-now is reached from the countdown, which only ever shows for a
+    playlist already in that state.
+    """
+    parsed = _parse_uuid(playlist_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.playlist_row(conn, parsed)
+        if row is None:
+            return Response(status_code=404)
+        if row["status"] != "pending_delete":
+            return Response(status_code=400)
+        await queries.mark_playlist_for_delete(conn, parsed, 0)
+
+    await reap_playlists_once(pool)
+
+    return RedirectResponse("/library", status_code=302)

@@ -5,18 +5,20 @@ here requests the `signed_in` fixture because these screens are behind the
 session, same as every other operator screen in this suite
 (tests/test_library.py, tests/test_deletion.py).
 
-One test at the end is the deliberate exception and runs against the real
+One test in this file is the deliberate exception and runs against the real
 migrated database with nothing stubbed: reordering from the arrows alone
 is the one path that has to work with no pointer and no script, so it is
 also the one path where a stub standing in for the statement that actually
 renumbers the list would prove nothing.
 """
+import datetime
 import html
 import uuid
 
 import httpx
 import pytest
 
+from orchestrator import reaper
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
@@ -795,3 +797,162 @@ async def test_the_arrows_reorder_the_list_end_to_end_with_no_script_in_play(
     after = await queries.playlist_members(raw_conn, playlist_id)
     assert [m["title_name"] for m in after] == expected
     assert [m["position"] for m in after] == [0, 1, 2]
+
+
+# --- Deletion: the same gesture, the same countdown, as a video ----------
+
+DELETION_DEADLINE = datetime.datetime(2026, 8, 30, 12, 0, tzinfo=datetime.timezone.utc)
+PLAYLIST_ARTIFACT_KEYS = ["seg-a.mp4", "seg-b.mp4"]
+
+
+def _deletion_stubs(monkeypatch, status):
+    """Everything the three deletion routes touch, recorded rather than
+    performed: the row each one guards on, the writes they make, and the
+    objects the inline sweep removes.
+    """
+    calls = {"deleted_objects": [], "finished": [], "marked": [], "cancelled": []}
+    pending = []
+
+    async def fake_playlist_row(conn, playlist_id):
+        return _playlist_row(
+            status=status,
+            delete_at=DELETION_DEADLINE if status == "pending_delete" else None,
+        )
+
+    async def fake_mark(conn, playlist_id, grace_seconds):
+        calls["marked"].append((playlist_id, grace_seconds))
+        pending.append(playlist_id)
+
+    async def fake_cancel(conn, playlist_id):
+        calls["cancelled"].append(playlist_id)
+
+    async def fake_finish(conn, playlist_id):
+        calls["finished"].append(playlist_id)
+
+    async def fake_due(conn):
+        return [{"playlist_id": pid} for pid in pending]
+
+    async def fake_keys(conn, playlist_id):
+        return list(PLAYLIST_ARTIFACT_KEYS)
+
+    async def fake_reclaim(conn, older_than_seconds):
+        return []
+
+    _patch(monkeypatch, "playlist_row", fake_playlist_row)
+    _patch(monkeypatch, "mark_playlist_for_delete", fake_mark)
+    _patch(monkeypatch, "cancel_delete_playlist", fake_cancel)
+    _patch(monkeypatch, "finish_delete_playlist", fake_finish)
+    _patch(monkeypatch, "due_for_reaping_playlists", fake_due)
+    _patch(monkeypatch, "playlist_artifact_keys", fake_keys)
+    _patch(monkeypatch, "due_for_reclaim_artifacts", fake_reclaim)
+    monkeypatch.setattr(reaper, "delete_object", calls["deleted_objects"].append)
+    return calls
+
+
+async def test_deleting_a_playlist_starts_the_grace_window(monkeypatch, client, signed_in):
+    calls = _deletion_stubs(monkeypatch, "active")
+
+    async with client:
+        resp = await client.post(f"/playlists/{PLAYLIST_ID}/delete", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/library"
+    assert calls["marked"] == [(PLAYLIST_ID, get_settings().delete_grace_seconds)]
+    assert calls["deleted_objects"] == []
+
+
+async def test_deleting_a_playlist_that_is_already_pending_is_refused(
+    monkeypatch, client, signed_in
+):
+    calls = _deletion_stubs(monkeypatch, "pending_delete")
+
+    async with client:
+        resp = await client.post(f"/playlists/{PLAYLIST_ID}/delete", follow_redirects=False)
+
+    assert resp.status_code == 404
+    assert calls["marked"] == []
+
+
+async def test_undo_returns_a_pending_playlist_to_active(monkeypatch, client, signed_in):
+    calls = _deletion_stubs(monkeypatch, "pending_delete")
+
+    async with client:
+        resp = await client.post(f"/playlists/{PLAYLIST_ID}/undo", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert calls["cancelled"] == [PLAYLIST_ID]
+
+
+async def test_undo_against_an_active_playlist_is_refused_and_changes_nothing(
+    monkeypatch, client, signed_in
+):
+    calls = _deletion_stubs(monkeypatch, "active")
+
+    async with client:
+        resp = await client.post(f"/playlists/{PLAYLIST_ID}/undo", follow_redirects=False)
+
+    assert resp.status_code == 400
+    assert calls["cancelled"] == []
+
+
+async def test_purge_removes_every_artifact_and_finishes_the_row_before_responding(
+    monkeypatch, client, signed_in
+):
+    """Delete-now does not hand the work to the next poll: by the time the
+    redirect is written, every object this playlist made is gone from the
+    bucket and the row says so.
+    """
+    calls = _deletion_stubs(monkeypatch, "pending_delete")
+
+    async with client:
+        resp = await client.post(f"/playlists/{PLAYLIST_ID}/purge", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert calls["marked"] == [(PLAYLIST_ID, 0)]
+    assert calls["deleted_objects"] == PLAYLIST_ARTIFACT_KEYS
+    assert calls["finished"] == [PLAYLIST_ID]
+
+
+async def test_purge_against_an_active_playlist_is_refused(monkeypatch, client, signed_in):
+    calls = _deletion_stubs(monkeypatch, "active")
+
+    async with client:
+        resp = await client.post(f"/playlists/{PLAYLIST_ID}/purge", follow_redirects=False)
+
+    assert resp.status_code == 400
+    assert calls["deleted_objects"] == []
+
+
+async def test_a_pending_playlist_row_renders_the_same_countdown_a_video_row_does(
+    monkeypatch, client, signed_in
+):
+    """No second countdown implementation: the row carries the attributes
+    the existing tick already binds to, so the chip ticks with no browser
+    code added for playlists.
+    """
+    async def fake_library_rows(conn):
+        return []
+
+    async def fake_referenced_objects(conn):
+        return []
+
+    async def fake_playlist_rows(conn):
+        return [
+            _playlist_row(status="pending_delete", delete_at=DELETION_DEADLINE, member_count=2)
+        ]
+
+    monkeypatch.setattr(queries, "library_rows", fake_library_rows, raising=False)
+    monkeypatch.setattr(queries, "referenced_objects", fake_referenced_objects, raising=False)
+    _patch(monkeypatch, "playlist_rows", fake_playlist_rows)
+
+    async with client:
+        resp = await client.get("/library")
+
+    expected_deadline = int(DELETION_DEADLINE.timestamp() * 1000)
+    assert f'data-deadline="{expected_deadline}"' in resp.text
+    assert 'data-row-status="pending_delete"' in resp.text
+    assert "chip--deleting" in resp.text
+    assert f'action="/playlists/{PLAYLIST_ID}/undo"' in resp.text
+    assert f'action="/playlists/{PLAYLIST_ID}/purge"' in resp.text
+    # Both destructive forms go through the dialog the video row already uses.
+    assert resp.text.count("data-confirm") >= 2
