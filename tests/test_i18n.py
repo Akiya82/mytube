@@ -16,9 +16,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LOCALES_DIR = REPO_ROOT / "orchestrator" / "locales"
 TEMPLATES_DIR = REPO_ROOT / "orchestrator" / "web" / "templates"
 _TEMPLATE_KEY_PATTERN = re.compile(r"""t\(\s*["']([^"']+)["']""")
-# A reason key as it appears in source: quoted, so the same identifier
-# mentioned in a docstring or a comment is not collected.
-_REASON_KEY_PATTERN = re.compile(r"""["']((?:failed\.)?reason\.[a-z_]+)["']""")
+# A catalog key as it appears in source: quoted and dotted, so the same
+# identifier mentioned in a docstring or a comment is not collected.
+# Deliberately not a list of key families -- see
+# test_every_runtime_selected_key_in_the_source_exists_in_both_catalogs.
+_SOURCE_KEY_PATTERN = re.compile(
+    r"""["']([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)["']"""
+)
 # A substitution as `format`/`str.format` sees it: `{name}`. Anything else
 # inside braces is not a parameter the renderer supplies.
 _PLACEHOLDER_PATTERN = re.compile(r"{([A-Za-z_][A-Za-z0-9_]*)}")
@@ -68,35 +72,68 @@ def test_every_template_translation_key_exists_in_both_catalogs():
         assert key in ru, f"{key!r} missing from ru.json"
 
 
-def test_every_failure_reason_key_in_the_source_exists_in_both_catalogs():
-    """`analyze` and the worker's failure handler pick a reason key at
-    runtime and the templates render it as `t(verdict.reason_key)` /
-    `t(row.failure_reason)`, so the template scan above cannot see any of
-    them. They are the one family of keys where a missing entry surfaces
-    only as a bare key shown to the operator instead of a sentence.
+def _keys_referenced_in_the_source() -> set[str]:
+    """Every dotted identifier in the source that sits in a namespace the
+    catalogs serve.
 
-    Collected from the source rather than listed here, so a reason added
-    to the worker without a catalog line fails this test instead of
-    waiting to be noticed on screen.
+    The namespaces are read out of the catalog rather than listed here,
+    which is the whole point: `reason.*`, `failed.reason.*` and
+    `playlist.refused.*` are all collected because `reason`, `failed` and
+    `playlist` are catalog namespaces, and so is the next family somebody
+    adds without touching this file. A dotted identifier in a namespace no
+    catalog uses -- a log tag, an internal signal -- is not a translation
+    key and is not collected.
+
+    Template file names are the one shape that reads like a key and is
+    not one, so `render("library.html")` is excluded explicitly.
+    """
+    namespaces = {key.split(".")[0] for key in _load("en")}
+    found: set[str] = set()
+    for pattern in ("orchestrator/**/*.py", "orchestrator/**/*.html"):
+        for path in REPO_ROOT.glob(pattern):
+            for candidate in _SOURCE_KEY_PATTERN.findall(
+                path.read_text(encoding="utf-8")
+            ):
+                if candidate.endswith(".html"):
+                    continue
+                if candidate.split(".")[0] in namespaces:
+                    found.add(candidate)
+    return found
+
+
+def test_every_runtime_selected_key_in_the_source_exists_in_both_catalogs():
+    """`analyze`, the add worker and the playlist build worker each pick a
+    catalog key at runtime, and the templates render it as
+    `t(verdict.reason_key)` / `t(row.failure_reason)` /
+    `reason_text(row.refused_reason_key, ...)`. The template scan above
+    cannot see any of them: a missing entry surfaces only as a bare key
+    shown to the operator instead of a sentence.
+
+    Collected from the source by namespace rather than by an enumeration
+    of key families. The enumeration is what failed before: this test
+    matched `reason.*` and `failed.reason.*` only, so when the playlist
+    work introduced `playlist.refused.*` -- a second family selected the
+    same way and rendered the same way -- it landed outside the guard, and
+    a key added there without a catalog line would have reached the
+    operator with nothing failing.
     """
     en = _load("en")
     ru = _load("ru")
 
-    found: set[str] = set()
-    for pattern in ("orchestrator/**/*.py", "orchestrator/**/*.html"):
-        for path in REPO_ROOT.glob(pattern):
-            found.update(
-                _REASON_KEY_PATTERN.findall(path.read_text(encoding="utf-8"))
-            )
+    found = _keys_referenced_in_the_source()
 
-    # The mapper's own five, as a floor: a scan that silently collected
-    # nothing would otherwise pass.
+    # A floor across all three families, so a scan that silently collected
+    # nothing -- or stopped seeing one of them -- cannot pass.
     assert {
         "reason.storage_full",
         "reason.unreadable",
         "failed.reason.remux",
         "failed.reason.upload",
         "failed.reason.unknown",
+        "playlist.refused.empty",
+        "playlist.refused.storage_full",
+        "playlist.refused.checks",
+        "playlist.refused.assembly",
     } <= found
 
     for key in sorted(found):
