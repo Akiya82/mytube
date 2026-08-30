@@ -56,15 +56,16 @@ from dataclasses import dataclass
 
 from orchestrator.media.compat import _parse_frame_rate, audio_tracks
 
-# A translation catalogue key plus a parameter mapping, never an assembled
-# English sentence: the interface is localized and a sentence composed
-# here could not be translated where it is shown. Two keys, not one --
-# telling an operator that two clips cannot play together, about a video
-# that simply predates the columns recording its parameters, is telling
-# them something very likely untrue. The honest sentence names the
-# measurement and the command that takes it.
-REASON_KEY_PARITY_MISMATCH = "playlist.refused.parity"
-REASON_KEY_PARITY_UNMEASURED = "playlist.refused.unmeasured"
+# Log tags, deliberately outside the `playlist.refused.*` namespace the
+# interface renders from. The verdict below never reaches an operator: a
+# parameter difference is what the boundary marker exists to carry, so it
+# is recorded in the service log and never written to the row. Spelling
+# these as catalogue keys, and translating them, promised a sentence
+# nothing could ever display. Two tags, not one, because a clip that
+# simply predates the columns recording its parameters is a different
+# finding from two clips that were measured and differ.
+PARITY_LOG_MISMATCH = "parity.mismatch"
+PARITY_LOG_UNMEASURED = "parity.unmeasured"
 
 # The parameters two members are compared on, each with the wording that
 # names it to an operator. Width and height are deliberately absent: a
@@ -154,7 +155,12 @@ class Mismatch:
 @dataclass(frozen=True)
 class ParityVerdict:
     """The same shape `compat`'s eligibility functions already return: a
-    boolean, a catalogue key and a parameter mapping. Never a sentence.
+    boolean, an identifying tag and a parameter mapping. Never a sentence.
+
+    Unlike `compat`'s, this verdict goes to the service log rather than to
+    the screen, so `reason_key` carries one of the parity log tags above
+    and not a translation catalogue key -- there is no catalogue entry
+    behind it and nothing renders it.
     """
 
     ok: bool
@@ -171,10 +177,9 @@ def _unmeasured_parameter(member) -> str | None:
 
 
 def _reason_params(mismatches: tuple[Mismatch, ...]) -> dict:
-    """The values the localized sentence substitutes: the member names,
-    and the parameters that separate them. Two plain strings rather than a
-    nested structure, because the catalogue entry that renders them is one
-    sentence with two slots in both languages.
+    """What the log line reports: the member names, and the parameters
+    that separate them. Two plain strings rather than a nested structure,
+    so one log line reads as a sentence without a formatter walking it.
     """
     return {
         "members": ", ".join(m.title_name for m in mismatches),
@@ -188,16 +193,16 @@ def parity_verdict(members) -> ParityVerdict:
     Informational under the mechanism this project builds -- an unmatched
     parameter is what the boundary marker exists to handle, so a
     difference is recorded and never refuses a build. It stays here
-    because the finding is worth telling an operator, and because a
-    physical join, if this project ever gains a re-encode, needs exactly
-    this answer before any bytes move.
+    because the finding belongs in the service log when a build joins
+    clips that differ, and because a physical join, if this project ever
+    gains a re-encode, needs exactly this answer before any bytes move.
 
     A member marked as dropped out is skipped entirely: its title is gone
     from the library and it will never be part of the result, so counting
     it as a mismatch would refuse a list over a clip nobody will ever see.
 
     A member with any parameter unrecorded is its own answer, not a
-    mismatch -- see the two catalogue keys above.
+    mismatch -- see the two parity log tags above.
     """
     considered = [m for m in members if not m.get("dropped")]
 
@@ -213,7 +218,7 @@ def parity_verdict(members) -> ParityVerdict:
         return ParityVerdict(
             ok=False,
             mismatches=mismatches,
-            reason_key=REASON_KEY_PARITY_UNMEASURED,
+            reason_key=PARITY_LOG_UNMEASURED,
             reason_params=_reason_params(mismatches),
         )
 
@@ -254,7 +259,7 @@ def parity_verdict(members) -> ParityVerdict:
     return ParityVerdict(
         ok=False,
         mismatches=frozen,
-        reason_key=REASON_KEY_PARITY_MISMATCH,
+        reason_key=PARITY_LOG_MISMATCH,
         reason_params=_reason_params(frozen),
     )
 

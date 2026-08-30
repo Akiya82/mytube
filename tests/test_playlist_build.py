@@ -108,23 +108,33 @@ def test_concat_refusal_treats_unmeasured_parameters_as_their_own_mismatch():
 
 
 def test_concat_refusal_says_unmeasured_rather_than_mismatched():
+    """The two findings stay distinguishable in the log, and neither is
+    spelled as a translation catalogue key. A clip that was simply added
+    before anything measured it has not been found to differ from
+    anything, so reporting it as a mismatch would report something untrue;
+    and since this verdict is logged rather than shown, a key in the
+    namespace the interface renders from would promise a sentence nothing
+    can display.
+    """
     from orchestrator.media.playlist_build import (
-        REASON_KEY_PARITY_MISMATCH,
-        REASON_KEY_PARITY_UNMEASURED,
+        PARITY_LOG_MISMATCH,
+        PARITY_LOG_UNMEASURED,
         parity_verdict,
     )
 
-    assert REASON_KEY_PARITY_MISMATCH != REASON_KEY_PARITY_UNMEASURED, (
-        "telling an operator two clips are not joinable, about a video "
-        "that was simply added before anything measured it, is telling "
-        "them something untrue -- the honest sentence names the "
-        "measurement, not the clips"
-    )
+    assert PARITY_LOG_MISMATCH != PARITY_LOG_UNMEASURED
+    for tag in (PARITY_LOG_MISMATCH, PARITY_LOG_UNMEASURED):
+        assert not tag.startswith("playlist."), (
+            f"{tag!r} sits in the namespace the library row renders from, "
+            "but nothing writes this verdict to a row -- a translated "
+            "sentence no code can reach reads as a warning the operator "
+            "was given"
+        )
 
     members = [_member("Clip A"), _member("Clip B", fps=None)]
     verdict = parity_verdict(members)
 
-    assert verdict.reason_key == REASON_KEY_PARITY_UNMEASURED
+    assert verdict.reason_key == PARITY_LOG_UNMEASURED
 
 
 def test_parity_verdict_admits_identical_members():
