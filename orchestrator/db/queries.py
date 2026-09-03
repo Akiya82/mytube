@@ -1961,6 +1961,33 @@ async def job_for_playlist(
     )
 
 
+async def job_by_id(conn: asyncpg.Connection, job_id) -> asyncpg.Record | None:
+    """The whole job row by its own id, whatever its status -- the
+    worker-facing routes' own lookup for a job that a heartbeat or a
+    report just named but whose write was refused (a mismatched attempt,
+    or an id that never existed at all). `heartbeat_job`/`finish_job`
+    themselves only ever report whether they wrote, not the row as it
+    stands; this is how a caller finds out what a superseded report
+    belonged to -- its title, its edition, what it was asked to do -- so
+    it can act on that (e.g. deleting the orphan the superseded attempt
+    uploaded) without trusting anything the request itself claimed.
+    """
+    return await conn.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
+
+
+async def edition_object_key(conn: asyncpg.Connection, edition_id) -> str | None:
+    """The stored object key for `edition_id`, or None if it does not
+    exist. `jobs` carries no object_key column of its own -- the
+    destination a transcode result lands at is always the edition's own,
+    fixed when the edition row was created -- so this is the worker-facing
+    routes' own lookup for it, from the job row rather than from anything
+    the request itself claims (T-04-06).
+    """
+    return await conn.fetchval(
+        "SELECT object_key FROM editions WHERE id = $1", edition_id
+    )
+
+
 async def set_edition_conversion_detail(
     conn: asyncpg.Connection,
     edition_id,
