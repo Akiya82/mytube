@@ -10,8 +10,14 @@
 {% if is_active %}
   <video class="check-page__video" controls src="{{ address }}"></video>
   <p class="check-page__hairpin">{{ t("check.hairpin_note").format(address=address) }}</p>
+  {% if layout_hint_key %}
+    <p class="check-page__layout-hint">{{ t(layout_hint_key) }}</p>
+  {% endif %}
 {% else %}
   <p class="check-page__inactive">{{ t("check.inactive") }}</p>
+  {% if layout_hint_key %}
+    <p class="check-page__layout-hint">{{ t(layout_hint_key) }}</p>
+  {% endif %}
 {% endif %}
 
 <p class="check-page__address">{{ address }}</p>

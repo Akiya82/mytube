@@ -157,3 +157,92 @@ async def test_hairpin_note_names_the_same_address_and_is_always_present(client,
     # for every active title's check page, not conditioned on anything a
     # server-rendered response could ever know about playback success.
     assert "router" in resp.text.lower()
+
+
+# --- The stereo-mode sentence (04-UI-SPEC.md Screen 4 addendum) ----------
+
+
+async def test_layout_hint_sbs_names_the_side_by_side_mode(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.resolved_by_slug["sbs-clip"] = _resolved(title_id=title_id, status="active")
+    queries_stub.row_by_title_id[title_id] = _row(
+        title_id=title_id, title_name="SBS Clip", stereo_layout="sbs_half"
+    )
+
+    async with client:
+        resp = await client.get("/check/sbs-clip")
+
+    assert "Side by Side 3D" in resp.text
+
+
+async def test_layout_hint_ou_names_the_over_under_mode(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.resolved_by_slug["ou-clip"] = _resolved(title_id=title_id, status="active")
+    queries_stub.row_by_title_id[title_id] = _row(
+        title_id=title_id, title_name="OU Clip", stereo_layout="ou_full"
+    )
+
+    async with client:
+        resp = await client.get("/check/ou-clip")
+
+    assert "Over/Under 3D" in resp.text
+
+
+async def test_layout_hint_says_nothing_for_a_flat_edition(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.resolved_by_slug["flat-clip"] = _resolved(title_id=title_id, status="active")
+    queries_stub.row_by_title_id[title_id] = _row(
+        title_id=title_id, title_name="Flat Clip", stereo_layout="2d"
+    )
+
+    async with client:
+        resp = await client.get("/check/flat-clip")
+
+    assert "check-page__layout-hint" not in resp.text
+    assert "3D" not in resp.text
+
+
+async def test_layout_hint_sits_below_the_video_not_above_it(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.resolved_by_slug["order-clip"] = _resolved(title_id=title_id, status="active")
+    queries_stub.row_by_title_id[title_id] = _row(
+        title_id=title_id, title_name="Order Clip", stereo_layout="sbs_full"
+    )
+
+    async with client:
+        resp = await client.get("/check/order-clip")
+
+    assert resp.text.index('class="check-page__video"') < resp.text.index(
+        "check-page__layout-hint"
+    )
+
+
+async def test_layout_hint_sits_below_the_inactive_note_when_not_active(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.resolved_by_slug["inactive-3d-clip"] = _resolved(
+        title_id=title_id, status="pending_delete"
+    )
+    queries_stub.row_by_title_id[title_id] = _row(
+        title_id=title_id, title_name="Inactive 3D Clip", stereo_layout="ou_half"
+    )
+
+    async with client:
+        resp = await client.get("/check/inactive-3d-clip")
+
+    assert "<video" not in resp.text
+    assert resp.text.index("check-page__inactive") < resp.text.index("check-page__layout-hint")
+
+
+async def test_copy_control_still_copies_only_the_address_on_a_3d_title(client, queries_stub):
+    """The copy control's own copied value is unchanged by this plan --
+    it copies the address and nothing else, never an instruction."""
+    title_id = uuid.uuid4()
+    queries_stub.resolved_by_slug["copy-3d-clip"] = _resolved(title_id=title_id, status="active")
+    queries_stub.row_by_title_id[title_id] = _row(
+        title_id=title_id, title_name="Copy 3D Clip", stereo_layout="sbs_full"
+    )
+
+    async with client:
+        resp = await client.get("/check/copy-3d-clip")
+
+    assert 'data-copy-text="https://mytube.example/v/copy-3d-clip"' in resp.text
