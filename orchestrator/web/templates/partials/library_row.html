@@ -2,20 +2,32 @@
 {#
   One Library row. Two kinds share this partial (D-108): a video row, in
   all four of its own states (D-60, 02-UI-SPEC.md Screen 3 and States),
-  and a playlist row, in its own four states (03-UI-SPEC.md Screen 3
+  and a playlist row, in its own states (03-UI-SPEC.md Screen 3
   addendum and States). library_route tags every row with `row.kind`
   before this partial ever sees it -- the branch below dispatches on that
   first, and everything under the video branch is unchanged from before
   playlists existed.
 
-  This exact fragment is also what GET /library/{id}/row returns for the
-  4-second poll (D-49) -- library.html includes it via {% include %}
-  inside its loop, the poll route renders it standalone, and both produce
+  This exact fragment is also what GET /library/{id}/row and GET
+  /playlists/{id}/row return for the 4-second poll (D-49, 04-UI-SPEC.md
+  Amendment 2) -- library.html includes it via {% include %} inside its
+  loop, the two fragment routes render it standalone, and both produce
   byte-identical markup for the same row so a row can never look
-  different depending on how it was fetched. That poller is a video-row
-  mechanism only (it binds on data-row-status="preparing" and reads
-  data-title-id to fetch a title's row fragment) -- a playlist row
-  carries neither attribute, and says why in its own comment below.
+  different depending on how it was fetched.
+
+  The poller in static/app.js binds on data-row-status="preparing" and
+  reads data-row-url off the very row it is polling to know what to
+  fetch next -- both row kinds carry that attribute now (04-UI-SPEC.md
+  Amendment 2), holding each row's own fragment address, because a video
+  row's address is built from a title id and a playlist row's from a
+  playlist id: two shapes, and the row itself is the only thing that
+  knows which one it is. The poller's own binding value and its stopping
+  condition (any status other than "preparing" stops the poll) are
+  unchanged from before this plan -- every in-flight stage below keeps
+  data-row-status at that exact literal string and carries the finer
+  stage in a second attribute, data-job-stage, which is what the chip
+  dispatch below actually reads. Teaching the poller a word per stage
+  would be more code for identical behaviour.
 #}
 {% if row.kind == "playlist" %}
 {# The pending-delete state reuses the video row's markup verbatim, and
@@ -24,10 +36,8 @@
    the same template attribute, and the same confirmation forms. Because
    they match, the countdown tick and the
    confirmation handler in static/app.js already cover this row and no
-   browser code was added for playlists. A playlist status is never the
-   video-side "preparing" value, so data-row-status here can never bind
-   the four-second poller (see the comment further down). #}
-<li class="library-row{% if row.refused %} library-row--failed{% endif %}" data-row-status="{{ row.status }}"{% if row.status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
+   browser code was added for playlists. #}
+<li class="library-row{% if row.refused %} library-row--failed{% endif %}" data-row-status="{{ 'preparing' if row.job_stage and row.status != 'pending_delete' else row.status }}"{% if row.job_stage and row.status != "pending_delete" %} data-job-stage="{{ row.job_stage }}"{% endif %} data-row-url="/playlists/{{ row.playlist_id }}/row"{% if row.status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
   <div class="library-row__thumb library-row__thumb--placeholder">
     {{ queue_placeholder(cls="library-row__thumb-icon") }}
     <span class="visually-hidden">{{ t("library.thumbnail.placeholder_label") }}</span>
@@ -36,18 +46,35 @@
   <div class="library-row__body">
     <h2 class="library-row__title">{{ row.name }}</h2>
 
-    {# The four playlist states (03-UI-SPEC.md States -> Playlist row):
-       Empty wins over everything else because a build is never attempted
-       against zero members; Refused only fires once the operator has
-       actually tried; Building is "has members, not built yet"; absence
-       of a chip is the done signal, the same rule a finished video row
-       already follows. #}
+    {# Empty wins over everything else because a build is never attempted
+       against zero members. A live job (job_stage set) is checked next --
+       an assembly now polls exactly like a video's Preparing row
+       (04-UI-SPEC.md Amendment 3) -- ahead of the static Refused/Building/
+       done dispatch below, which only ever applies once nothing is
+       actually running. #}
     {% if row.status == "pending_delete" %}
       <span class="chip chip--deleting" data-countdown-template="{{ t('library.delete.countdown') }}">
         {{ t("library.delete.countdown").format(mm="--", ss="--") }}
       </span>
     {% elif row.member_count == 0 %}
       <span class="chip chip--empty">{{ t("playlist.state.empty") }}</span>
+    {% elif row.job_stage %}
+      {% if row.job_stage == "waiting_for_converter" %}
+        <span class="chip chip--waiting">
+          {% if row.worker_name %}{{ t("library.status.waiting_for_converter_named").format(worker=row.worker_name, ago=row.worker_ago_text) }}
+          {% else %}{{ t("library.status.waiting_for_converter_none") }}{% endif %}
+        </span>
+      {% elif row.job_stage == "waiting_for_gpu" %}
+        <span class="chip chip--waiting">{{ t("library.status.waiting_for_gpu") }}</span>
+      {% elif row.job_stage == "working" %}
+        <span class="chip chip--preparing">{{ t("library.status.working").format(percent=row.job_percent, remaining=row.job_remaining_text) }}</span>
+      {% elif row.job_stage == "uploading" %}
+        <span class="chip chip--preparing">{{ t("library.status.uploading").format(percent=row.job_percent) }}</span>
+      {% elif row.job_stage == "cancelling" %}
+        <span class="chip chip--cancelling">{{ t("library.status.cancelling") }}</span>
+      {% else %}
+        <span class="chip chip--preparing">{{ t("library.status.queued").format(n=row.job_queued_ahead or 0) }}</span>
+      {% endif %}
     {% elif row.refused %}
       <span class="chip chip--refused">{{ t("playlist.state.refused") }}</span>
     {% elif row.built_at is none %}
@@ -71,7 +98,7 @@
       >{{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}</button>
     </p>
 
-    {% if row.refused %}
+    {% if row.refused and not row.job_stage %}
       {# Reuses the video Failed row's reason-line class and the same
          reason_key/reason_params pattern the add form's incompatible-
          video banner already uses -- the sentence names the actual
@@ -93,20 +120,6 @@
     {% endif %}
   </div>
 
-  {# No data-title-id on this row's own <li>, unlike the video branch
-     below, and its data-row-status can never read "preparing": the
-     four-second poller binds on that exact status and then fetches a
-     title's row fragment from the identifier, so a playlist row carrying
-     both would poll an address that does not exist and remove itself
-     from the list on the first 404. A playlist has only three statuses
-     and none of them is that one, which is what makes the attribute safe
-     to carry for the countdown's sake. The building chip's own copy
-     tells the operator to reload instead -- an assembly can run for
-     minutes on a multi-gigabyte list, and a chip that sits still next to
-     a video row that updates itself would otherwise read as a stall. If
-     live updates are wanted later, the cheap path is a fragment address
-     on the row and a poller that reads it from an attribute instead of
-     building it from a title identifier. #}
   {% if row.status == "pending_delete" %}
   <div class="library-row__actions">
     <form method="post" action="/playlists/{{ row.playlist_id }}/undo" data-confirm="{{ t('library.delete.confirm_undo_playlist') }}">
@@ -116,8 +129,24 @@
       <button type="submit" class="btn btn--destructive">{{ t("library.cta.purge_now") }}</button>
     </form>
   </div>
+  {% elif row.job_stage and row.job_stage != "cancelling" %}
+  {# In-flight actions replace the normal action set for every kind
+     (D-132) -- Rename/Delete/Check (or Edit/Delete for a playlist) are
+     meaningless before the work they act on has finished. #}
+  <div class="library-row__actions">
+    <form method="post" action="/playlists/{{ row.playlist_id }}/cancel" data-confirm="{{ t('library.cancel.confirm') }}">
+      <button type="submit" class="btn btn--destructive-outline">{{ t("library.cta.cancel") }}</button>
+    </form>
+  </div>
+  {% elif row.job_stage == "cancelling" %}
+  <div class="library-row__actions"></div>
   {% else %}
   <div class="library-row__actions">
+    {% if row.refused %}
+    <form method="post" action="/playlists/{{ row.playlist_id }}/retry">
+      <button type="submit" class="btn btn--secondary">{{ t("playlist.cta.build_again") }}</button>
+    </form>
+    {% endif %}
     <a class="btn btn--ghost" href="/playlists/{{ row.playlist_id }}/edit">{{ t("library.cta.edit") }}</a>
     <form method="post" action="/playlists/{{ row.playlist_id }}/delete">
       <button type="submit" class="btn btn--destructive">{{ t("library.cta.delete") }}</button>
@@ -126,7 +155,7 @@
   {% endif %}
 </li>
 {% else %}
-<li class="library-row{% if row.title_status == 'failed' %} library-row--failed{% endif %}" data-title-id="{{ row.title_id }}" data-row-status="{{ row.title_status }}"{% if row.title_status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
+<li class="library-row{% if row.title_status == 'failed' %} library-row--failed{% endif %}" data-title-id="{{ row.title_id }}" data-row-status="{{ row.title_status }}"{% if row.job_stage %} data-job-stage="{{ row.job_stage }}"{% endif %} data-row-url="/library/{{ row.title_id }}/row"{% if row.title_status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
 {% if row.title_status == "failed" %}
   {# No thumbnail slot at all on a failed row (02-UI-SPEC.md States ->
      Failed): a failed add is heading for dismissal, not a future
@@ -136,6 +165,9 @@
     <p class="library-row__reason">{{ t("failed.reason_prefix").format(reason=t(row.failure_reason or "failed.reason.unknown")) }}</p>
   </div>
   <div class="library-row__actions">
+    <form method="post" action="/library/{{ row.title_id }}/retry">
+      <button type="submit" class="btn btn--secondary">{{ t("library.cta.retry") }}</button>
+    </form>
     <form method="post" action="/library/{{ row.title_id }}/dismiss">
       <button type="submit" class="btn btn--ghost">{{ t("library.cta.dismiss") }}</button>
     </form>
@@ -178,13 +210,22 @@
         {{ t("library.delete.countdown").format(mm="--", ss="--") }}
       </span>
     {% elif row.title_status == "preparing" %}
-      <span class="chip chip--preparing">
-        {% if row.started_at %}
-          {{ t("library.status.working").format(estimate=row.estimate_text or "") }}
-        {% else %}
-          {{ t("library.status.queued").format(n=row.preparing_ahead) }}
-        {% endif %}
-      </span>
+      {% if row.job_stage == "waiting_for_converter" %}
+        <span class="chip chip--waiting">
+          {% if row.worker_name %}{{ t("library.status.waiting_for_converter_named").format(worker=row.worker_name, ago=row.worker_ago_text) }}
+          {% else %}{{ t("library.status.waiting_for_converter_none") }}{% endif %}
+        </span>
+      {% elif row.job_stage == "waiting_for_gpu" %}
+        <span class="chip chip--waiting">{{ t("library.status.waiting_for_gpu") }}</span>
+      {% elif row.job_stage == "working" %}
+        <span class="chip chip--preparing">{{ t("library.status.working").format(percent=row.job_percent, remaining=row.job_remaining_text) }}</span>
+      {% elif row.job_stage == "uploading" %}
+        <span class="chip chip--preparing">{{ t("library.status.uploading").format(percent=row.job_percent) }}</span>
+      {% elif row.job_stage == "cancelling" %}
+        <span class="chip chip--cancelling">{{ t("library.status.cancelling") }}</span>
+      {% else %}
+        <span class="chip chip--preparing">{{ t("library.status.queued").format(n=row.job_queued_ahead or 0) }}</span>
+      {% endif %}
       {# A disabled placeholder where the copy button will be -- so the
          row does not change height once it finishes (02-UI-SPEC.md
          States -> Preparing). #}
@@ -209,6 +250,16 @@
         &middot; {{ row.width }}&times;{{ row.height }}
         &middot; {{ row.audio_language or t("add.track.language_unknown") }}{% if row.audio_title %} - {{ row.audio_title }}{% endif %}
         &middot; {% if row.audio_reencoded %}{{ t("library.detail.audio_reencoded") }}{% else %}{{ t("library.detail.audio_untouched") }}{% endif %}
+        {% if row.source_codec %}
+          &middot; {{ t("library.detail.converted_from").format(codec=row.source_codec) }}
+          {% if row.output_bytes_per_second is not none %}&middot; {{ row.output_bytes_per_second | filesizeformat_binary }}/s{% endif %}
+          {% if row.subtitle_burned_language %}
+            &middot; {{ t("library.detail.subtitles_burned").format(language=row.subtitle_burned_language, title=row.subtitle_burned_title or "") }}
+          {% endif %}
+        {% endif %}
+        {% if row.stereo_layout and row.stereo_layout != "2d" %}
+          <span class="chip chip--3d">{{ t("layout.badge.sbs") if row.stereo_layout.startswith("sbs") else t("layout.badge.ou") }}</span>
+        {% endif %}
       </p>
     {% endif %}
   </div>
@@ -228,6 +279,12 @@
       </form>
       <form method="post" action="/library/{{ row.title_id }}/purge" data-confirm="{{ t('library.delete.confirm_purge') }}">
         <button type="submit" class="btn btn--destructive">{{ t("library.cta.purge_now") }}</button>
+      </form>
+    </div>
+  {% elif row.title_status == "preparing" and row.job_stage != "cancelling" %}
+    <div class="library-row__actions">
+      <form method="post" action="/library/{{ row.title_id }}/cancel" data-confirm="{{ t('library.cancel.confirm') }}">
+        <button type="submit" class="btn btn--destructive-outline">{{ t("library.cta.cancel") }}</button>
       </form>
     </div>
   {% endif %}

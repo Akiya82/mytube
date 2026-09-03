@@ -61,13 +61,17 @@ document.addEventListener("click", (event) => {
   });
 });
 
-// Preparing-row poll (D-49, 02-UI-SPEC.md States -> Preparing): every 4
-// seconds, fetch a row's fragment route and replace only that row's
-// element -- never the page, so scroll position and focus elsewhere
-// survive. Stops once the returned row is no longer "preparing".
+// Preparing-row poll (D-49, 02-UI-SPEC.md States -> Preparing; 04-UI-
+// SPEC.md Amendment 2): every 4 seconds, fetch a row's own fragment
+// address and replace only that row's element -- never the page, so
+// scroll position and focus elsewhere survive. Stops once the returned
+// row is no longer "preparing". The address comes off the row's own
+// data-row-url attribute rather than being built from a title id here --
+// a video row and a playlist row have two different address shapes, and
+// the row itself is the only thing that knows which one it is.
 function pollLibraryRow(row) {
-  const titleId = row.getAttribute("data-title-id");
-  fetch(`/library/${titleId}/row`)
+  const url = row.getAttribute("data-row-url");
+  fetch(url)
     .then((res) => {
       // Fact: a dead session met the gate, fetch followed its 302 to
       // /login, and res.ok is true for a login page, not a row -- reload

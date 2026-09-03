@@ -332,6 +332,20 @@ async def mark_title_failed(conn: asyncpg.Connection, title_id, reason_key: str)
     )
 
 
+async def requeue_title(conn: asyncpg.Connection, title_id) -> None:
+    """Put a 'failed' title back to 'preparing' for Retry (D-130) --
+    clears `failure_reason` and `started_at`, the same fields a fresh add
+    starts with, so the row renders queued, indistinguishable from a
+    first attempt. The caller enqueues the fresh job in the same
+    transaction; this only ever flips the title's own two columns.
+    """
+    await conn.execute(
+        "UPDATE titles SET status = 'preparing', failure_reason = NULL, "
+        "started_at = NULL WHERE id = $1",
+        title_id,
+    )
+
+
 async def mark_title_started(conn: asyncpg.Connection, title_id) -> None:
     """Set started_at to clock_timestamp() the moment a worker actually
     dequeues this title -- called by the worker, never by the route. See
@@ -488,7 +502,15 @@ _LIBRARY_ROW_COLUMNS = """
     e.duration_seconds AS duration_seconds, e.width AS width, e.height AS height,
     e.audio_language AS audio_language, e.audio_title AS audio_title,
     e.audio_reencoded AS audio_reencoded, e.poster_key AS poster_key,
-    e.source_path AS source_path
+    e.source_path AS source_path,
+    e.source_codec AS source_codec, e.subtitle_burned_language AS subtitle_burned_language,
+    e.subtitle_burned_title AS subtitle_burned_title, e.stereo_layout AS stereo_layout,
+    job.job_id AS job_id, job.job_kind AS job_kind, job.job_status AS job_status,
+    job.job_db_stage AS job_db_stage, job.job_progress_pct AS job_progress_pct,
+    job.job_eta_seconds AS job_eta_seconds, job.job_cancel_requested AS job_cancel_requested,
+    job.job_queued_ahead AS job_queued_ahead,
+    wc.worker_name AS worker_name, wc.worker_last_seen_at AS worker_last_seen_at,
+    wc.worker_status AS worker_status
 """
 
 # One row per title, guaranteed by the join rather than by the caller
@@ -500,6 +522,20 @@ _LIBRARY_ROW_COLUMNS = """
 # assumption belongs in the query, stated, rather than in nothing at all.
 # Same LEFT JOIN LATERAL shape resolve_slug already uses, for the same
 # reason and with the same ordering.
+#
+# `job` and `wc` (04-11): the live job for this title, if any, and the
+# most recently seen converter, joined in here rather than read as a
+# second query per row -- a library of thirty in-flight rows would
+# otherwise cost thirty-one round trips on every four-second poll instead
+# of one. `job_queued_ahead` is a correlated subquery scoped to the same
+# kind (D-118: a playlist assembly must never appear ahead of a
+# conversion in the position an operator is told), computed once per row
+# rather than fetched with `queries.count_queued_ahead` per row for the
+# same one-query reason. `wc` carries the single most recently seen
+# converter globally -- there is only ever one operator's worker fleet,
+# and every queued transcode row reads the same "is a converter even
+# alive" fact, so one LATERAL with no correlation to `t` is cheaper than
+# resolving it once per row and passing it down by hand.
 _LIBRARY_ROW_FROM = """
     FROM titles t
     LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
@@ -512,6 +548,28 @@ _LIBRARY_ROW_FROM = """
         LIMIT 1
     ) first_ep ON true
     LEFT JOIN editions e ON e.id = first_ep.default_edition_id
+    LEFT JOIN LATERAL (
+        SELECT j.id AS job_id, j.kind AS job_kind, j.status AS job_status,
+               j.stage AS job_db_stage, j.progress_pct AS job_progress_pct,
+               j.eta_seconds AS job_eta_seconds,
+               j.cancel_requested AS job_cancel_requested,
+               (
+                   SELECT count(*) FROM jobs j2
+                   WHERE j2.status = 'queued' AND j2.kind = j.kind
+                     AND j2.created_at < j.created_at
+               ) AS job_queued_ahead
+        FROM jobs j
+        WHERE j.title_id = t.id AND j.status IN ('queued', 'running')
+        ORDER BY j.created_at DESC
+        LIMIT 1
+    ) job ON true
+    LEFT JOIN LATERAL (
+        SELECT worker_name AS worker_name, last_seen_at AS worker_last_seen_at,
+               status AS worker_status
+        FROM worker_checkins
+        ORDER BY last_seen_at DESC
+        LIMIT 1
+    ) wc ON true
 """
 
 
@@ -618,6 +676,108 @@ async def delete_failed_title(conn: asyncpg.Connection, title_id) -> None:
         # episodes.default_edition_id -> editions.id must be cleared before
         # editions can be dropped -- the same FK cycle 0001's module
         # docstring explains for CREATE TABLE, now unwound for DELETE.
+        await conn.execute(
+            """
+            UPDATE episodes SET default_edition_id = NULL
+            WHERE season_id IN (SELECT id FROM seasons WHERE title_id = $1)
+            """,
+            title_id,
+        )
+        await conn.execute(
+            """
+            DELETE FROM editions WHERE episode_id IN (
+                SELECT ep.id FROM episodes ep
+                JOIN seasons s ON s.id = ep.season_id
+                WHERE s.title_id = $1
+            )
+            """,
+            title_id,
+        )
+        await conn.execute(
+            """
+            DELETE FROM episodes WHERE season_id IN (
+                SELECT id FROM seasons WHERE title_id = $1
+            )
+            """,
+            title_id,
+        )
+        await conn.execute("DELETE FROM seasons WHERE title_id = $1", title_id)
+        await conn.execute("DELETE FROM slug_history WHERE title_id = $1", title_id)
+        await conn.execute("DELETE FROM titles WHERE id = $1", title_id)
+
+
+def _refuse_unless_never_active(title) -> None:
+    """The cancellation hard-delete's own guard (T-04-32), mirroring
+    `_refuse_unless_failed`'s shape with a wider condition: a title is
+    'never active' when its status is 'preparing' or 'failed' -- the only
+    two statuses reachable before a title's address has ever resolved.
+    Nothing in this codebase ever moves a title backward out of 'active'
+    into either of those (only forward, into 'pending_delete' or
+    'deleted'), so the current status is a sound proxy for "was this
+    address ever live" with no separate history column needed.
+
+    A cancelled add is exactly this: its title was created 'preparing'
+    and its job never finished, so it is refused by every other hard-
+    delete guard in this module (`_refuse_unless_failed` demands
+    'failed') and needs this one instead -- the same reasoning, a wider
+    door.
+    """
+    if title is None:
+        raise LookupError("title not found")
+    if title["status"] not in ("preparing", "failed"):
+        raise ValueError(
+            f"refusing to hard-delete title: status is {title['status']!r}, "
+            "not 'preparing' or 'failed' -- only a title whose address "
+            "never went live may be erased outright"
+        )
+
+
+async def never_active_title_object_keys(conn: asyncpg.Connection, title_id) -> list[str]:
+    """The object keys a cancelled title's hard delete is about to orphan
+    -- read-only, deletes nothing. Same shape and same reason as
+    `failed_title_object_keys` (T-02-08): read before anything is
+    deleted, so a caller can remove the objects first and call
+    `delete_never_active_title` only once they are gone.
+    """
+    title = await conn.fetchrow("SELECT status FROM titles WHERE id = $1", title_id)
+    _refuse_unless_never_active(title)
+
+    editions = await conn.fetch(
+        """
+        SELECT e.object_key AS object_key, e.poster_key AS poster_key
+        FROM editions e
+        JOIN episodes ep ON ep.id = e.episode_id
+        JOIN seasons s ON s.id = ep.season_id
+        WHERE s.title_id = $1
+        """,
+        title_id,
+    )
+    keys: list[str] = []
+    for row in editions:
+        if row["object_key"]:
+            keys.append(row["object_key"])
+        if row["poster_key"]:
+            keys.append(row["poster_key"])
+    return keys
+
+
+async def delete_never_active_title(conn: asyncpg.Connection, title_id) -> None:
+    """Hard-delete every row for a title whose address never went live --
+    a cancelled add (T-04-32). Identical shape to `delete_failed_title`
+    (same FK-dependency order, same slug_history removal so the address
+    is freed rather than tombstoned -- nothing ever played there, so
+    there is nothing for a tombstone to keep honest), guarded by
+    `_refuse_unless_never_active` instead of `_refuse_unless_failed`.
+
+    **Call only after every key `never_active_title_object_keys` returned
+    for this same title has already been removed from storage.**
+    """
+    async with conn.transaction():
+        title = await conn.fetchrow(
+            "SELECT status FROM titles WHERE id = $1 FOR UPDATE", title_id
+        )
+        _refuse_unless_never_active(title)
+
         await conn.execute(
             """
             UPDATE episodes SET default_edition_id = NULL
@@ -796,14 +956,44 @@ _PLAYLIST_ROW_COLUMNS = """
     p.build_failure_params::text AS build_failure_params_raw,
     count(pi.id) AS member_count,
     CASE WHEN count(pi.id) FILTER (WHERE e.duration_seconds IS NULL) = 0
-         THEN sum(e.duration_seconds) ELSE NULL END AS duration_seconds
+         THEN sum(e.duration_seconds) ELSE NULL END AS duration_seconds,
+    job.job_id AS job_id, job.job_kind AS job_kind, job.job_status AS job_status,
+    job.job_db_stage AS job_db_stage, job.job_progress_pct AS job_progress_pct,
+    job.job_eta_seconds AS job_eta_seconds, job.job_cancel_requested AS job_cancel_requested,
+    job.job_queued_ahead AS job_queued_ahead
 """
 _PLAYLIST_ROW_FROM = """
     FROM playlists p
     LEFT JOIN playlist_items pi ON pi.playlist_id = p.id
     LEFT JOIN editions e ON e.id = pi.edition_id
+    LEFT JOIN LATERAL (
+        SELECT j.id AS job_id, j.kind AS job_kind, j.status AS job_status,
+               j.stage AS job_db_stage, j.progress_pct AS job_progress_pct,
+               j.eta_seconds AS job_eta_seconds,
+               j.cancel_requested AS job_cancel_requested,
+               (
+                   SELECT count(*) FROM jobs j2
+                   WHERE j2.status = 'queued' AND j2.kind = j.kind
+                     AND j2.created_at < j.created_at
+               ) AS job_queued_ahead
+        FROM jobs j
+        WHERE j.playlist_id = p.id AND j.status IN ('queued', 'running')
+        ORDER BY j.created_at DESC
+        LIMIT 1
+    ) job ON true
 """
-_PLAYLIST_ROW_GROUP_BY = "GROUP BY p.id"
+# Every joined `job.*` column is listed alongside `p.id` rather than left
+# to functional-dependency inference: Postgres only infers that
+# automatically for columns of the table whose own primary key is in
+# GROUP BY (`p.*`, via `p.id`), not for a LATERAL-joined derived table --
+# even though `job` is provably at most one row per `p.id` (the LATERAL's
+# own LIMIT 1), the planner has no way to know that without these columns
+# named explicitly.
+_PLAYLIST_ROW_GROUP_BY = (
+    "GROUP BY p.id, job.job_id, job.job_kind, job.job_status, job.job_db_stage, "
+    "job.job_progress_pct, job.job_eta_seconds, job.job_cancel_requested, "
+    "job.job_queued_ahead"
+)
 
 
 async def playlist_rows(conn: asyncpg.Connection) -> list[dict]:
@@ -1923,6 +2113,38 @@ async def job_for_playlist(
         """
         SELECT * FROM jobs
         WHERE playlist_id = $1 AND status IN ('queued', 'running')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        playlist_id,
+    )
+
+
+async def last_job_for_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
+    """The most recent job of any status for a title -- what Retry reads
+    to requeue the same choices (D-130), unlike `job_for_title`, which
+    only ever answers a *live* job and would find nothing for the failed
+    row Retry acts on.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT * FROM jobs
+        WHERE title_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        title_id,
+    )
+
+
+async def last_job_for_playlist(conn: asyncpg.Connection, playlist_id) -> asyncpg.Record | None:
+    """The playlist equivalent of `last_job_for_title` -- Build again's own
+    read.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT * FROM jobs
+        WHERE playlist_id = $1
         ORDER BY created_at DESC
         LIMIT 1
         """,

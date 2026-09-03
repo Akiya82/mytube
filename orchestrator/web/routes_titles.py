@@ -427,46 +427,91 @@ async def rename_confirm_route(
     )
 
 
-def _working_estimate_text(settings, source_path: str | None) -> str:
-    """The Working sub-state's size-derived estimate (D-51): an edition's
-    own `size_bytes` stays null until the remux finishes, so while a row
-    is 'preparing' and started, the only size the row can show is the
-    source file's, read straight off the share the same way the add form
-    already does. Best-effort -- a share hiccup mid-remux degrades to an
-    empty estimate rather than a broken row; the chip's own text still
-    tells the operator work is under way.
+def derive_job_ui(data: dict, settings) -> None:
+    """Turn the raw job/converter columns `queries._LIBRARY_ROW_FROM` and
+    `queries._PLAYLIST_ROW_FROM` already joined in into the one value the
+    template dispatches on (`job_stage`) plus the small set of pre-
+    formatted strings it renders (04-UI-SPEC.md States -> Job progress).
+    Mutates `data` in place; pure and synchronous, since every fact it
+    needs already rode in on the one row query -- this only ever
+    recombines them, never queries again (the same "one query per screen"
+    reasoning that put the job/converter joins in the row query at all).
+
+    Shared by both row kinds (`_row_context` below and
+    `routes_playlists._playlist_row_context`) -- one status model, one
+    place that reads it (D-132).
     """
-    if not source_path or settings.add_estimate_mb_per_second <= 0:
-        return ""
-    try:
-        target = safe_join(Path(settings.share_root), source_path)
-        size_bytes = target.stat().st_size
-    except (ShareEscape, OSError):
-        return ""
-    seconds = size_bytes / (settings.add_estimate_mb_per_second * 1024 * 1024)
-    return humanize_seconds(seconds)
+    data["job_stage"] = None
+    data["job_percent"] = 0
+    data["job_remaining_text"] = ""
+    data["worker_ago_text"] = ""
+
+    if data.get("job_id") is None:
+        return
+
+    progress = data.get("job_progress_pct")
+    data["job_percent"] = int(round(progress)) if progress is not None else 0
+    eta = data.get("job_eta_seconds")
+    data["job_remaining_text"] = humanize_seconds(eta) if eta else ""
+
+    # A running job with the flag set is shown cancelling regardless of
+    # its own `stage` column -- nothing in this codebase writes
+    # stage='cancelling' today (the consumers heartbeat 'working'/
+    # 'uploading' throughout), so the flag itself is the signal.
+    if data.get("job_cancel_requested") and data.get("job_status") == "running":
+        data["job_stage"] = "cancelling"
+        return
+
+    db_stage = data.get("job_db_stage")
+    if db_stage in ("working", "uploading", "cancelling"):
+        data["job_stage"] = db_stage
+        return
+
+    # db_stage == "queued" (or an unrecognised value -- falls back the
+    # same way, never a raised error over a row the operator is looking
+    # at). Only a transcode job has a converter to wait on at all (D-113);
+    # remux and playlist both run in-process the instant this service
+    # itself claims them.
+    if data.get("job_kind") != "transcode":
+        data["job_stage"] = "queued"
+        return
+
+    worker_name = data.get("worker_name")
+    last_seen = data.get("worker_last_seen_at")
+    stale = True
+    if last_seen is not None:
+        elapsed = (datetime.now(timezone.utc) - last_seen).total_seconds()
+        stale = elapsed > settings.converter_offline_seconds
+        data["worker_ago_text"] = humanize_seconds(elapsed)
+
+    if not stale and data.get("worker_status") == "waiting_for_gpu":
+        data["job_stage"] = "waiting_for_gpu"
+    elif stale:
+        data["job_stage"] = "waiting_for_converter"
+    else:
+        data["job_stage"] = "queued"
+    data["worker_name"] = worker_name
 
 
 async def _row_context(conn, settings, row) -> dict:
-    """One `library_rows`/`library_row` record, enriched with the two
-    facts the query alone cannot answer: how many 'preparing' titles sit
-    ahead of a queued one (`count_preparing_ahead` -- a database count,
-    never the in-memory queue, which is empty again the instant the
-    process restarts) and the size-derived estimate for a started one.
-    Both stay null for every other status.
+    """One `library_rows`/`library_row` record, enriched with the one
+    fact the row query cannot answer synchronously: the job/converter
+    columns it already joined in, recombined into `job_stage` by
+    `derive_job_ui`. No further database call -- see that function's own
+    docstring.
     """
     data = dict(row)
-    data["preparing_ahead"] = None
-    data["estimate_text"] = None
-    if data["title_status"] == "preparing":
-        if data["started_at"] is None:
-            data["preparing_ahead"] = await queries.count_preparing_ahead(
-                conn, data["title_id"]
-            )
-        else:
-            data["estimate_text"] = await asyncio.to_thread(
-                _working_estimate_text, settings, data.get("source_path")
-            )
+    derive_job_ui(data, settings)
+    # The converted-detail line's own bitrate (D-146), formatted the same
+    # way every other size on this row already is (`filesizeformat_binary`,
+    # applied in the template) -- reusing that filter on bytes-per-second
+    # rather than a new bits-per-second formatter. Only meaningful once a
+    # conversion has actually recorded what it made (`source_codec` is set
+    # only by `set_edition_conversion_detail`), and only computable when
+    # both the size and the duration are known.
+    data["output_bytes_per_second"] = None
+    if data.get("source_codec") and data.get("size_bytes") and data.get("duration_seconds"):
+        data["output_bytes_per_second"] = data["size_bytes"] / data["duration_seconds"]
     return data
 
 
@@ -494,6 +539,7 @@ async def library_route(request: Request):
         playlist_rows = [dict(row) for row in raw_playlist_rows]
         for row in playlist_rows:
             row["kind"] = "playlist"
+            derive_job_ui(row, settings)
 
         rows = sorted(
             [*video_rows, *playlist_rows],
@@ -617,6 +663,110 @@ async def dismiss_route(title_id: str, request: Request):
     return RedirectResponse("/library", status_code=302)
 
 
+async def _cancel_never_active_title(conn, title_id) -> None:
+    """The immediate half of a cancellation's hard delete (T-04-32):
+    objects before rows, the same ordering `dismiss_route` already uses
+    for the same reason (T-02-08). Swallows the guard's own refusal --
+    called from more than one place (a queued cancel finishing on the
+    spot here, a running job's cancel completing later through the
+    worker/consumer/reaper paths this same function does not cover) and
+    a title that has moved on (or was already removed) between the check
+    and this call is not this route's problem to report.
+    """
+    try:
+        keys = await queries.never_active_title_object_keys(conn, title_id)
+    except (LookupError, ValueError):
+        return
+    for key in keys:
+        await asyncio.to_thread(delete_object, key)
+    try:
+        await queries.delete_never_active_title(conn, title_id)
+    except (LookupError, ValueError):
+        pass
+
+
+@router.post("/library/{title_id}/cancel")
+async def cancel_route(title_id: str, request: Request):
+    """Stop an in-flight job for this title, for every kind of work
+    (D-129, D-132).
+
+    A job still queued has no converter or consumer to tell, so
+    `queries.request_job_cancel` finishes it `cancelled` on the spot --
+    this route notices that (the returned row's own `status`) and hard-
+    deletes the title immediately, with no tombstone (T-04-32): its
+    address never went live. A running job only has its cancel flag set
+    here; the row keeps polling and shows the cancelling stage until the
+    consumer that owns it (`orchestrator.media.queue`,
+    `orchestrator.web.routes_worker.cancelled_route`) or the reaper's
+    stale sweep (`orchestrator.reaper.sweep_stale_jobs`) finishes the
+    same hard delete once the worker actually confirms or gives up --
+    all three call the identical `queries.delete_never_active_title`
+    this route calls for the immediate case, so a cancelled title
+    disappears the same way regardless of which path finishes it.
+    """
+    try:
+        parsed = uuid.UUID(title_id)
+    except ValueError:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        job = await queries.job_for_title(conn, parsed)
+        if job is None:
+            return Response(status_code=404)
+
+        result = await queries.request_job_cancel(conn, job["id"])
+        if result is not None and result["status"] == "cancelled":
+            await _cancel_never_active_title(conn, parsed)
+
+    return RedirectResponse("/library", status_code=302)
+
+
+@router.post("/library/{title_id}/retry")
+async def retry_route(title_id: str, request: Request):
+    """Requeue a failed title with the same choices and the same address
+    (D-130): reads the failed row's own last job -- whichever kind it
+    was, remux or transcode -- and enqueues a fresh one carrying exactly
+    the same payload, then puts the title back to 'preparing' so the row
+    renders queued, visually indistinguishable from a first attempt.
+
+    Only a 'failed' title has a Retry control to reach this from (the
+    same T-02-10 shape every other action route in this module already
+    follows) -- a title in any other status is refused.
+    """
+    try:
+        parsed = uuid.UUID(title_id)
+    except ValueError:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.library_row(conn, parsed)
+        if row is None or row["title_status"] != "failed":
+            return Response(status_code=404)
+
+        last_job = await queries.last_job_for_title(conn, parsed)
+        if last_job is None:
+            return Response(status_code=404)
+
+        async with conn.transaction():
+            await queries.enqueue_job(
+                conn,
+                kind=last_job["kind"],
+                title_id=parsed,
+                edition_id=last_job["edition_id"],
+                source_path=last_job["source_path"],
+                audio_stream_index=last_job["audio_stream_index"],
+                subtitle_kind=last_job["subtitle_kind"],
+                subtitle_stream_index=last_job["subtitle_stream_index"],
+                subtitle_path=last_job["subtitle_path"],
+                stereo_layout=last_job["stereo_layout"],
+            )
+            await queries.requeue_title(conn, parsed)
+
+    return RedirectResponse("/library", status_code=302)
+
+
 @router.post("/library/{title_id}/delete")
 async def delete_route(title_id: str, request: Request):
     """Start the grace window (D-13, D-62): `GET /v/{slug}` answers 410
@@ -715,10 +865,23 @@ async def check_page_route(slug: str, request: Request):
     title_name = row["title_name"] if row is not None else slug
     address = f"{settings.public_base_url}/v/{slug}"
 
+    # The stereo-mode sentence (04-UI-SPEC.md Screen 4 addendum): read
+    # straight off the stored edition, never re-derived here -- the
+    # layout was decided once, when the file was added or converted, and
+    # a page that re-derived it from the file itself could disagree with
+    # the badge the library row already shows for the same edition.
+    stereo_layout = row.get("stereo_layout") if row is not None else None
+    layout_hint_key = None
+    if stereo_layout and stereo_layout.startswith("sbs"):
+        layout_hint_key = "check.layout_hint.sbs"
+    elif stereo_layout and stereo_layout.startswith("ou"):
+        layout_hint_key = "check.layout_hint.ou"
+
     return render(
         request,
         "check.html",
         title_name=title_name,
         address=address,
         is_active=resolved["status"] == "active",
+        layout_hint_key=layout_hint_key,
     )

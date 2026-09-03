@@ -130,6 +130,14 @@ def _playlist_row(**over):
         "refused": False,
         "refused_reason_key": None,
         "refused_reason_params": None,
+        "job_id": None,
+        "job_kind": None,
+        "job_status": None,
+        "job_db_stage": None,
+        "job_progress_pct": None,
+        "job_eta_seconds": None,
+        "job_cancel_requested": False,
+        "job_queued_ahead": 0,
     }
     row.update(over)
     return row
@@ -959,3 +967,128 @@ async def test_a_pending_playlist_row_renders_the_same_countdown_a_video_row_doe
     assert f'action="/playlists/{PLAYLIST_ID}/purge"' in resp.text
     # Both destructive forms go through the dialog the video row already uses.
     assert resp.text.count("data-confirm") >= 2
+
+
+# --- Job progress, cancel and retry (04-11) -------------------------------
+# A playlist build now shares the same live-update mechanism a video's own
+# Preparing row already has (04-UI-SPEC.md Amendment 3): its own fragment
+# route, its own data-row-url, and data-row-status="preparing" for exactly
+# as long as a job is actually in flight.
+
+
+async def test_playlist_fragment_route_renders_the_same_partial_for_one_row(
+    monkeypatch, client, signed_in
+):
+    async def fake_playlist_row(conn, playlist_id):
+        return _playlist_row(member_count=2, **_job_fields())
+
+    _patch(monkeypatch, "playlist_row", fake_playlist_row)
+
+    async with client:
+        resp = await client.get(f"/playlists/{PLAYLIST_ID}/row")
+
+    assert resp.status_code == 200
+    assert resp.text.count("<li ") == 1
+    assert "<html" not in resp.text
+
+
+def _job_fields(**over):
+    fields = {
+        "job_id": uuid.uuid4(),
+        "job_kind": "playlist",
+        "job_status": "queued",
+        "job_db_stage": "queued",
+        "job_progress_pct": None,
+        "job_eta_seconds": None,
+        "job_cancel_requested": False,
+        "job_queued_ahead": 2,
+    }
+    fields.update(over)
+    return fields
+
+
+async def test_a_building_playlist_row_with_a_live_job_is_wired_to_the_row_poller(
+    monkeypatch, client, signed_in
+):
+    """The amendment to 03-UI-SPEC.md's own "no live updates" decision: an
+    assembly with an actual job in flight now polls exactly like a video's
+    Preparing row, reading its own fragment address off data-row-url
+    rather than the poller building one from a title id it does not have.
+    """
+    async def fake_playlist_rows(conn):
+        return [_playlist_row(member_count=2, **_job_fields())]
+
+    async def fake_library_rows(conn):
+        return []
+
+    async def fake_referenced_objects(conn):
+        return []
+
+    _patch(monkeypatch, "playlist_rows", fake_playlist_rows)
+    monkeypatch.setattr(queries, "library_rows", fake_library_rows, raising=False)
+    monkeypatch.setattr(queries, "referenced_objects", fake_referenced_objects, raising=False)
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-row-status="preparing"' in resp.text
+    assert f'data-row-url="/playlists/{PLAYLIST_ID}/row"' in resp.text
+    assert "2 ahead of you" in resp.text
+
+
+async def test_cancel_on_a_queued_playlist_job_finishes_it_with_no_hard_delete(
+    monkeypatch, client, signed_in
+):
+    """Unlike a title, a playlist is never hard-deleted by cancel -- it is
+    a thing the operator made, not a byproduct of the build."""
+    calls = {"cancelled_job_ids": []}
+
+    async def fake_job_for_playlist(conn, playlist_id):
+        return {"id": "job-1"}
+
+    async def fake_request_cancel(conn, job_id):
+        calls["cancelled_job_ids"].append(job_id)
+        return {"status": "cancelled"}
+
+    _patch(monkeypatch, "job_for_playlist", fake_job_for_playlist)
+    _patch(monkeypatch, "request_job_cancel", fake_request_cancel)
+
+    async with client:
+        resp = await client.post(f"/playlists/{PLAYLIST_ID}/cancel", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert calls["cancelled_job_ids"] == ["job-1"]
+
+
+async def test_cancel_against_a_playlist_with_no_live_job_is_refused(
+    monkeypatch, client, signed_in
+):
+    async def fake_job_for_playlist(conn, playlist_id):
+        return None
+
+    _patch(monkeypatch, "job_for_playlist", fake_job_for_playlist)
+
+    async with client:
+        resp = await client.post(f"/playlists/{PLAYLIST_ID}/cancel", follow_redirects=False)
+
+    assert resp.status_code == 404
+
+
+async def test_build_again_enqueues_a_fresh_playlist_job(monkeypatch, client, signed_in):
+    calls = {"enqueued": []}
+
+    async def fake_playlist_detail(conn, playlist_id):
+        return {"id": playlist_id, "status": "active"}
+
+    async def fake_enqueue_job(conn, **kwargs):
+        calls["enqueued"].append(kwargs)
+        return uuid.uuid4()
+
+    _patch(monkeypatch, "playlist_detail", fake_playlist_detail)
+    _patch(monkeypatch, "enqueue_job", fake_enqueue_job)
+
+    async with client:
+        resp = await client.post(f"/playlists/{PLAYLIST_ID}/retry", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert calls["enqueued"] == [{"kind": "playlist", "playlist_id": PLAYLIST_ID}]

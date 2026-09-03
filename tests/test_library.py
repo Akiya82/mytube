@@ -27,8 +27,23 @@ from orchestrator.web import routes_titles
 from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 
+class _DummyTxCtx:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
 class _DummyConn:
-    pass
+    """A stand-in `asyncpg.Connection`. `transaction()` exists only for
+    `retry_route`'s own `async with conn.transaction():` wrapper --
+    everything it does inside that block is a fully-stubbed
+    `queries.*` call, so nothing here ever reaches real SQL.
+    """
+
+    def transaction(self):
+        return _DummyTxCtx()
 
 
 class _DummyAcquireCtx:
@@ -174,9 +189,46 @@ def _row(**over) -> dict:
         "audio_reencoded": True,
         "poster_key": None,
         "source_path": "a-clip.mkv",
+        "source_codec": None,
+        "subtitle_burned_language": None,
+        "subtitle_burned_title": None,
+        "stereo_layout": None,
+        "job_id": None,
+        "job_kind": None,
+        "job_status": None,
+        "job_db_stage": None,
+        "job_progress_pct": None,
+        "job_eta_seconds": None,
+        "job_cancel_requested": False,
+        "job_queued_ahead": 0,
+        "worker_name": None,
+        "worker_last_seen_at": None,
+        "worker_status": None,
     }
     row.update(over)
     return row
+
+
+def _job(**over) -> dict:
+    """The job-carrying overrides a row needs to land on a given
+    `job_stage` (04-UI-SPEC.md States -> Job progress) -- merged into
+    `_row(**_job(...))`'s own kwargs. `job_id` alone is what
+    `derive_job_ui` (orchestrator.web.routes_titles) treats as "a live
+    job exists"; every other field defaults to a plain queued remux so a
+    test that only cares about one stage never has to spell out the rest.
+    """
+    job = {
+        "job_id": uuid.uuid4(),
+        "job_kind": "remux",
+        "job_status": "queued",
+        "job_db_stage": "queued",
+        "job_progress_pct": None,
+        "job_eta_seconds": None,
+        "job_cancel_requested": False,
+        "job_queued_ahead": 0,
+    }
+    job.update(over)
+    return job
 
 
 # --- Task 1: technical detail, address, copy button, header, empty ------
@@ -438,9 +490,13 @@ async def test_fragment_route_returns_only_row_markup(client, queries_stub):
 
 async def test_waiting_row_reports_count_ahead_from_database(client, queries_stub):
     title_id = uuid.uuid4()
-    row = _row(title_id=title_id, title_status="preparing", started_at=None)
+    row = _row(
+        title_id=title_id,
+        title_status="preparing",
+        started_at=None,
+        **_job(job_queued_ahead=1),
+    )
     queries_stub.rows = [row]
-    queries_stub.preparing_ahead_by_id[title_id] = 1
 
     async with client:
         resp = await client.get("/library")
@@ -452,16 +508,313 @@ async def test_working_and_waiting_rows_have_different_state_text(client, querie
     waiting_id = uuid.uuid4()
     working_id = uuid.uuid4()
     queries_stub.rows = [
-        _row(title_id=waiting_id, title_status="preparing", started_at=None),
-        _row(title_id=working_id, title_status="preparing", started_at="2026-08-22T00:00:00Z"),
+        _row(title_id=waiting_id, title_status="preparing", started_at=None, **_job()),
+        _row(
+            title_id=working_id,
+            title_status="preparing",
+            started_at="2026-08-22T00:00:00Z",
+            **_job(job_status="running", job_db_stage="working", job_progress_pct=42.0, job_eta_seconds=120),
+        ),
     ]
-    queries_stub.preparing_ahead_by_id[waiting_id] = 0
 
     async with client:
         resp = await client.get("/library")
 
     assert "Waiting" in resp.text
     assert "Working" in resp.text
+
+
+# --- Job progress: one attribute pair, six in-flight stages (04-11) -----
+# The wrapper keeps data-row-status="preparing" (the exact value the
+# poller already binds on) through every one of these; data-job-stage
+# carries the finer value the chip dispatch above actually reads.
+
+
+async def test_stage_queued_keeps_the_pollers_preparing_value(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at=None,
+            **_job(job_kind="remux", job_status="queued", job_db_stage="queued", job_queued_ahead=4),
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-row-status="preparing"' in resp.text
+    assert 'data-job-stage="queued"' in resp.text
+    assert "4 ahead of you" in resp.text
+
+
+async def test_stage_waiting_for_converter_names_the_worker_and_time_since_seen(client, queries_stub):
+    from datetime import datetime, timedelta, timezone
+
+    title_id = uuid.uuid4()
+    stale_seen = datetime.now(timezone.utc) - timedelta(minutes=10)
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at=None,
+            **_job(job_kind="transcode", job_status="queued", job_db_stage="queued"),
+            worker_name="ml-server",
+            worker_last_seen_at=stale_seen,
+            worker_status="idle",
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-row-status="preparing"' in resp.text
+    assert 'data-job-stage="waiting_for_converter"' in resp.text
+    assert "chip--waiting" in resp.text
+    assert "Waiting for a converter" in resp.text
+    assert "ml-server" in resp.text
+
+
+async def test_stage_waiting_for_converter_with_no_worker_ever_connected(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at=None,
+            **_job(job_kind="transcode", job_status="queued", job_db_stage="queued"),
+            worker_name=None,
+            worker_last_seen_at=None,
+            worker_status=None,
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-job-stage="waiting_for_converter"' in resp.text
+    assert "none connected yet" in resp.text
+
+
+async def test_stage_waiting_for_gpu_is_a_separate_sentence_from_waiting_for_a_converter(
+    client, queries_stub
+):
+    """D-113: a fresh check-in reporting waiting_for_gpu is not the
+    waiting-for-a-converter sentence -- the converter is up and healthy,
+    it is the shared card that is busy.
+    """
+    from datetime import datetime, timezone
+
+    title_id = uuid.uuid4()
+    fresh_seen = datetime.now(timezone.utc)
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at=None,
+            **_job(job_kind="transcode", job_status="queued", job_db_stage="queued"),
+            worker_name="ml-server",
+            worker_last_seen_at=fresh_seen,
+            worker_status="waiting_for_gpu",
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-job-stage="waiting_for_gpu"' in resp.text
+    assert "Waiting for GPU memory" in resp.text
+    assert "Waiting for a converter" not in resp.text
+
+
+async def test_stage_working_carries_percent_and_remaining(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at="2026-08-22T00:00:00Z",
+            **_job(
+                job_kind="transcode",
+                job_status="running",
+                job_db_stage="working",
+                job_progress_pct=55.0,
+                job_eta_seconds=120,
+            ),
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-row-status="preparing"' in resp.text
+    assert 'data-job-stage="working"' in resp.text
+    assert "55%" in resp.text
+
+
+async def test_stage_uploading_carries_percent(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at="2026-08-22T00:00:00Z",
+            **_job(
+                job_kind="remux",
+                job_status="running",
+                job_db_stage="uploading",
+                job_progress_pct=90.0,
+            ),
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-row-status="preparing"' in resp.text
+    assert 'data-job-stage="uploading"' in resp.text
+    assert "90%" in resp.text
+
+
+async def test_stage_cancelling_does_not_carry_the_countdown_class(client, queries_stub):
+    """The cancelling chip has its own class rather than reusing
+    chip--deleting: that class is selected by name by the countdown
+    ticker, and a cancelling row picked up by that selector would start
+    displaying a clock it has no deadline for.
+    """
+    title_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at="2026-08-22T00:00:00Z",
+            **_job(
+                job_kind="transcode",
+                job_status="running",
+                job_db_stage="working",
+                job_cancel_requested=True,
+            ),
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-row-status="preparing"' in resp.text
+    assert 'data-job-stage="cancelling"' in resp.text
+    assert "chip--cancelling" in resp.text
+    row_markup = resp.text.split("<li ")[1]
+    assert "chip--deleting" not in row_markup
+    # No Cancel control on an already-cancelling row -- there is nothing
+    # left to confirm.
+    assert f"/library/{title_id}/cancel" not in resp.text
+
+
+# --- Converted-edition detail and the stereo badge (04-11, D-146/D-139) --
+
+
+async def test_converted_detail_line_appears_only_for_a_conversion(client, queries_stub):
+    queries_stub.rows = [
+        _row(
+            title_name="As-is Clip",
+            source_codec=None,
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "Converted from" not in resp.text
+
+
+async def test_converted_detail_line_names_source_codec_and_bitrate(client, queries_stub):
+    queries_stub.rows = [
+        _row(
+            title_name="Converted Clip",
+            size_bytes=750_000_000,
+            duration_seconds=1000.0,
+            source_codec="hevc",
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "Converted from hevc" in resp.text
+    assert "/s" in resp.text
+
+
+async def test_converted_detail_line_names_the_burned_subtitle_only_when_one_was_burned(
+    client, queries_stub
+):
+    queries_stub.rows = [
+        _row(
+            title_name="Subtitled Clip",
+            size_bytes=750_000_000,
+            duration_seconds=1000.0,
+            source_codec="hevc",
+            subtitle_burned_language="eng",
+            subtitle_burned_title="English",
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "Subtitles burned: eng (English)" in resp.text
+
+
+async def test_stereo_badge_appears_for_a_non_flat_layout_on_an_as_is_edition_half_sbs(
+    client, queries_stub
+):
+    """The stereo badge belongs to the layout, not to the conversion --
+    an as-is edition with a half side-by-side layout carries it too
+    (D-139), since a file prepared in the dedicated stereo tool arrives
+    already compatible and is added as it is.
+    """
+    queries_stub.rows = [
+        _row(
+            title_name="As-is Stereo Clip",
+            source_codec=None,
+            stereo_layout="sbs_half",
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "chip--3d" in resp.text
+    assert "3D SBS" in resp.text
+
+
+async def test_stereo_badge_appears_for_a_non_flat_layout_on_a_converted_edition(
+    client, queries_stub
+):
+    queries_stub.rows = [
+        _row(
+            title_name="Converted Stereo Clip",
+            size_bytes=750_000_000,
+            duration_seconds=1000.0,
+            source_codec="hevc",
+            stereo_layout="ou_full",
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "chip--3d" in resp.text
+    assert "3D OU" in resp.text
+
+
+async def test_no_stereo_badge_for_a_flat_layout(client, queries_stub):
+    queries_stub.rows = [_row(title_name="Flat Clip", stereo_layout="2d")]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "chip--3d" not in resp.text
 
 
 async def test_failed_row_has_reason_prefix_no_copy_no_thumbnail(client, queries_stub):
@@ -504,6 +857,179 @@ async def test_dismiss_refuses_an_active_title(client, queries_stub, monkeypatch
 
     assert resp.status_code == 400
     assert queries_stub.dismiss_calls == []
+
+
+# --- Cancel and retry: every kind of work, one lifecycle (04-11) --------
+
+
+async def test_cancel_on_a_queued_job_deletes_objects_before_the_row(client, monkeypatch):
+    title_id = uuid.uuid4()
+    calls = []
+
+    async def fake_job_for_title(conn, tid):
+        return {"id": "job-1"}
+
+    async def fake_request_cancel(conn, job_id):
+        return {"status": "cancelled"}
+
+    async def fake_never_active_keys(conn, tid):
+        calls.append("keys")
+        return ["a.mp4", "a.jpg"]
+
+    async def fake_delete_never_active(conn, tid):
+        calls.append("delete_rows")
+
+    def spy_delete_object(key):
+        calls.append(f"object:{key}")
+
+    monkeypatch.setattr(queries, "job_for_title", fake_job_for_title, raising=False)
+    monkeypatch.setattr(queries, "request_job_cancel", fake_request_cancel, raising=False)
+    monkeypatch.setattr(
+        queries, "never_active_title_object_keys", fake_never_active_keys, raising=False
+    )
+    monkeypatch.setattr(
+        queries, "delete_never_active_title", fake_delete_never_active, raising=False
+    )
+    monkeypatch.setattr(routes_titles, "delete_object", spy_delete_object)
+
+    async with client:
+        resp = await client.post(f"/library/{title_id}/cancel", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert calls == ["keys", "object:a.mp4", "object:a.jpg", "delete_rows"]
+
+
+async def test_cancel_on_a_running_job_only_sets_the_flag_no_hard_delete(client, monkeypatch):
+    title_id = uuid.uuid4()
+    delete_calls = []
+
+    async def fake_job_for_title(conn, tid):
+        return {"id": "job-1"}
+
+    async def fake_request_cancel(conn, job_id):
+        return {"status": "running", "cancel_requested": True}
+
+    async def fake_delete_never_active(conn, tid):
+        delete_calls.append(tid)
+
+    monkeypatch.setattr(queries, "job_for_title", fake_job_for_title, raising=False)
+    monkeypatch.setattr(queries, "request_job_cancel", fake_request_cancel, raising=False)
+    monkeypatch.setattr(
+        queries, "delete_never_active_title", fake_delete_never_active, raising=False
+    )
+
+    async with client:
+        resp = await client.post(f"/library/{title_id}/cancel", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert delete_calls == []
+
+
+async def test_cancel_against_a_title_with_no_live_job_is_refused(client, monkeypatch):
+    async def fake_job_for_title(conn, tid):
+        return None
+
+    monkeypatch.setattr(queries, "job_for_title", fake_job_for_title, raising=False)
+
+    async with client:
+        resp = await client.post(f"/library/{uuid.uuid4()}/cancel", follow_redirects=False)
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.integration
+async def test_cancel_never_active_delete_refuses_a_title_that_has_ever_been_active(raw_conn):
+    """T-04-32's own guard, proven against real Postgres: a title that
+    ever went active can never be hard-deleted through this door, no
+    matter how it is reached -- only a title whose address never went
+    live (still 'preparing', or 'failed') may be erased outright.
+    """
+    title_id, _, _ = await _create_title(raw_conn, "Once Active", "once-active-slug")
+
+    with pytest.raises(ValueError):
+        await queries.delete_never_active_title(raw_conn, title_id)
+
+    row = await queries.resolve_slug(raw_conn, "once-active-slug")
+    assert row is not None and row["status"] == "active"
+
+
+async def test_retry_queues_a_fresh_job_with_the_same_payload_as_the_failed_one(
+    client, queries_stub, monkeypatch
+):
+    title_id = uuid.uuid4()
+    edition_id = uuid.uuid4()
+    queries_stub.row_by_id[title_id] = _row(
+        title_id=title_id, title_status="failed", edition_id=edition_id
+    )
+    failed_job = {
+        "kind": "transcode",
+        "edition_id": edition_id,
+        "source_path": "clip.mkv",
+        "audio_stream_index": 1,
+        "subtitle_kind": "embedded",
+        "subtitle_stream_index": 2,
+        "subtitle_path": None,
+        "stereo_layout": "sbs_full",
+    }
+    enqueued = []
+    requeued = []
+
+    async def fake_last_job(conn, tid):
+        return failed_job
+
+    async def fake_enqueue(conn, **kwargs):
+        enqueued.append(kwargs)
+        return uuid.uuid4()
+
+    async def fake_requeue_title(conn, tid):
+        requeued.append(tid)
+
+    monkeypatch.setattr(queries, "last_job_for_title", fake_last_job, raising=False)
+    monkeypatch.setattr(queries, "enqueue_job", fake_enqueue, raising=False)
+    monkeypatch.setattr(queries, "requeue_title", fake_requeue_title, raising=False)
+
+    async with client:
+        resp = await client.post(f"/library/{title_id}/retry", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert enqueued == [
+        {
+            "kind": "transcode",
+            "title_id": title_id,
+            "edition_id": edition_id,
+            "source_path": "clip.mkv",
+            "audio_stream_index": 1,
+            "subtitle_kind": "embedded",
+            "subtitle_stream_index": 2,
+            "subtitle_path": None,
+            "stereo_layout": "sbs_full",
+        }
+    ]
+    assert requeued == [title_id]
+
+
+async def test_retry_refuses_a_title_that_is_not_failed(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.row_by_id[title_id] = _row(title_id=title_id, title_status="active")
+
+    async with client:
+        resp = await client.post(f"/library/{title_id}/retry", follow_redirects=False)
+
+    assert resp.status_code == 404
+
+
+async def test_failed_row_has_retry_before_dismiss(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="failed", failure_reason="failed.reason.upload")
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    retry_index = resp.text.index(f"/library/{title_id}/retry")
+    dismiss_index = resp.text.index(f"/library/{title_id}/dismiss")
+    assert retry_index < dismiss_index
 
 
 # --- No client library, no vendored/CDN code -----------------------------

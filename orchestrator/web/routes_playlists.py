@@ -36,6 +36,7 @@ from orchestrator.reaper import reap_playlists_once
 from orchestrator.resolve import external_base_url
 from orchestrator.signing import blob_path, sign_object_key
 from orchestrator.slugs import SlugError, normalize_slug, pick_unique_slug
+from orchestrator.web.routes_titles import derive_job_ui
 from orchestrator.web.templates import render
 
 logger = logging.getLogger(__name__)
@@ -468,6 +469,81 @@ async def resolve_playlist_route(slug: str, request: Request):
         return Response(status_code=PLAYLIST_NOT_READY_STATUS)
 
     return _manifest_response(request, row, artifacts)
+
+
+@router.get("/playlists/{playlist_id}/row")
+async def playlist_row_fragment_route(playlist_id: str, request: Request):
+    """The exact row partial `library.html` includes, rendered standalone
+    for one playlist row -- the playlist-row half of the 4-second poll
+    (04-UI-SPEC.md Amendment 2), mirroring
+    `routes_titles.library_row_fragment_route` exactly: same partial, so
+    the polled markup and the in-page markup stay byte-identical for the
+    same row. An assembly is a durable job with a percentage now, and a
+    percentage nobody sees update is not live progress.
+    """
+    parsed = _parse_uuid(playlist_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    settings = get_settings()
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.playlist_row(conn, parsed)
+        if row is None:
+            return Response(status_code=404)
+
+    data = dict(row)
+    data["kind"] = "playlist"
+    derive_job_ui(data, settings)
+    return render(request, "partials/library_row.html", row=data)
+
+
+@router.post("/playlists/{playlist_id}/cancel")
+async def cancel_playlist_route(playlist_id: str, request: Request):
+    """Stop an in-flight build (D-129, D-132). Unlike a title's own
+    cancel, nothing here is hard-deleted: a playlist is a thing the
+    operator made, not a byproduct of the build, and a cancelled build
+    simply leaves it exactly where it was before the build started --
+    the previous generation (if any) keeps playing, `built_at` and
+    `build_failure_reason` both untouched, since `finish_job(outcome=
+    'cancelled')` is the only write this needs (see
+    `orchestrator.media.playlist_queue`'s own cancellation handling,
+    which already discards whatever the build had uploaded so far).
+    """
+    parsed = _parse_uuid(playlist_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        job = await queries.job_for_playlist(conn, parsed)
+        if job is None:
+            return Response(status_code=404)
+        await queries.request_job_cancel(conn, job["id"])
+
+    return RedirectResponse("/library", status_code=302)
+
+
+@router.post("/playlists/{playlist_id}/retry")
+async def retry_playlist_route(playlist_id: str, request: Request):
+    """Build again (D-130) -- a playlist build carries no operator
+    choices of its own beyond the membership already saved on the
+    playlist (unlike a title's remux/transcode job, which carries the
+    add form's own picks), so this is exactly `_enqueue_build` again,
+    the same call Save already makes.
+    """
+    parsed = _parse_uuid(playlist_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        playlist = await queries.playlist_detail(conn, parsed)
+        if playlist is None or playlist.get("status", "active") != "active":
+            return Response(status_code=404)
+
+    await _enqueue_build(request, parsed)
+    return RedirectResponse("/library", status_code=302)
 
 
 @router.post("/playlists/{playlist_id}/delete")

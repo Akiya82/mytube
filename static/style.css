@@ -479,6 +479,16 @@ button.site-nav__link {
   color: var(--text-on-destructive);
 }
 
+/* Cancel (04-UI-SPEC.md Component Inventory): destructive, ghost-outline
+   -- an in-flight job's own irreversible-but-not-yet-final action, one
+   register lighter than Delete/Purge's filled destructive button, no new
+   colour value. */
+.btn--destructive-outline {
+  background: transparent;
+  color: var(--destructive);
+  border-color: var(--destructive);
+}
+
 .btn:disabled,
 .btn[aria-disabled="true"] {
   opacity: 0.5;
@@ -589,6 +599,25 @@ button.site-nav__link {
   color: var(--status-failed-text);
 }
 
+/* Job progress states (04-UI-SPEC.md Color) -- every one of these three
+   reuses a tint already computed for the same meaning, no new custom
+   property and no new hex value. */
+.chip--waiting {
+  background: var(--status-info-bg);
+  color: var(--status-info-text);
+}
+
+.chip--cancelling {
+  background: var(--status-failed-bg);
+  color: var(--status-failed-text);
+}
+
+.chip--3d {
+  background: var(--status-neutral-bg);
+  color: var(--status-neutral-text);
+  margin-left: var(--space-xs);
+}
+
 /* Playlist row states (03-UI-SPEC.md Color) -- three tints reused from
    existing meanings, no new custom property and no new hex value. */
 .chip--empty {
@@ -621,6 +650,15 @@ button.site-nav__link {
 .check-page__inactive {
   font-size: var(--text-label-size);
   color: var(--text-muted);
+  max-width: 640px;
+}
+
+/* Body size, not label size (04-UI-SPEC.md Typography): the one sentence
+   on this page an operator has to act on before handing the link to a
+   world, not a standing caption like the hairpin note above it. */
+.check-page__layout-hint {
+  font-size: var(--text-body-size);
+  color: var(--text-primary);
   max-width: 640px;
 }
 
