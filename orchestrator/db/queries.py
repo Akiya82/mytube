@@ -89,10 +89,12 @@ async def create_title_with_edition(
     `status` defaults to 'active' (the CLI's existing behaviour, unchanged).
     The web add flow (D-49) passes `status="preparing"` instead, so the row
     exists and the slug is reserved before any ffmpeg/upload work starts.
-    `source_path` (D-48), `audio_stream_index` and `audio_channels` (the two
-    facts a background job needs to rebuild itself from the catalog alone,
-    see `job_row`) land straight on the edition row; all three are optional
-    because the CLI path still has none of them.
+    `source_path` (D-48), `audio_stream_index` and `audio_channels` land
+    straight on the edition row; all three are optional because the CLI
+    path still has none of them. `source_path` and `audio_stream_index`
+    also ride on the `remux` job row itself once one is enqueued
+    (`enqueue_job`); `audio_channels` stays edition-side only, read back
+    by `edition_for_remux` when the addition consumer claims that job.
 
     The slug_history insert is delegated to `reuse_slug`: mechanically it is
     the exact same statement whether `slug` is brand new or is a tombstoned
@@ -301,6 +303,16 @@ async def mark_title_failed(conn: asyncpg.Connection, title_id, reason_key: str)
     migrations/versions/0002_add_as_is.py for why: the interface is
     localized (D-66), and a sentence baked in at write time cannot be
     translated at render time.
+
+    The interrupted-add reason the old startup sweep used to write here
+    (D-118) has no caller left: that sweep is gone, and the durable job
+    queue's own restart story needs no equivalent -- a restart just
+    leaves the row's heartbeat to go stale, and the reaper's sweep
+    requeues it instead. Its catalog key stays in both locale files
+    (`orchestrator/locales/en.json`/`ru.json`) purely so a title that
+    still carries it from before this change keeps rendering a real
+    sentence instead of a raw key; nothing in this codebase writes it any
+    more.
     """
     await conn.execute(
         "UPDATE titles SET status = 'failed', failure_reason = $2 WHERE id = $1",
@@ -317,75 +329,6 @@ async def mark_title_started(conn: asyncpg.Connection, title_id) -> None:
     """
     await conn.execute(
         "UPDATE titles SET started_at = clock_timestamp() WHERE id = $1", title_id
-    )
-
-
-async def preparing_rows_at_startup(
-    conn: asyncpg.Connection,
-) -> tuple[list[asyncpg.Record], list[asyncpg.Record]]:
-    """Every title still 'preparing' at process startup, split into
-    (queued, started) on whether started_at is null.
-
-    Replaces the single-verdict reconcile_interrupted_adds sketched in
-    01-RESEARCH.md: a row that had started is genuinely interrupted
-    mid-remux/upload (D-53) and should be marked failed; a row that had
-    not started yet never began any work at all, and telling the operator
-    it was "interrupted" would be a lie about a row that was only ever
-    sitting in the queue -- it should simply be re-enqueued (using
-    `job_row` to rebuild the job, since the in-process queue holds nothing
-    across a restart).
-    """
-    rows = await conn.fetch(
-        "SELECT id AS title_id, started_at FROM titles WHERE status = 'preparing'"
-    )
-    queued = [row for row in rows if row["started_at"] is None]
-    started = [row for row in rows if row["started_at"] is not None]
-    return queued, started
-
-
-async def job_row(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
-    """The columns needed to rebuild an add job from the catalog alone --
-    edition id, object key, source path, the operator's chosen audio
-    stream index and channel count. Used by the startup re-enqueue
-    (preparing_rows_at_startup's queued list) and by the add route, so
-    both build a job from the same one place instead of two shapes that
-    can drift apart.
-
-    `poster_key` rides along too: it is not part of `AddJob`'s own shape
-    (a job never needs to know its own not-yet-extracted poster key), but
-    the startup sweep's cleanup of a genuinely interrupted row (D-53)
-    needs both the video and the poster key from the exact same query --
-    a second query for the poster alone would be one more place the two
-    facts could read a different edition_id than each other.
-
-    Reads the first episode's *default* edition, ordered and limited,
-    rather than whichever edition row the join happened to return first.
-    Same rule the library queries and `resolve_slug` follow, so a title
-    that grows a second episode keeps answering instead of quietly picking
-    a different edition here than the interface is showing.
-    """
-    return await conn.fetchrow(
-        """
-        SELECT
-            e.id AS edition_id,
-            e.object_key AS object_key,
-            e.source_path AS source_path,
-            e.audio_stream_index AS audio_stream_index,
-            e.audio_channels AS audio_channels,
-            e.poster_key AS poster_key
-        FROM titles t
-        JOIN LATERAL (
-            SELECT ep.default_edition_id
-            FROM episodes ep
-            JOIN seasons s ON s.id = ep.season_id
-            WHERE s.title_id = t.id
-            ORDER BY s.number, ep.number
-            LIMIT 1
-        ) first_ep ON true
-        JOIN editions e ON e.id = first_ep.default_edition_id
-        WHERE t.id = $1
-        """,
-        title_id,
     )
 
 
@@ -1985,6 +1928,21 @@ async def edition_object_key(conn: asyncpg.Connection, edition_id) -> str | None
     """
     return await conn.fetchval(
         "SELECT object_key FROM editions WHERE id = $1", edition_id
+    )
+
+
+async def edition_for_remux(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
+    """The destination object key and the operator's chosen channel count
+    for a claimed `remux` job -- the two edition-side facts `claim_job`'s
+    own row cannot carry, since `jobs` has no `object_key` column (see
+    `edition_object_key` above) and the channel count is recorded once on
+    the edition at creation time rather than duplicated onto every job row
+    of every kind. One query so the addition consumer builds its job from
+    a single round trip, the same discipline `job_row` used to give the
+    old in-memory queue before the durable table replaced it.
+    """
+    return await conn.fetchrow(
+        "SELECT object_key, audio_channels FROM editions WHERE id = $1", edition_id
     )
 
 

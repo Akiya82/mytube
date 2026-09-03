@@ -7,6 +7,7 @@ wrong subsystem.
 """
 from mytube_media.compat import ProbeError
 from mytube_media.remux import RemuxError
+from mytube_media.runner import FfmpegFailed
 from mytube_media.share import ShareEscape
 from orchestrator.media import queue as queue_module
 
@@ -30,6 +31,16 @@ def test_ffmpeg_failing_is_reported_as_a_remux_failure_not_an_upload_one():
     storage did not finish" describes a file that never reached storage.
     """
     assert _reason_key_for(RemuxError("ffmpeg exited 1")) == "failed.reason.remux"
+
+
+def test_the_shared_progress_runners_own_ffmpeg_failure_reports_the_same_remux_reason():
+    """The main remux invocation runs through
+    `mytube_media.runner.run_ffmpeg_with_progress` now, which raises its
+    own `FfmpegFailed` for the identical condition `RemuxError` used to
+    signal (a non-zero exit or a timeout) -- the operator is told the same
+    thing either way.
+    """
+    assert _reason_key_for(FfmpegFailed("ffmpeg exited 1")) == "failed.reason.remux"
 
 
 def test_only_a_failure_at_an_upload_call_site_reports_an_upload_failure():

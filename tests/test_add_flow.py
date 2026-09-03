@@ -27,7 +27,7 @@ from mytube_media.compat import probe as ffprobe_probe
 from orchestrator.config import get_settings
 from orchestrator.main import app
 from orchestrator.media import queue as queue_module
-from orchestrator.media.queue import AddJob, AddQueue
+from orchestrator.media.queue import AddJob
 
 from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
@@ -109,11 +109,18 @@ def env(migrated_db_url, clips, tmp_path, monkeypatch):
 
 @pytest.fixture
 def storage_spy(monkeypatch):
-    """Every storage call the worker and the startup sweep make, recorded
-    instead of reaching a real bucket -- patched at the name each caller
-    actually imported, not at `orchestrator.storage` itself (a `from x
-    import y` binds its own reference; patching the origin module leaves
-    the caller's copy untouched).
+    """Every storage call the addition consumer makes, recorded instead
+    of reaching a real bucket -- patched at the name the caller actually
+    imported, not at `orchestrator.storage` itself (a `from x import y`
+    binds its own reference; patching the origin module leaves the
+    caller's copy untouched).
+
+    Only `orchestrator.media.queue` needs this any more: the startup
+    sweep this fixture used to patch a second copy for
+    (`orchestrator.main`) is gone (D-118) -- restart recovery no longer
+    makes its own storage calls at all, it just lets a stale heartbeat
+    put the row back in the queue for this same consumer to pick up
+    again.
     """
     calls = {"put": [], "abort": [], "delete": []}
 
@@ -129,20 +136,16 @@ def storage_spy(monkeypatch):
     monkeypatch.setattr(queue_module, "put_object_from_file", fake_put)
     monkeypatch.setattr(queue_module, "abort_dangling_multipart", fake_abort)
     monkeypatch.setattr(queue_module, "delete_object", fake_delete)
-
-    import orchestrator.main as main_module
-
-    monkeypatch.setattr(main_module, "abort_dangling_multipart", fake_abort)
-    monkeypatch.setattr(main_module, "delete_object", fake_delete)
     return calls
 
 
 @pytest.fixture
 async def client(env, storage_spy, signed_in):
-    """Runs the real lifespan (real Postgres pool, real add worker task,
-    real startup sweep) against an in-memory ASGI transport -- the only
-    way to exercise D-49's "the row is written, the response returns, and
-    a background task does the rest" shape for real.
+    """Runs the real lifespan (real Postgres pool, the real addition and
+    assembly consumers, the real reaper) against an in-memory ASGI
+    transport -- the only way to exercise D-49's "the row is written, the
+    response returns, and a background task does the rest" shape for
+    real.
 
     Because the lifespan runs for real here, it also queries the real
     (shared, session-scoped) `operator_credential` table for real -- and
@@ -427,47 +430,11 @@ async def test_duplicate_source_path_add_proceeds_without_a_confirmation_field(
     assert r2.status_code == 302
 
 
-# --- concurrency ----------------------------------------------------------
-
-
-async def test_concurrency_of_one_second_job_waits_for_the_first(monkeypatch):
-    order: list[tuple[str, int]] = []
-
-    async def fake_process_add(pool, job):
-        order.append(("start", job.title_id))
-        await asyncio.sleep(0.2)
-        order.append(("end", job.title_id))
-
-    monkeypatch.setattr(queue_module, "process_add", fake_process_add)
-
-    add_queue = AddQueue()
-    worker = asyncio.create_task(add_queue.run(pool=None))
-    try:
-        job1 = AddJob(
-            title_id=1, edition_id=uuid.uuid4(), object_key="a.mp4",
-            source_rel_path="a.mp4", audio_stream_index=0, channels=2,
-        )
-        job2 = AddJob(
-            title_id=2, edition_id=uuid.uuid4(), object_key="b.mp4",
-            source_rel_path="b.mp4", audio_stream_index=0, channels=2,
-        )
-        await add_queue.enqueue(job1)
-        await add_queue.enqueue(job2)
-
-        await asyncio.sleep(0.05)
-        assert order == [("start", 1)], "the second job must still be waiting"
-
-        await asyncio.sleep(0.3)
-        assert ("end", 1) in order
-        assert ("start", 2) in order
-        assert order.index(("end", 1)) < order.index(("start", 2))
-
-        await asyncio.sleep(0.3)
-        assert ("end", 2) in order
-    finally:
-        worker.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await worker
+# --- concurrency ------------------------------------------------------
+#
+# See `test_two_queued_jobs_run_one_after_the_other_not_at_once`, below
+# the durable-queue helpers, for what replaced the old in-memory-queue
+# version of this test.
 
 
 # --- event loop stays answerable -------------------------------------
@@ -490,8 +457,12 @@ async def test_healthz_stays_responsive_while_upload_is_slow(
     )
     assert resp.status_code == 302
 
-    # Give the worker a moment to reach the (now slow) upload call.
-    await asyncio.sleep(0.3)
+    # Give the consumer a moment to poll, claim the row and reach the
+    # (now slow) upload call -- comfortably more than
+    # queue.CONSUMER_POLL_INTERVAL_SECONDS' own worst case (a job
+    # inserted the instant after a poll finds nothing empty-handed waits
+    # a full interval for the next one).
+    await asyncio.sleep(1.0)
 
     t0 = time.monotonic()
     health = await client.get("/healthz")
@@ -678,7 +649,9 @@ async def test_healthz_stays_responsive_during_the_failure_cleanup_pair(
     )
     assert resp.status_code == 302
 
-    await asyncio.sleep(0.3)
+    # Same margin as test_healthz_stays_responsive_while_upload_is_slow --
+    # comfortably more than one full poll interval.
+    await asyncio.sleep(1.0)
 
     t0 = time.monotonic()
     health = await client.get("/healthz")
@@ -688,109 +661,58 @@ async def test_healthz_stays_responsive_during_the_failure_cleanup_pair(
     assert elapsed < 0.5
 
 
-# --- startup reconciliation --------------------------------------------
+# --- restart recovery, now the reaper's job (D-118) --------------------
+#
+# There is no startup sweep to test in this file any more:
+# `orchestrator.main._sweep_preparing_titles` is gone, along with the
+# in-memory `AddQueue` it re-enqueued onto. Restart recovery for a job
+# whose heartbeat goes stale is `orchestrator.reaper.sweep_stale_jobs`'s
+# job now, exercised end to end (real two-connection claim races
+# included) by tests/test_jobs_queue.py and tests/test_reaper_playlists.py
+# -- unrelated to anything this module still owns.
 
 
-async def _seed_preparing_title(conn, *, name: str, slug: str, started: bool) -> tuple:
-    edition_id = uuid.uuid4()
-    object_key = f"{edition_id}.mp4"
+class _SingleAcquireCtx:
+    def __init__(self, conn):
+        self._conn = conn
 
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _SinglePoolLike:
+    """The `.acquire()` shape `process_add`/`run_add_consumer` ask an
+    `asyncpg.Pool` for, wrapping one already-open `raw_conn` -- used by
+    every test below that drives `process_add` or `run_add_consumer`
+    directly rather than through the full `client` fixture's real
+    lifespan-managed pool.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        return _SingleAcquireCtx(self._conn)
+
+
+async def _claim_one(conn, *, kind: str = "remux") -> AddJob:
+    """Claim the oldest queued `remux` job for the fixed test worker
+    identity and build the `AddJob` `process_add` expects -- the same two
+    calls `run_add_consumer` itself makes, spelled out here so a test can
+    drive `process_add` on a specific row without racing a live consumer
+    loop for it.
+    """
     from orchestrator.db import queries as queries_module
 
-    title_id = await queries_module.create_title_with_edition(
-        conn,
-        name,
-        slug,
-        edition_id,
-        object_key,
-        status="preparing",
-        source_path="already-correct.mp4",
-        audio_stream_index=1,
-        audio_channels=2,
+    job_row = await queries_module.claim_job(
+        conn, kind=kind, worker_name=queue_module.ADD_CONSUMER_WORKER_NAME
     )
-    if started:
-        await queries_module.mark_title_started(conn, title_id)
-    return title_id, edition_id, object_key
-
-
-async def test_startup_sweep_marks_a_started_row_interrupted_and_cleans_up(
-    raw_conn, storage_spy, env
-):
-    from orchestrator.db import queries as queries_module
-    from orchestrator.main import _sweep_preparing_titles
-
-    title_id, edition_id, object_key = await _seed_preparing_title(
-        raw_conn, name="Interrupted Row", slug="interrupted-row", started=True
-    )
-
-    class _SingleAcquireCtx:
-        def __init__(self, conn):
-            self._conn = conn
-
-        async def __aenter__(self):
-            return self._conn
-
-        async def __aexit__(self, *exc_info):
-            return False
-
-    class _SinglePoolLike:
-        def __init__(self, conn):
-            self._conn = conn
-
-        def acquire(self):
-            return _SingleAcquireCtx(self._conn)
-
-    add_queue = AddQueue()
-    await _sweep_preparing_titles(_SinglePoolLike(raw_conn), add_queue)
-
-    row = await queries_module.resolve_slug(raw_conn, "interrupted-row")
-    assert row["status"] == "failed"
-
-    title = await raw_conn.fetchrow(
-        "SELECT failure_reason FROM titles WHERE id = $1", title_id
-    )
-    assert title["failure_reason"] == "failed.reason.interrupted"
-    assert object_key in storage_spy["abort"]
-    assert object_key in storage_spy["delete"]
-    assert add_queue._queue.empty()
-
-
-async def test_startup_sweep_re_enqueues_a_never_started_row_without_touching_status(
-    raw_conn, env
-):
-    from orchestrator.main import _sweep_preparing_titles
-
-    title_id, edition_id, object_key = await _seed_preparing_title(
-        raw_conn, name="Queued Row", slug="queued-row", started=False
-    )
-
-    class _SingleAcquireCtx:
-        def __init__(self, conn):
-            self._conn = conn
-
-        async def __aenter__(self):
-            return self._conn
-
-        async def __aexit__(self, *exc_info):
-            return False
-
-    class _SinglePoolLike:
-        def __init__(self, conn):
-            self._conn = conn
-
-        def acquire(self):
-            return _SingleAcquireCtx(self._conn)
-
-    add_queue = AddQueue()
-    await _sweep_preparing_titles(_SinglePoolLike(raw_conn), add_queue)
-
-    row = await raw_conn.fetchrow("SELECT status FROM titles WHERE id = $1", title_id)
-    assert row["status"] == "preparing"
-
-    assert not add_queue._queue.empty()
-    job = add_queue._queue.get_nowait()
-    assert job.title_id == title_id
-    assert job.object_key == object_key
+    assert job_row is not None, "nothing was queued to claim"
+    edition_row = await queries_module.edition_for_remux(conn, job_row["edition_id"])
+    return AddJob.from_row(job_row, edition_row)
 
 
 async def test_a_source_path_that_escapes_the_share_fails_the_row_instead_of_stranding_it(
@@ -816,33 +738,96 @@ async def test_a_source_path_that_escapes_the_share_fails_the_row_instead_of_str
         audio_stream_index=1,
         audio_channels=2,
     )
-
-    class _SingleAcquireCtx:
-        def __init__(self, conn):
-            self._conn = conn
-
-        async def __aenter__(self):
-            return self._conn
-
-        async def __aexit__(self, *exc_info):
-            return False
-
-    class _SinglePoolLike:
-        def __init__(self, conn):
-            self._conn = conn
-
-        def acquire(self):
-            return _SingleAcquireCtx(self._conn)
+    await queries_module.enqueue_job(
+        raw_conn,
+        kind="remux",
+        title_id=title_id,
+        edition_id=edition_id,
+        source_path="../outside-the-share.mp4",
+        audio_stream_index=1,
+    )
 
     pool = _SinglePoolLike(raw_conn)
-    job_row = await queries_module.job_row(raw_conn, title_id)
-    await queue_module.process_add(pool, AddJob.from_row(title_id, job_row))
+    job = await _claim_one(raw_conn)
+    await queue_module.process_add(pool, job)
 
     title = await raw_conn.fetchrow(
         "SELECT status, failure_reason FROM titles WHERE id = $1", title_id
     )
     assert title["status"] == "failed"
     assert title["failure_reason"] == "reason.unreadable"
+
+    job_after = await raw_conn.fetchrow(
+        "SELECT status FROM jobs WHERE id = $1", job.job_id
+    )
+    assert job_after["status"] == "failed"
+
+
+async def test_two_queued_jobs_run_one_after_the_other_not_at_once(
+    raw_conn, env, monkeypatch
+):
+    """Concurrency of one is now a property of `run_add_consumer`'s own
+    claiming loop rather than of an `asyncio.Queue` with one reader --
+    this is the durable-queue equivalent of the old
+    `test_concurrency_of_one_second_job_waits_for_the_first`.
+    """
+    from orchestrator.db import queries as queries_module
+
+    order: list[tuple[str, object]] = []
+
+    async def fake_process_add(pool, job):
+        order.append(("start", job.title_id))
+        await asyncio.sleep(0.2)
+        order.append(("end", job.title_id))
+
+    monkeypatch.setattr(queue_module, "process_add", fake_process_add)
+
+    async def _seed(name: str, slug: str):
+        edition_id = uuid.uuid4()
+        title_id = await queries_module.create_title_with_edition(
+            raw_conn,
+            name,
+            slug,
+            edition_id,
+            f"{edition_id}.mp4",
+            status="preparing",
+            source_path="already-correct.mp4",
+            audio_stream_index=1,
+            audio_channels=2,
+        )
+        await queries_module.enqueue_job(
+            raw_conn,
+            kind="remux",
+            title_id=title_id,
+            edition_id=edition_id,
+            source_path="already-correct.mp4",
+            audio_stream_index=1,
+        )
+        return title_id
+
+    title1 = await _seed("Concurrency First", "concurrency-first")
+    await asyncio.sleep(0.01)  # a distinct created_at, so claim order is pinned
+    title2 = await _seed("Concurrency Second", "concurrency-second")
+
+    pool = _SinglePoolLike(raw_conn)
+    worker = asyncio.create_task(
+        queue_module.run_add_consumer(pool, poll_interval=0.02)
+    )
+    try:
+        await asyncio.sleep(0.05)
+        assert order == [("start", title1)], "the second job must still be waiting"
+
+        await asyncio.sleep(0.3)
+        assert ("end", title1) in order
+        assert ("start", title2) in order
+        assert order.index(("end", title1)) < order.index(("start", title2))
+
+        await asyncio.sleep(0.3)
+        assert ("end", title2) in order
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
 
 
 async def test_the_recorded_size_is_the_uploaded_object_not_the_source(
@@ -896,3 +881,102 @@ async def test_the_recorded_size_is_the_uploaded_object_not_the_source(
     # And the bug is real on this clip rather than hidden by a coincidence:
     # the remuxed artifact is genuinely a different size from the source.
     assert uploaded_size != clip["path"].stat().st_size
+
+
+# --- a restart mid-addition, without a live dev stack to restart -------
+
+
+async def test_a_restart_mid_remux_leaves_the_row_in_flight_rather_than_failed(
+    raw_conn, env
+):
+    """The property this plan exists to change (D-118), proven against the
+    real durable table rather than a real process restart -- this project
+    no longer runs a local dev stand to kill and bring back (`.claude
+    /CLAUDE.md`: the workstation stand is retired, the service only runs
+    in the owner's k3s cluster). What a restart actually does to a
+    process is stop it from writing anything further; that is reproduced
+    directly here by claiming a job, marking its title started (the point
+    a real consumer would have reached before a mid-remux crash), and then
+    never calling `process_add` again -- exactly what a killed process
+    leaves behind.
+    """
+    from orchestrator.db import queries as queries_module
+    from orchestrator import reaper as reaper_module
+
+    edition_id = uuid.uuid4()
+    title_id = await queries_module.create_title_with_edition(
+        raw_conn,
+        "Restart Mid Remux",
+        "restart-mid-remux",
+        edition_id,
+        f"{edition_id}.mp4",
+        status="preparing",
+        source_path="already-correct.mp4",
+        audio_stream_index=1,
+        audio_channels=2,
+    )
+    await queries_module.enqueue_job(
+        raw_conn,
+        kind="remux",
+        title_id=title_id,
+        edition_id=edition_id,
+        source_path="already-correct.mp4",
+        audio_stream_index=1,
+    )
+
+    job = await _claim_one(raw_conn)
+    await queries_module.mark_title_started(raw_conn, title_id)
+
+    # The process dies here -- no heartbeat, no finish, nothing else is
+    # ever written for this attempt. Simulated by backdating the row's
+    # own heartbeat past the reaper's stale threshold rather than by
+    # waiting JOB_STALE_SECONDS (180s) in real time.
+    await raw_conn.execute(
+        "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1",
+        job.job_id,
+    )
+
+    # The property under test: nothing about a stuck heartbeat marks the
+    # title failed. It is still exactly where the operator last saw it,
+    # "Working...".
+    title_before_sweep = await raw_conn.fetchrow(
+        "SELECT status, failure_reason FROM titles WHERE id = $1", title_id
+    )
+    assert title_before_sweep["status"] == "preparing"
+    assert title_before_sweep["failure_reason"] is None
+
+    class _AcquireCtx:
+        async def __aenter__(self):
+            return raw_conn
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    class _PoolLike:
+        def acquire(self):
+            return _AcquireCtx()
+
+    await reaper_module.sweep_stale_jobs(_PoolLike())
+
+    job_after_sweep = await raw_conn.fetchrow(
+        "SELECT status, stage, worker_name, heartbeat_at, attempts FROM jobs WHERE id = $1",
+        job.job_id,
+    )
+    assert job_after_sweep["status"] == "queued"
+    assert job_after_sweep["stage"] == "queued"
+    assert job_after_sweep["worker_name"] is None
+    assert job_after_sweep["heartbeat_at"] is None
+    assert job_after_sweep["attempts"] == 1, "the attempt cap's own memory survives a requeue"
+
+    # Still not failed -- the sweep never touches titles at all, only jobs.
+    title_after_sweep = await raw_conn.fetchrow(
+        "SELECT status, failure_reason FROM titles WHERE id = $1", title_id
+    )
+    assert title_after_sweep["status"] == "preparing"
+    assert title_after_sweep["failure_reason"] is None
+
+    # And the row really is back in flight, not merely requeued on paper:
+    # a fresh claim picks it up as a second attempt.
+    second_job = await _claim_one(raw_conn)
+    assert second_job.job_id == job.job_id
+    assert second_job.attempt == 2

@@ -133,25 +133,6 @@ async def test_count_preparing_ahead_returns_right_number_with_three_rows_in_fli
     assert ahead_third == ahead_first + 2
 
 
-async def test_preparing_rows_at_startup_splits_queued_and_started(raw_conn):
-    queued_id = await _create_title(
-        raw_conn, "Never Started", "never-started-slug", status="preparing"
-    )
-    started_id = await _create_title(
-        raw_conn, "Already Started", "already-started-slug", status="preparing"
-    )
-    await queries.mark_title_started(raw_conn, started_id)
-
-    queued, started = await queries.preparing_rows_at_startup(raw_conn)
-
-    queued_ids = {row["title_id"] for row in queued}
-    started_ids = {row["title_id"] for row in started}
-    assert queued_id in queued_ids
-    assert started_id not in queued_ids
-    assert started_id in started_ids
-    assert queued_id not in started_ids
-
-
 async def test_failed_title_object_keys_returns_both_keys_without_deleting_anything(raw_conn):
     edition_id = uuid.uuid4()
     title_id = await queries.create_title_with_edition(
@@ -352,23 +333,6 @@ async def test_set_edition_technical_and_poster(raw_conn):
     assert row["audio_language"] == "jpn"
     assert row["audio_reencoded"] is False
     assert row["poster_key"] == f"{edition_id}-poster.jpg"
-
-
-async def test_job_row_returns_rebuildable_job_facts(raw_conn):
-    edition_id = uuid.uuid4()
-    title_id = await queries.create_title_with_edition(
-        raw_conn, "Job Row Title", "job-row-title-slug", edition_id,
-        f"{edition_id}.mp4", source_path="Movies/job-row.mkv",
-        audio_stream_index=2, audio_channels=2,
-    )
-
-    row = await queries.job_row(raw_conn, title_id)
-
-    assert row["edition_id"] == edition_id
-    assert row["object_key"] == f"{edition_id}.mp4"
-    assert row["source_path"] == "Movies/job-row.mkv"
-    assert row["audio_stream_index"] == 2
-    assert row["audio_channels"] == 2
 
 
 async def test_library_rows_and_library_row_include_new_title(raw_conn):
@@ -697,24 +661,3 @@ async def test_a_finished_playlist_deletion_leaves_nothing_referenced(raw_conn):
     assert artifact_key not in keys, (
         "a completed deletion must not be reported forever as a broken address"
     )
-
-
-async def test_job_row_takes_the_first_episodes_default_edition(raw_conn):
-    first_edition = uuid.uuid4()
-    title_id = await queries.create_title_with_edition(
-        raw_conn,
-        "Two Episode Job",
-        "two-episode-job",
-        first_edition,
-        f"{first_edition}.mp4",
-        status="preparing",
-        source_path="Movies/first.mkv",
-        audio_stream_index=1,
-        audio_channels=2,
-    )
-    second_edition = await _add_second_episode(raw_conn, title_id)
-
-    row = await queries.job_row(raw_conn, title_id)
-
-    assert row["edition_id"] == first_edition
-    assert row["edition_id"] != second_edition

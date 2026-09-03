@@ -3,10 +3,11 @@ D-67, D-72).
 
 `POST /add/{path:path}` is the confirm action Screen 2's form submits to
 (`orchestrator/web/templates/add_form.html`, built in plan 03): it writes
-the 'preparing' row in one transaction and returns immediately (D-49) --
-the actual remux/upload work happens in the background, on
-`request.app.state.add_queue` (`orchestrator.media.queue.AddQueue`,
-started in `orchestrator.main`'s lifespan).
+the 'preparing' row and a queued `remux` job row in one transaction and
+returns immediately (D-49) -- the actual remux/upload work happens in the
+background, claimed off the durable `jobs` table by
+`orchestrator.media.queue.run_add_consumer`, started in
+`orchestrator.main`'s lifespan.
 
 There is deliberately no `confirm_duplicate` form field: the design
 contract settles that a duplicate source path is disclosed by the share
@@ -54,7 +55,6 @@ from mytube_media.share import ShareEscape, safe_join
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media.add import SlugPlan, plan_slug
-from orchestrator.media.queue import AddJob
 from orchestrator.reaper import reap_once
 from orchestrator.slugs import SlugError
 from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
@@ -150,10 +150,22 @@ async def add_confirm_route(
                 audio_channels=selected.channels,
             )
 
-        job_row = await queries.job_row(conn, title_id)
-
-    job = AddJob.from_row(title_id, job_row)
-    await request.app.state.add_queue.enqueue(job)
+            # The row is written and the response returns before the
+            # actual remux/upload work happens (D-49) -- the durable
+            # `jobs` table row is what the addition consumer
+            # (`orchestrator.media.queue.run_add_consumer`) claims, not an
+            # in-memory handle. Inserted inside the same transaction as
+            # the title/edition themselves, so a crash between the two
+            # can never leave a 'preparing' title with nothing queued to
+            # work it.
+            await queries.enqueue_job(
+                conn,
+                kind="remux",
+                title_id=title_id,
+                edition_id=edition_id,
+                source_path=rel_path,
+                audio_stream_index=audio_index,
+            )
 
     return RedirectResponse("/library", status_code=302)
 
