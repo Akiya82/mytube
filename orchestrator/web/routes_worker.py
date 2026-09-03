@@ -56,11 +56,6 @@ ALLOWED_FAILURE_REASONS: frozenset[str] = frozenset(
     }
 )
 
-# Not a reason a converter may report (it carries no reason_key at all) --
-# what a cancelled transcode's own title is marked failed with, so the
-# library row leaves 'preparing' and the operator gets a Retry button
-# (D-130) instead of a title stuck mid-flight forever.
-_CANCELLED_TITLE_REASON = "failed.reason.cancelled"
 
 
 async def require_worker_token(
@@ -364,6 +359,16 @@ async def failed_route(job_id: uuid.UUID, request: Request, body: FailedBody):
 async def cancelled_route(job_id: uuid.UUID, request: Request, body: CancelledBody):
     """Confirms a cancellation the worker learned of from an earlier
     heartbeat's own answer.
+
+    A cancelled transcode's title never went live (T-04-32), so the row
+    is hard-deleted here with no tombstone, the exact same
+    `queries.delete_never_active_title` call
+    `orchestrator.media.queue`'s own cancellation cleanup and
+    `routes_titles.cancel_route`'s immediate (queued-job) case both use --
+    one function, three call sites, one outcome regardless of which of
+    them actually finishes the job. This is what makes the row disappear
+    on the poller's own existing 404-means-remove branch instead of
+    leaving a 'failed' row behind with nothing to dismiss.
     """
     mismatch = _protocol_mismatch(body.protocol)
     if mismatch is not None:
@@ -378,9 +383,10 @@ async def cancelled_route(job_id: uuid.UUID, request: Request, body: CancelledBo
                 conn, job_id, worker_name=body.worker, attempt=body.attempt, outcome="cancelled"
             )
             if wrote and job_row is not None and job_row["title_id"] is not None:
-                await queries.mark_title_failed(
-                    conn, job_row["title_id"], _CANCELLED_TITLE_REASON
-                )
+                try:
+                    await queries.delete_never_active_title(conn, job_row["title_id"])
+                except (LookupError, ValueError):
+                    pass
     except Exception:
         logger.exception("cancelled: could not finish job %s", job_id)
         wrote = False

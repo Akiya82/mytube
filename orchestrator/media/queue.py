@@ -466,7 +466,18 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         logger.info("add %s cancelled", job.title_id)
         await _cleanup_orphans(job.object_key, poster_key)
         async with pool.acquire() as conn:
-            await queries.mark_title_failed(conn, job.title_id, "failed.reason.cancelled")
+            # A cancelled title's address never went live (T-04-32) -- it
+            # is hard-deleted here rather than marked 'failed', with no
+            # tombstone, the same guard and the same ordering (objects
+            # already cleaned up above, rows dropped only now)
+            # routes_titles.cancel_route uses for a queued cancellation.
+            # Best-effort: a title that has somehow moved on since (or
+            # was already removed by a concurrent purge) is not this
+            # cleanup's problem to report.
+            try:
+                await queries.delete_never_active_title(conn, job.title_id)
+            except (LookupError, ValueError):
+                pass
             await queries.finish_job(
                 conn,
                 job.job_id,

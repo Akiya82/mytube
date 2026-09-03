@@ -178,6 +178,27 @@ async def sweep_stale_jobs(pool: asyncpg.Pool) -> None:
                         attempt=row["attempts"],
                         outcome="cancelled",
                     )
+                    # A title's address never went live when the worker
+                    # that would have finished it died first (T-04-32) --
+                    # hard-deleted with no tombstone, the same call the
+                    # converter's own /cancelled report and the in-process
+                    # remux consumer's cancellation cleanup both use.
+                    # Playlist jobs carry no title_id at all and need no
+                    # equivalent: a cancelled build simply leaves the
+                    # playlist where it was.
+                    if row["title_id"] is not None:
+                        try:
+                            keys = await queries.never_active_title_object_keys(
+                                conn, row["title_id"]
+                            )
+                        except (LookupError, ValueError):
+                            keys = []
+                        for object_key in keys:
+                            await asyncio.to_thread(delete_object, object_key)
+                        try:
+                            await queries.delete_never_active_title(conn, row["title_id"])
+                        except (LookupError, ValueError):
+                            pass
                 elif row["attempts"] >= queries.JOB_MAX_ATTEMPTS:
                     await queries.fail_job_exhausted(
                         conn, job_id, reason_key="failed.reason.crashed_converter"
