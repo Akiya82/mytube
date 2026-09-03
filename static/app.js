@@ -203,3 +203,75 @@ async function reorderPlaylistMember(playlistId, itemId, direction, steps) {
   const current = document.querySelector(".playlist-order");
   if (fresh && current) current.replaceWith(fresh);
 }
+
+// The on-demand preview (04-UI-SPEC.md States -> Preview): two delegated
+// click handlers, same disable-and-swap-the-label mechanism the copy-link
+// button already uses above, extended with a second mechanism this screen
+// needs -- replacing only the .preview-panel element with the fragment
+// the render route answers, never the whole Conversion block or the page.
+//
+// Neither handler reads the subtitle/layout choice from the panel itself
+// -- the panel is swapped out on every render, so anything it carried
+// would not survive a second click. Both read straight off the
+// surrounding form's own radio groups and text field at click time,
+// exactly the values a normal submit of that same form would send.
+function _previewFormValues(form) {
+  const subtitleChoice = form.querySelector('[name="subtitle_choice"]:checked');
+  const layout = form.querySelector('[name="stereo_layout"]:checked');
+  const path = form.querySelector("[data-preview-panel]");
+  const body = new URLSearchParams();
+  body.set("subtitle_choice", subtitleChoice ? subtitleChoice.value : "none");
+  body.set(
+    "subtitle_manual_path",
+    (form.querySelector('[name="subtitle_manual_path"]') || {}).value || ""
+  );
+  body.set("stereo_layout", layout ? layout.value : "2d");
+  return { body, path: path ? path.getAttribute("data-preview-path") : "" };
+}
+
+async function _requestPreview(button, form, after) {
+  const panel = form.querySelector("[data-preview-panel]");
+  if (!panel) return;
+  const { body, path } = _previewFormValues(form);
+  body.set("after", after);
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = button.getAttribute("data-preview-loading-label") || originalLabel;
+
+  const res = await fetch(`/preview/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  }).finally(() => {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  });
+  if (!res.ok) return;
+  const template = document.createElement("template");
+  template.innerHTML = (await res.text()).trim();
+  const fresh = template.content.firstElementChild;
+  if (fresh) panel.replaceWith(fresh);
+}
+
+// One delegated listener for both controls -- "Preview subtitles" always
+// starts at 0; "Try another frame" reads the currently shown frame's own
+// timestamp off its sibling <img>, one panel up from wherever inside it
+// the click landed.
+document.addEventListener("click", (event) => {
+  const renderButton = event.target.closest("[data-preview-render]");
+  const anotherButton = event.target.closest("[data-preview-another]");
+  const button = renderButton || anotherButton;
+  if (!button) return;
+  const form = button.closest("form");
+  if (!form) return;
+
+  let after = "0";
+  if (anotherButton) {
+    const panel = button.closest("[data-preview-panel]");
+    const frame = panel && panel.querySelector("[data-frame-seconds]");
+    after = frame ? frame.getAttribute("data-frame-seconds") : "0";
+  }
+
+  _requestPreview(button, form, after);
+});

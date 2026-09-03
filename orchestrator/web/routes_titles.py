@@ -45,7 +45,7 @@ import asyncio
 import shutil
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Form, Request
@@ -54,11 +54,16 @@ from fastapi.responses import RedirectResponse, Response
 from mytube_media.compat import ProbeError, audio_tracks, probe
 from mytube_media.share import ShareEscape, relative_to_root, safe_join
 from mytube_media.stereo3d import LAYOUTS as STEREO_LAYOUTS
-from mytube_media.subtitles import embedded_tracks
 from mytube_media.transcode import bitrate_for_output, output_dimensions, required_free_bytes_for_transcode
 from orchestrator.config import get_settings
 from orchestrator.db import queries
-from orchestrator.media.add import SlugPlan, plan_slug
+from orchestrator.media.add import (
+    SlugPlan,
+    SubtitleChoiceRefused,
+    embedded_subtitle_kind,
+    parse_subtitle_choice,
+    plan_slug,
+)
 from orchestrator.reaper import reap_once
 from orchestrator.slugs import SlugError
 from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
@@ -70,28 +75,6 @@ router = APIRouter()
 # The sort fallback library_route uses for a merged row missing
 # created_at -- see that route's own docstring.
 _EPOCH_FALLBACK = datetime.min.replace(tzinfo=timezone.utc)
-
-# The vocabulary a submitted subtitle_choice value may carry (D-140/D-145):
-# no burn-in at all, an embedded stream picked by its absolute ffprobe
-# index (text and bitmap both -- the different rendering path is not the
-# operator's choice to encode), or a sidecar file named by its
-# share-relative path (whether it was one this form found on its own or
-# one the operator typed by hand -- both resolve to the same shape by the
-# time they reach this route, see _parse_subtitle_choice below).
-_SUBTITLE_KIND_NONE = "none"
-_SUBTITLE_KIND_EMBEDDED_PREFIX = "embedded:"
-_SUBTITLE_KIND_EXTERNAL_PREFIX = "external:"
-_SUBTITLE_KIND_MANUAL = "manual"
-
-
-class _ConvertRefused(Exception):
-    """Raised internally to short-circuit the convert branch's own
-    validation -- never a catalog key shown to the operator (this route
-    redraws no template of its own, see the module's own discussion of
-    that simplification), just a signal to answer the same refusal shape
-    every other validation failure in this route already answers with.
-    """
-
 
 async def convert_estimate_seconds(conn, duration_seconds, settings) -> float | None:
     """D-148's pre-start time estimate: source duration divided by the
@@ -113,61 +96,6 @@ async def convert_estimate_seconds(conn, duration_seconds, settings) -> float | 
     if not factor:
         return None
     return duration_seconds / factor
-
-
-def _parse_subtitle_choice(
-    value: str, *, manual_path: str, root: Path, rel_path: str
-) -> tuple[str, int | None, str | None]:
-    """`(subtitle_kind, subtitle_stream_index, subtitle_path)` from the
-    form's single `subtitle_choice` radio value, or raises `_ConvertRefused`
-    for anything malformed. `subtitle_path` is always a share-relative
-    string here, never an absolute one and never trusted un-contained --
-    the caller still has to resolve it through `safe_join` before it
-    touches the filesystem (T-04-01); this function only shapes the value,
-    it does not validate it against the share.
-    """
-    if value == _SUBTITLE_KIND_NONE or not value:
-        return "none", None, None
-
-    if value.startswith(_SUBTITLE_KIND_EMBEDDED_PREFIX):
-        raw_index = value[len(_SUBTITLE_KIND_EMBEDDED_PREFIX):]
-        try:
-            return "embedded", int(raw_index), None
-        except ValueError:
-            raise _ConvertRefused() from None
-
-    if value.startswith(_SUBTITLE_KIND_EXTERNAL_PREFIX):
-        rel = value[len(_SUBTITLE_KIND_EXTERNAL_PREFIX):]
-        if not rel:
-            raise _ConvertRefused()
-        return "external", None, rel
-
-    if value == _SUBTITLE_KIND_MANUAL:
-        if not manual_path:
-            raise _ConvertRefused()
-        # Relative to the source's own folder (the copywriting contract's
-        # own placeholder text says so) -- joined onto the source's
-        # share-relative directory, not onto the share root directly, so
-        # "../Subs/movie.srt" reaches a sibling folder the way an operator
-        # typing it beside the source file expects.
-        combined = (PurePosixPath(rel_path).parent / manual_path).as_posix()
-        return "external", None, combined
-
-    raise _ConvertRefused()
-
-
-def _embedded_subtitle_kind(probe_json: dict, stream_index: int) -> str | None:
-    """`"embedded_text"`/`"embedded_bitmap"` for a stream index the probe
-    actually reported among its subtitle streams, `None` otherwise -- the
-    check that keeps a stream index the operator never saw offered from
-    ever reaching the filter chain (T-04-01 in spirit: never trust an
-    index from the form over what the file, re-probed just now, actually
-    has).
-    """
-    for track in embedded_tracks(probe_json):
-        if track.stream_index == stream_index:
-            return track.kind
-    return None
 
 
 @router.post("/add/{path:path}")
@@ -236,13 +164,12 @@ async def add_confirm_route(
 
     if is_convert:
         try:
-            raw_kind, raw_stream_index, raw_path = _parse_subtitle_choice(
+            raw_kind, raw_stream_index, raw_path = parse_subtitle_choice(
                 subtitle_choice,
                 manual_path=subtitle_manual_path.strip(),
-                root=root,
                 rel_path=rel_path,
             )
-        except _ConvertRefused:
+        except SubtitleChoiceRefused:
             return _unreachable_response(request, status_code=400)
 
         # D-140: a stereo source refuses a burn-in outright -- a job that
@@ -253,7 +180,7 @@ async def add_confirm_route(
             return _unreachable_response(request, status_code=400)
 
         if raw_kind == "embedded":
-            embedded_kind = _embedded_subtitle_kind(probe_json, raw_stream_index)
+            embedded_kind = embedded_subtitle_kind(probe_json, raw_stream_index)
             if embedded_kind is None:
                 return _unreachable_response(request, status_code=400)
             clean_subtitle_kind = embedded_kind

@@ -518,15 +518,17 @@ def test_app_js_has_a_poll_timer_and_stays_short():
     # thing to ration, and counting it pushes the next person toward
     # deleting the explanation rather than the complexity. Raised from 80
     # once hand-written drag-and-drop reordering (D-107) landed alongside
-    # the poller, the countdown and the copy handler; still well under a
-    # vendored drag library's own line count, so the guard still catches
-    # what it was built to catch.
+    # the poller, the countdown and the copy handler; raised again from
+    # 140 once the on-demand preview's two delegated handlers (04-UI-
+    # SPEC.md States -> Preview) landed alongside them -- still well under
+    # a vendored drag-and-drop or lightbox library's own line count, so
+    # the guard still catches what it was built to catch.
     code = [
         line
         for line in text.splitlines()
         if line.strip() and not line.strip().startswith("//")
     ]
-    assert len(code) < 140
+    assert len(code) < 180
 
 
 def test_no_htmx_or_cdn_references():

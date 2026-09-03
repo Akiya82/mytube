@@ -178,7 +178,7 @@
       {% endif %}
 
       <div class="preview-panel" data-preview-panel data-preview-path="{{ rel_path }}"></div>
-      <button type="button" class="btn btn--secondary" data-preview-render>{{ t("preview.cta.render") }}</button>
+      <button type="button" class="btn btn--secondary" data-preview-render data-preview-loading-label="{{ t('preview.loading') }}">{{ t("preview.cta.render") }}</button>
 
       {% if convert_estimate_seconds %}
         <p class="cost-line">{{ t("convert.estimate").format(time=convert_estimate_seconds | humanize_seconds) }}</p>

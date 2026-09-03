@@ -1,0 +1,40 @@
+{#- The preview panel fragment (04-UI-SPEC.md States -> Preview), swapped
+   in place of `.preview-panel` by the delegated click handlers in
+   static/app.js -- never the whole Conversion block, only this element.
+
+   `state` is one of:
+     - "rendered"  -- the frame image, plus the font-missing warning when
+                      `font_notice` is set (still just "rendered" with an
+                      extra banner, not a fifth state -- 04-UI-SPEC.md's
+                      own "rendered-with-a-font-notice variant").
+     - "refused"   -- a stereo source refuses a burn-in (D-140); the same
+                      sentence the disabled subtitle group already shows,
+                      not an error.
+     - "error"     -- anything else that kept a real frame from coming
+                      back (containment, a bad choice, ffmpeg itself).
+
+   Convert stays enabled regardless of which of these renders -- a broken
+   preview never blocks a conversion (CONV-04). -#}
+<div class="preview-panel" data-preview-panel data-preview-path="{{ rel_path }}">
+  {% if state == "rendered" %}
+    <img
+      class="preview-panel__image"
+      src="{{ image_url }}"
+      alt="{{ t('preview.field.time') }}: {{ frame_time_seconds | duration_hms }}"
+      data-frame-seconds="{{ frame_time_seconds }}"
+    >
+    <p class="form-field__label">{{ t("preview.field.time") }}: {{ frame_time_seconds | duration_hms }}</p>
+    {% if font_notice %}
+      <div class="banner banner--warning" role="status">
+        <div class="banner__text">
+          <p class="banner__body">{{ t("subtitle.warning.font_missing").format(font=font_notice) }}</p>
+        </div>
+      </div>
+    {% endif %}
+    <button type="button" class="btn btn--secondary" data-preview-another data-preview-loading-label="{{ t('preview.loading') }}">{{ t("preview.cta.another_frame") }}</button>
+  {% elif state == "refused" %}
+    <p class="preview-panel__error">{{ t("subtitle.warning.3d_refused") }}</p>
+  {% else %}
+    <p class="preview-panel__error">{{ t("preview.error") }}</p>
+  {% endif %}
+</div>

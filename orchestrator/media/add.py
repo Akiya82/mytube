@@ -1,12 +1,17 @@
 """The slug-planning sequence the CLI and the web add form both call
-(D-45..D-48), and the one free-space formula both the add form and the
-future background worker call (D-52). Extracted so the two callers share
-one implementation instead of two that drift.
+(D-45..D-48), the one free-space formula both the add form and the future
+background worker call (D-52), and the one `subtitle_choice` form-field
+parser both the preview route and the convert POST branch call (so the two
+never grow two slightly different ideas of what a submitted subtitle
+choice means). Extracted so every caller shares one implementation instead
+of two that drift.
 """
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 import asyncpg
 
+from mytube_media.subtitles import embedded_tracks
 from orchestrator.db import queries
 from orchestrator.slugs import SlugError, normalize_slug, pick_unique_slug
 
@@ -97,3 +102,84 @@ def required_free_bytes(source_size: int, *, already_correct: bool) -> int:
     if already_correct:
         return POSTER_SCRATCH_BYTES
     return 2 * source_size + POSTER_SCRATCH_BYTES
+
+
+# --- the subtitle_choice form field (D-121, D-122, D-140) ------------------
+
+# The vocabulary a submitted subtitle_choice value may carry: no burn-in
+# at all, an embedded stream picked by its absolute ffprobe index (text
+# and bitmap both -- the different rendering path is not the operator's
+# choice to encode), or a sidecar file named by its share-relative path
+# (whether it was one this form found on its own or one the operator
+# typed by hand -- both resolve to the same shape by the time they reach
+# a route, see parse_subtitle_choice below).
+_SUBTITLE_KIND_NONE = "none"
+_SUBTITLE_KIND_EMBEDDED_PREFIX = "embedded:"
+_SUBTITLE_KIND_EXTERNAL_PREFIX = "external:"
+_SUBTITLE_KIND_MANUAL = "manual"
+
+
+class SubtitleChoiceRefused(Exception):
+    """`subtitle_choice` (or the manual path beside it) is malformed --
+    never a catalog key shown to the operator, just a signal for the
+    caller to answer its own refusal shape.
+    """
+
+
+def parse_subtitle_choice(
+    value: str, *, manual_path: str, rel_path: str
+) -> tuple[str, int | None, str | None]:
+    """`(kind, stream_index, path)` from the add form's single
+    `subtitle_choice` radio value -- `kind` is one of `"none"`,
+    `"embedded"` or `"external"`; `path` is always a share-relative
+    string, never an absolute one and never trusted un-contained -- the
+    caller still has to resolve it through `mytube_media.share.safe_join`
+    before it touches the filesystem (T-04-01), this function only shapes
+    the value.
+
+    Raises `SubtitleChoiceRefused` for anything malformed.
+    """
+    if value == _SUBTITLE_KIND_NONE or not value:
+        return "none", None, None
+
+    if value.startswith(_SUBTITLE_KIND_EMBEDDED_PREFIX):
+        raw_index = value[len(_SUBTITLE_KIND_EMBEDDED_PREFIX):]
+        try:
+            return "embedded", int(raw_index), None
+        except ValueError:
+            raise SubtitleChoiceRefused() from None
+
+    if value.startswith(_SUBTITLE_KIND_EXTERNAL_PREFIX):
+        rel = value[len(_SUBTITLE_KIND_EXTERNAL_PREFIX):]
+        if not rel:
+            raise SubtitleChoiceRefused()
+        return "external", None, rel
+
+    if value == _SUBTITLE_KIND_MANUAL:
+        if not manual_path:
+            raise SubtitleChoiceRefused()
+        # Relative to the source's own folder (the copywriting contract's
+        # own placeholder text says so) -- joined onto the source's
+        # share-relative directory, not onto the share root directly, so
+        # "../Subs/movie.srt" reaches a sibling folder the way an operator
+        # typing it beside the source file expects.
+        combined = (PurePosixPath(rel_path).parent / manual_path).as_posix()
+        return "external", None, combined
+
+    raise SubtitleChoiceRefused()
+
+
+def embedded_subtitle_kind(probe_json: dict, stream_index: int) -> str | None:
+    """`"embedded_text"`/`"embedded_bitmap"` for a stream index the probe
+    actually reported among its subtitle streams, `None` otherwise -- the
+    check that keeps a stream index the operator never saw offered from
+    ever reaching the filter chain (T-04-01 in spirit: never trust an
+    index from the form over what the file, re-probed just now, actually
+    has). Shared by the convert POST branch and the preview route, both of
+    which re-probe the source rather than trusting anything the form
+    itself claims.
+    """
+    for track in embedded_tracks(probe_json):
+        if track.stream_index == stream_index:
+            return track.kind
+    return None
