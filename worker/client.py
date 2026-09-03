@@ -62,8 +62,10 @@ class WorkerClient:
         timeout: float = 30.0,
     ) -> None:
         self._worker_name = worker_name
+        # Every worker-facing route on the service lives under one prefix;
+        # callers hand over the service's own address and never spell it.
         self._client = httpx.AsyncClient(
-            base_url=base_url,
+            base_url=base_url.rstrip("/") + "/worker",
             headers={"authorization": f"Bearer {token}"},
             transport=transport,
             timeout=timeout,

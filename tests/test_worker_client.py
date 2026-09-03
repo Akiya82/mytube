@@ -209,3 +209,23 @@ async def test_the_backoff_never_exceeds_its_cap(monkeypatch):
 
     assert sleeps
     assert all(s <= client_module.RETRY_BACKOFF_CAP_SECONDS for s in sleeps)
+
+
+async def test_every_route_lives_under_the_service_s_worker_prefix():
+    """The service mounts its worker-facing routes under one prefix and the
+    address the converter is configured with is the service's own root, so
+    the client, not the operator, has to add that prefix -- a bare root URL
+    otherwise lands on the sign-in redirect and never reaches the route.
+    """
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        return httpx.Response(204)
+
+    client = _client(handler)
+    try:
+        await client.claim()
+    finally:
+        await client.aclose()
+    assert seen == ["/worker/claim"]
