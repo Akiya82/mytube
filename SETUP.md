@@ -16,6 +16,7 @@ explicitly marked as not run.
 - [Interface](#interface) — how to reach it, first run, changing the password
 - [`.env` variables](#env-variables) — includes `MYTUBE_WORKER_TOKEN`, the conversion worker's credential
 - [Playlists](#playlists) — what the link does, and what the world player has to be set to
+- [Conversion worker](#conversion-worker) — optional, needs a GPU, the second compose file
 - [What to expose to the reverse proxy](#what-to-expose-to-the-reverse-proxy) — a worked config block
 - [Upgrading](#upgrading) — pulling a change into a running deployment
 - [Rolling back](#rolling-back) — reverting one
@@ -252,6 +253,72 @@ world uses before suspecting the service.
 **In a browser, a playlist address does not play yet.** Playlists are a
 VRChat capability for the moment. A single video's address plays in a browser
 exactly as it always has and is not affected by any of this.
+
+## Conversion worker
+
+**This is optional.** Without it, adding a file as-is (a remux, no re-encode)
+still works exactly as described above — only converting an incompatible
+source needs a worker. If your machine has no capable GPU, the rest of this
+section does not apply to you.
+
+Conversion needs a second machine — or a second process on the same one — with
+an NVIDIA GPU that can encode (NVENC), the vendor driver, and the NVIDIA
+Container Toolkit's runtime integration, which is what actually hands a
+container access to the card. Without that last piece the worker container
+starts, then fails the instant it tries to touch the GPU — its log names a
+CUDA/NVENC initialization error, not a missing-driver message, so it is easy
+to mistake for a broken card when the real gap is the toolkit.
+
+Bring it up with the second compose file, on the machine that has the card:
+
+```bash
+docker compose -f docker-compose.worker.yml up -d --build
+```
+
+It reads its own variables from the same `.env`:
+
+| Variable | Purpose | Requirement |
+|---|---|---|
+| `MYTUBE_ORCHESTRATOR_URL` | Where the worker reaches this service — scheme included, no trailing slash | Required, no default |
+| `MYTUBE_WORKER_TOKEN` | The shared credential. **Must be the exact same value** given to this service's own `MYTUBE_WORKER_TOKEN` (see the variable table above) | Required, no default |
+| `MYTUBE_S3_ENDPOINT` / `MYTUBE_S3_BUCKET` | The same storage endpoint and bucket this service uses | Required |
+| `MYTUBE_WORKER_S3_KEY` / `MYTUBE_WORKER_S3_SECRET` | The worker's **own** storage credential — under these names, not `MYTUBE_S3_KEY`/`MYTUBE_S3_SECRET` | Required, no default, **no fallback to the service's own key pair** |
+| `MYTUBE_SHARE_HOST_PATH` | Where the source share is mounted on this host, bind-mounted read-only into the container | Required |
+| `MYTUBE_WORKER_SCRATCH_PATH` | A scratch directory with room for a large file plus its own rewrite pass | Required |
+
+**The worker's own storage credential should be narrower than the service's,
+not a copy of it.** Scope it to put objects and abort a multipart upload in
+the one bucket, nothing else — no delete, no bucket management. This machine
+runs a process that talks to two other systems over the network; a leaked
+credential here should not be able to remove anything. Put it under
+`MYTUBE_WORKER_S3_KEY`/`MYTUBE_WORKER_S3_SECRET` even when both this service
+and the worker run on one machine — there is no fallback, on purpose: reusing
+the service's own key here would be the intent working and the behavior
+(a wider credential exposed on the machine most likely to be compromised)
+being exactly wrong.
+
+**`MYTUBE_ORCHESTRATOR_URL` must be the hostname this service answers on, not
+a bare IP address.** The service checks the hostname a request actually
+arrived under and refuses anything else with a plain `400` that carries no
+explanation of why — so a worker pointed at an IP address gets a short
+refusal on every single poll, with nothing in the response saying the
+hostname is the problem. If the worker's log shows nothing but repeated
+`400` responses and never claims a job, this is the first thing to check.
+
+**The source share has to be the same tree at the same relative root on both
+machines.** A stored source path is relative, so the string only means the
+same file if the mount point matches; a different root silently points every
+existing source path at the wrong file (or nothing) the moment a conversion
+tries to open it.
+
+On a single machine, bringing the worker up is simply a second `docker
+compose ... up`, alongside the first, untouched. Across two machines it is
+the exact same file, run on whichever one has the card.
+
+**How to tell it is working:** in the library, a queued conversion moves from
+"waiting for a converter" to "working" once a worker claims it. If it never
+leaves "waiting for a converter", no worker has reached this service with the
+matching token yet.
 
 ## Storage capacity
 
