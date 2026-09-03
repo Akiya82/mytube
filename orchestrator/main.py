@@ -42,6 +42,7 @@ from orchestrator.web.routes_auth import router as auth_router
 from orchestrator.web.routes_playlists import router as playlists_router
 from orchestrator.web.routes_share import router as share_router
 from orchestrator.web.routes_titles import router as titles_router
+from orchestrator.web.routes_worker import router as worker_router
 
 STATIC_DIR = Path(__file__).parents[1] / "static"
 logger = logging.getLogger(__name__)
@@ -280,6 +281,11 @@ app.include_router(share_router)
 app.include_router(titles_router)
 app.include_router(auth_router)
 app.include_router(playlists_router)
+# The converter's own router (D-111) -- same application, same hostname, no
+# second host and no second port. Reachable through the existing edge
+# proxy exactly like every other route here; see routes_worker's own
+# module docstring for the authorization rule.
+app.include_router(worker_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 

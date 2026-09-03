@@ -93,6 +93,21 @@ PUBLIC_PATHS: frozenset[str] = frozenset({"/login", "/setup", "/healthz"})
 # narrow as the decision.
 PUBLIC_PREFIXES: tuple[str, ...] = ("/static/", "/lang/")
 
+# The worker prefix (D-111): opened by its own credential, never by being
+# listed as exempt from the session check. This tuple is different in kind
+# from the three above -- checked inside `auth_gate` after the hostname
+# refusal and before the first-run branch, so a fresh deployment with no
+# operator yet still behaves the same as a running one. A path matching it
+# is passed straight to its route with **no operator identity set on the
+# request** -- nothing here is authorized by passing through it, and a
+# handler that expects an operator will find none. The route's own
+# dependency (`routes_worker.require_worker_token`) is what actually
+# refuses an uncredentialed caller with a 401. This constant grants
+# *passage*, never *permission* -- the next person to read four
+# similar-looking tuples should add a path here only if that path opens
+# itself with its own credential check, never merely to skip the session.
+TOKEN_GATED_PREFIXES: tuple[str, ...] = ("/worker/",)
+
 # D-87's constant delay on every failed login attempt. No lockout and no
 # attempt table: a lockout would let any passer-by lock the operator out
 # of their own interface by hammering the form with their username.
@@ -413,6 +428,12 @@ async def auth_gate(request, call_next):
        reason to arrive on another hostname, and a bypass wide enough to
        serve the login screen to a stranger's hostname is wider than the
        refusal that was agreed.
+    3a. `TOKEN_GATED_PREFIXES` (D-111) reach their route with no session
+        either, also after step 2, but on the strength of a credential
+        checked by the route itself rather than an exemption granted here
+        -- see that constant's own comment for the distinction. Checked
+        before step 4 so a converter is refused the same way (401, never a
+        redirect) whether or not an operator account exists yet.
     4. First-run branch. On a fresh stack with no operator row, every
        non-public path routes to `/setup` instead of falling through to
        the session check below -- a `/login` a fresh deploy cannot pass
@@ -468,6 +489,9 @@ async def auth_gate(request, call_next):
         )
 
     if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    if path.startswith(TOKEN_GATED_PREFIXES):
         return await call_next(request)
 
     if not await operator_exists_cached(request):

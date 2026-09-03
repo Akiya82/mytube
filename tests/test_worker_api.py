@@ -171,11 +171,15 @@ async def test_the_route_refuses_a_non_ascii_token_rather_than_crashing(client):
     input, and a crash on an unauthenticated request is a worse outcome
     than a refusal.
     """
+    # A plain str header value is refused by httpx itself (>=0.28 encodes
+    # str header values as strict ASCII, before the request ever leaves
+    # the client) -- bytes bypass that client-side encoding and are what
+    # actually reach the comparison this test means to exercise.
     async with client:
         resp = await client.post(
             "/worker/claim",
             json={"protocol": 1, "worker": "ml-server"},
-            headers={"Authorization": "Bearer tökén-ü"},
+            headers={"Authorization": "Bearer tökén-ü".encode("utf-8")},
         )
     assert resp.status_code == 401
 
@@ -194,11 +198,28 @@ async def test_the_route_refuses_a_token_of_the_right_length_but_wrong_content(c
 
 @pytest.mark.parametrize("path,body", WORKER_REQUESTS)
 async def test_the_correct_token_reaches_the_route(client, path, body):
+    """This is a gate test, not a business-logic test -- it exists so a
+    sixth route added later without the credential dependency fails a
+    test that already exists rather than passing unnoticed (see the
+    module docstring above). It does not assert a specific success status
+    for the four job-id routes: against `_DummyPool`'s bare connection
+    (no real Postgres, no monkeypatch) `STUB_JOB_ID` is exactly as
+    unmatched as any other id, and the correct, specific answer for that
+    -- 404 for heartbeat, 409 for done/failed/cancelled -- is pinned by
+    `test_an_unknown_job_identifier_answers_a_refusal_rather_than_an_error`
+    and `test_a_superseded_report_refuses_with_a_status_the_worker_can_act_on`
+    below, which send this exact request and require exactly those codes.
+    Asserting (200, 204) here as well would contradict those two tests
+    outright for the same input; what this test actually verifies is that
+    the token was accepted -- the request was not refused as
+    unauthenticated (401) by the dependency this whole module exists to
+    add.
+    """
     async with client:
         resp = await client.post(
             path, json=body, headers={"Authorization": f"Bearer {WORKER_TOKEN}"}
         )
-    assert resp.status_code in (200, 204)
+    assert resp.status_code != 401
 
 
 async def test_the_worker_prefix_is_gated_by_its_token_and_by_no_other_list():
@@ -290,10 +311,47 @@ async def test_an_empty_queue_answers_no_content(client):
     assert resp.content == b""
 
 
-async def test_a_claim_carries_only_the_operator_s_choices(client):
+async def test_a_claim_carries_only_the_operator_s_choices(monkeypatch, client):
     """A later plan cannot quietly start shipping a built command over the
     network.
+
+    `_DummyPool`/`_DummyConn` carry no real data (this file drives no
+    Postgres at all), so a genuine "job found" claim can only be produced
+    here the same way `test_a_claim_records_the_check_in_even_when_it_
+    finds_nothing` and `test_a_heartbeat_returns_the_cancel_flag` already
+    produce their own specific outcomes above: by monkeypatching the
+    queries this route calls, rather than depending on a row this fixture
+    has no way to seed.
     """
+    from orchestrator.db import queries
+
+    fake_row = {
+        "id": STUB_JOB_ID,
+        "attempts": 1,
+        "kind": "transcode",
+        "title_id": uuid.uuid4(),
+        "edition_id": uuid.uuid4(),
+        "source_path": "Movies/example.mkv",
+        "audio_stream_index": 1,
+        "subtitle_kind": "embedded",
+        "subtitle_stream_index": 2,
+        "subtitle_path": None,
+        "stereo_layout": None,
+    }
+
+    async def _fake_record_worker_seen(conn, *, worker_name, status):
+        pass
+
+    async def _fake_claim_job(conn, *, kind, worker_name):
+        return fake_row
+
+    async def _fake_edition_object_key(conn, edition_id):
+        return "x.mp4"
+
+    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+    monkeypatch.setattr(queries, "claim_job", _fake_claim_job, raising=False)
+    monkeypatch.setattr(queries, "edition_object_key", _fake_edition_object_key, raising=False)
+
     async with client:
         resp = await client.post(
             "/worker/claim",
