@@ -24,7 +24,7 @@ from orchestrator.main import app
 from orchestrator.storage import StorageUsage
 from orchestrator.web import routes_titles
 
-from conftest import ADMIN_FQDN, SESSION_COOKIE
+from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 
 class _DummyConn:
@@ -56,6 +56,7 @@ def _web_env(tmp_path, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
     monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
+    monkeypatch.setenv("MYTUBE_WORKER_TOKEN", WORKER_TOKEN)
     monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(tmp_path))
     monkeypatch.setenv("MYTUBE_STORAGE_QUOTA_BYTES", "0")
     get_settings.cache_clear()
@@ -633,6 +634,7 @@ def _action_env(migrated_db_url, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
     monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
+    monkeypatch.setenv("MYTUBE_WORKER_TOKEN", WORKER_TOKEN)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

@@ -19,7 +19,7 @@ from orchestrator.main import app
 from orchestrator.media.add import required_free_bytes
 from orchestrator.web import routes_share
 
-from conftest import ADMIN_FQDN, SESSION_COOKIE
+from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "probe"
 
@@ -57,6 +57,7 @@ def _web_env(share_root, tmp_path, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
     monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
+    monkeypatch.setenv("MYTUBE_WORKER_TOKEN", WORKER_TOKEN)
     monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(share_root))
     # The real default (/work) is a container-only path (see config.py) --
     # a real, empty, writable directory here so shutil.disk_usage has

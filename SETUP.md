@@ -14,6 +14,7 @@ explicitly marked as not run.
 ## Quick index
 
 - [Interface](#interface) — how to reach it, first run, changing the password
+- [`.env` variables](#env-variables) — includes `MYTUBE_WORKER_TOKEN`, the conversion worker's credential
 - [Playlists](#playlists) — what the link does, and what the world player has to be set to
 - [What to expose to the reverse proxy](#what-to-expose-to-the-reverse-proxy) — a worked config block
 - [Upgrading](#upgrading) — pulling a change into a running deployment
@@ -72,6 +73,11 @@ marked "must be generated".
 | `MYTUBE_SHARE_PASSWORD` | That account's password | — | Required |
 | `MYTUBE_SHARE_DOMAIN` | Windows domain, for a domain-joined share | empty | Optional — leave empty for a local account on the machine serving the share |
 | `MYTUBE_STORAGE_QUOTA_BYTES` | Configured storage quota in bytes, `0` means no quota enforced — used only for the interface's usage figure | `0` | Optional |
+| `MYTUBE_WORKER_TOKEN` | The conversion worker's only credential — opens the `/worker/` prefix behind a constant-time comparison. Both this service and the converter must be given the same value | — | **Required — the interface container refuses to start without it.** Generate with `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `MYTUBE_CONVERTER_OFFLINE_SECONDS` | Seconds with no converter check-in before a queued conversion shows "waiting for a converter" instead of plain "queued" | `60` | Optional |
+| `MYTUBE_TRANSCODE_BITRATE_CEILING_BPS` | Advisory bitrate above which a compatible source earns a recommendation to convert. Gates nothing | `9000000` | Optional |
+| `MYTUBE_TRANSCODE_TARGET_BITRATE_BPS` | Output bitrate ceiling for a full-height (1080p) transcode | `6000000` | Optional |
+| `MYTUBE_TRANSCODE_ESTIMATE_REALTIME_FACTOR` | Fallback speed estimate for the pre-start time estimate, before any transcode has finished | `4.0` | Optional |
 
 **About `MYTUBE_S3_UPSTREAM` specifically.** `api` reaches storage through
 `MYTUBE_S3_ENDPOINT`; `edge` reaches it through `MYTUBE_S3_UPSTREAM`. These

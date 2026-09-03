@@ -66,6 +66,10 @@ services:
 
   api:
     build: .
+    # env_file carries MYTUBE_WORKER_TOKEN and this phase's other new
+    # settings through to Settings() the same way every existing MYTUBE_*
+    # variable already reaches this container -- no explicit environment:
+    # entry needed for any of them.
     env_file: .env
     depends_on:
       db:

@@ -286,7 +286,7 @@ def _no_real_connect(monkeypatch):
 def _env(monkeypatch, tmp_path):
     from orchestrator.config import get_settings
 
-    from conftest import ADMIN_FQDN
+    from conftest import ADMIN_FQDN, WORKER_TOKEN
 
     monkeypatch.setenv("MYTUBE_SECURE_LINK_SECRET", "test-secret-do-not-use-in-prod")
     monkeypatch.setenv("MYTUBE_DATABASE_URL", "postgresql://test:test@localhost/test")
@@ -295,6 +295,7 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
     monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
+    monkeypatch.setenv("MYTUBE_WORKER_TOKEN", WORKER_TOKEN)
     # The share fixture builds its tree under the same tmp_path, so the
     # command reads the same directory the routine tests use.
     monkeypatch.setenv("MYTUBE_SHARE_ROOT", str(tmp_path))

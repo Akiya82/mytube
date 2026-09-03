@@ -15,7 +15,7 @@ from orchestrator.cli import storage_audit
 from orchestrator.db import queries
 from orchestrator.storage import StorageUsage
 
-from conftest import ADMIN_FQDN
+from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 
 class _DummyConn:
@@ -42,6 +42,7 @@ def _env(monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
     monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
+    monkeypatch.setenv("MYTUBE_WORKER_TOKEN", WORKER_TOKEN)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

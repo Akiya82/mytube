@@ -42,7 +42,7 @@ from orchestrator.media.playlist_queue import (
     process_playlist_build,
 )
 
-from conftest import ADMIN_FQDN
+from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 MEGABYTE = 1024 * 1024
 
@@ -119,6 +119,7 @@ def build(tmp_path, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
     monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
+    monkeypatch.setenv("MYTUBE_WORKER_TOKEN", WORKER_TOKEN)
     monkeypatch.setenv("MYTUBE_WORK_DIR", str(work_dir))
     get_settings.cache_clear()
 

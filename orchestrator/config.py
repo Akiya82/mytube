@@ -44,6 +44,49 @@ class Settings(BaseSettings):
     # D-67: 0 means "no quota enforced", used only for the usage display for now.
     storage_quota_bytes: int = 0
 
+    # D-111: the converter's only credential, checked in constant time against
+    # every request under /worker/. Required, no default -- not even an empty
+    # string, which would compare equal to a missing header and open the whole
+    # prefix to anyone who can reach the interface's hostname. This value is
+    # the only thing standing between the queue's control surface and that
+    # caller; a service that started with an empty one would look healthy
+    # while being open.
+    worker_token: str
+    # D-131: how long a queued transcode waits with no converter check-in
+    # before the interface switches to "waiting for a converter" instead of
+    # plain "queued". Must stay comfortably longer than the converter's own
+    # polling interval (on the order of a few seconds) -- shorter than that
+    # and a healthy converter reads as absent between two of its own polls.
+    converter_offline_seconds: int = 60
+    # D-136: advisory only, gates nothing. A compatible source above this
+    # bitrate earns a sentence recommending conversion in the analyzer's
+    # plan and stays addable as-is regardless. Defaulted near the per-viewer
+    # bandwidth figure the project's own constraints already state (~9
+    # Mbit/s pessimistic outbound per viewer at 15 concurrent viewers).
+    transcode_bitrate_ceiling_bps: int = 9_000_000
+    # D-137: the encoder's output ceiling for a full-height (1080p) frame;
+    # `mytube_media.transcode` scales this down by area for a smaller output
+    # frame and never upsizes.
+    transcode_target_bitrate_bps: int = 6_000_000
+    # D-148: the fallback speed estimate (finished duration / wall time) used
+    # for the pre-start time estimate before any real transcode has finished.
+    # A starting value only -- `queries.median_realtime_factor` replaces it
+    # with measured history the moment any job has completed, and this
+    # number is not meant to stay accurate forever.
+    transcode_estimate_realtime_factor: float = 4.0
+
+    @field_validator("worker_token")
+    @classmethod
+    def _validate_worker_token(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 32:
+            raise ValueError(
+                "MYTUBE_WORKER_TOKEN must be at least 32 characters (got "
+                f"{len(value)}) -- generate one with: python3 -c "
+                '"import secrets; print(secrets.token_urlsafe(32))"'
+            )
+        return value
+
     @field_validator("public_base_url")
     @classmethod
     def _validate_public_base_url(cls, value: str) -> str:

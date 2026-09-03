@@ -17,7 +17,7 @@ from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
 
-from conftest import ADMIN_FQDN, SESSION_COOKIE
+from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 
 class _DummyConn:
@@ -49,6 +49,7 @@ def _web_env(monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
     monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
+    monkeypatch.setenv("MYTUBE_WORKER_TOKEN", WORKER_TOKEN)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

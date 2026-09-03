@@ -15,6 +15,8 @@ import typer
 from orchestrator.cli import auth as cli_auth  # RED: created by a later plan
 from orchestrator.config import get_settings
 
+from conftest import WORKER_TOKEN
+
 pytestmark = pytest.mark.integration
 
 PASSWORD = "a password nobody should see printed anywhere"
@@ -29,6 +31,7 @@ def _cli_env(migrated_db_url, monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
     monkeypatch.setenv("MYTUBE_ADMIN_FQDN", "admin.mytube.example")
+    monkeypatch.setenv("MYTUBE_WORKER_TOKEN", WORKER_TOKEN)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

@@ -12,7 +12,7 @@ import pytest
 
 from orchestrator.db import queries
 
-from conftest import ADMIN_FQDN
+from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -172,6 +172,7 @@ async def test_migration_downgrade_and_upgrade_round_trip(migrated_db_url):
         "MYTUBE_S3_SECRET": "test-secret",
         "MYTUBE_PUBLIC_BASE_URL": "https://mytube.example",
         "MYTUBE_ADMIN_FQDN": ADMIN_FQDN,
+        "MYTUBE_WORKER_TOKEN": WORKER_TOKEN,
     }
 
     subprocess.run(
