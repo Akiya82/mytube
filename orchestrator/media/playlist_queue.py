@@ -1,19 +1,35 @@
-"""One-at-a-time in-process background worker that assembles a playlist,
-in the shape `orchestrator.media.queue` already established for the add
-pipeline: a module logger, a frozen job with one constructor, one consumer
-so concurrency of one is a property of the construction rather than of a
-lock, and per-job exception isolation so one failed build never stops the
-next one.
+"""The assembly consumer: one claiming loop over the durable `jobs` table
+(D-118), kind `playlist`, in the shape `orchestrator.media.queue`
+establishes for the addition consumer -- a module logger, a frozen job
+with one constructor built from a claimed row, one claiming task so
+concurrency of one is a property of the loop rather than of a lock, and
+per-job exception isolation so one failed build never stops the next one.
+
+Before this module read `PlaylistBuildQueue`, an in-memory FIFO queue
+object -- a route handed a job to it directly, and the whole thing forgot
+every queued build the instant this process restarted (a cost this module's own
+prior docstring named and accepted, since a build has no equivalent of the
+addition's heartbeat-driven recovery until now). A row inserted by
+`routes_playlists._enqueue_build` is now the only thing this loop ever
+reads: it claims the oldest queued `playlist` row for itself, works it,
+and reports progress and outcome back onto the same row through the job
+lifecycle in `orchestrator.db.queries` -- the same functions the converter
+reaches over the network for its own kind of work. This loop is entirely
+independent of the addition consumer's own loop: neither shares a claim, a
+heartbeat or a failure, so an assembly measured in minutes can never delay
+an addition measured in under one (T-04-22).
 
 **Nothing synchronous is called bare from this module.** This loop shares
 its event loop with every HTTP request this process answers, including
 `GET /p/{slug}`, `GET /v/{slug}` and `/healthz` -- and the compose health
 check reads a `/healthz` that does not return as the container being
 down, which takes the edge's `depends_on: service_healthy` condition with
-it. Every blocking call here -- the disk check, each download, ffmpeg,
-each probe, each upload, each cleanup call -- goes through
-`asyncio.to_thread`. The rule is stated once, here, so the next person
-adding a step follows it instead of rediscovering it from an outage.
+it. Every blocking call here -- the disk check, each download, each
+probe, each upload, each cleanup call -- goes through `asyncio.to_thread`.
+Each segment's own packet copy runs through
+`mytube_media.runner.run_ffmpeg_with_progress` instead of a blocking
+call, so its progress reaches the operator without blocking this loop
+while it runs.
 
 **What a build produces.** One segment object per member, MPEG-TS bytes
 under a key shaped `{a fresh identifier}.mp4`, plus one artifact row each
@@ -37,14 +53,14 @@ this module's own promise: a viewer holding a signed address, past
 whatever the edge still has cached, would get nothing and see the stub
 clip, in the middle of exactly the evening this product exists for.
 
-**Deliberately not built: a startup sweep that resumes an interrupted
-build.** A build killed by a restart leaves the previous generation
-serving and the playlist row untouched; the operator presses save again.
-The cost of that choice is named rather than hidden: the objects a
-half-finished build had already uploaded are orphaned, since no artifact
-row names them -- the storage audit lists them and the operator removes
-them. The existing startup sweep already clears the scratch directory, so
-nothing accumulates on local disk.
+**A build interrupted by a restart is no longer silently lost.** The
+durable row's heartbeat goes stale and the reaper's own sweep
+(`orchestrator.reaper.sweep_stale_jobs`) requeues it, the same recovery
+every other kind of work in this project now gets -- there is no second,
+build-specific mechanism for it here. The objects a half-finished attempt
+had already uploaded before the interruption are still orphaned, since no
+artifact row names them until the whole build finishes and swaps; the
+storage audit lists them and the operator removes them.
 """
 import asyncio
 import logging
@@ -55,7 +71,8 @@ from pathlib import Path
 
 import asyncpg
 
-from mytube_media import compat, remux
+from mytube_media import compat
+from mytube_media.runner import run_ffmpeg_with_progress
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media import playlist_build
@@ -83,6 +100,11 @@ REASON_KEY_STORAGE_FULL = "playlist.refused.storage_full"
 REASON_KEY_CHECKS = "playlist.refused.checks"
 REASON_KEY_ASSEMBLY = "playlist.refused.assembly"
 
+# The claim identity this in-process consumer reports itself under to
+# `claim_job`/`heartbeat_job`/`finish_job` -- fixed, since exactly one task
+# in this process ever claims a `playlist` row.
+PLAYLIST_CONSUMER_WORKER_NAME = "orchestrator-playlist-consumer"
+
 
 class _InsufficientSpaceError(Exception):
     """Internal signal only. Raised by the free-space precheck and mapped
@@ -99,45 +121,85 @@ class _SegmentCheckError(Exception):
     """
 
 
+class _JobCancelled(Exception):
+    """Internal signal only. Raised when `run_ffmpeg_with_progress`
+    reports that the operator's cancel request stopped a segment's own
+    copy, so the build's single `except` chain can discard what it has
+    already uploaded and finish the job `cancelled` rather than `failed`
+    -- an operator's decision is not a fault.
+    """
+
+
 @dataclass(frozen=True)
 class PlaylistBuildJob:
-    """The playlist to assemble, and nothing else.
+    """The playlist to assemble, its own job id and attempt, and nothing
+    else about what it will build.
 
     Every other fact is read by the worker itself, in one query, from the
     catalog as it is when the build starts -- not as it was when save was
     pressed. Two saves in a row are ordinary, and a job carrying a
     membership snapshot from the first one would build the wrong list.
+    `job_id`/`attempt` are what every heartbeat and the terminal outcome
+    are written against -- the same id+worker+attempt match
+    `heartbeat_job`/`finish_job` require of every caller, in-process or
+    over the network.
     """
 
+    job_id: object
+    attempt: int
     playlist_id: object
 
+    @classmethod
+    def from_row(cls, job_row: asyncpg.Record) -> "PlaylistBuildJob":
+        return cls(
+            job_id=job_row["id"],
+            attempt=job_row["attempts"],
+            playlist_id=job_row["playlist_id"],
+        )
 
-class PlaylistBuildQueue:
-    """Wraps an unbounded `asyncio.Queue`. Exactly one worker task ever
-    calls `.get()`, so one build at a time is a property of how this is
-    constructed rather than of a lock somebody has to remember.
+
+async def run_playlist_consumer(pool: asyncpg.Pool, *, poll_interval: float) -> None:
+    """Claim one `playlist` row at a time, forever, sleeping
+    `poll_interval` whenever the queue is empty -- the assembly
+    consumer's own loop, entirely independent of the addition consumer's
+    (see the module docstring for why that independence is the point).
     """
+    while True:
+        try:
+            async with pool.acquire() as conn:
+                job_row = await queries.claim_job(
+                    conn, kind="playlist", worker_name=PLAYLIST_CONSUMER_WORKER_NAME
+                )
+        except Exception:
+            logger.exception("playlist consumer: could not claim from the queue")
+            job_row = None
 
-    def __init__(self) -> None:
-        self._queue: "asyncio.Queue[PlaylistBuildJob]" = asyncio.Queue()
+        if job_row is None:
+            await asyncio.sleep(poll_interval)
+            continue
 
-    async def enqueue(self, job: PlaylistBuildJob) -> None:
-        await self._queue.put(job)
-
-    async def run(self, pool: asyncpg.Pool) -> None:
-        while True:
-            job = await self._queue.get()
-            try:
-                await process_playlist_build(pool, job)
-            except Exception:
-                logger.exception("playlist build %s failed", job.playlist_id)
-            finally:
-                self._queue.task_done()
+        job = PlaylistBuildJob.from_row(job_row)
+        try:
+            await process_playlist_build(pool, job)
+        except Exception:
+            logger.exception("playlist build %s failed", job.playlist_id)
 
 
 async def _record_failure(pool, playlist_id, reason_key: str, reason_params: dict) -> None:
     async with pool.acquire() as conn:
         await queries.set_playlist_build_failed(conn, playlist_id, reason_key, reason_params)
+
+
+async def _finish(pool, job: PlaylistBuildJob, *, outcome: str, reason_key: str | None = None) -> None:
+    async with pool.acquire() as conn:
+        await queries.finish_job(
+            conn,
+            job.job_id,
+            worker_name=PLAYLIST_CONSUMER_WORKER_NAME,
+            attempt=job.attempt,
+            outcome=outcome,
+            reason_key=reason_key,
+        )
 
 
 async def _discard(keys) -> None:
@@ -206,12 +268,20 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
        occasion.
     4. Stream each member out of storage into scratch -- never into
        memory.
-    5. Copy its packets into one deliverable segment.
+    5. Copy its packets into one deliverable segment, through the shared
+       progress runner. The reported percentage combines how many
+       segments are already done with how far through the *current*
+       segment's own copy the tool is (`_overall_percent` below) --
+       expressed as one figure, an approximation across segments rather
+       than a single tool's own measure. A cancellation between blocks
+       stops the copy, discards every segment already uploaded, and
+       finishes the job `cancelled`.
     6. Check what came out before anything points at it (see
        `_check_segment`).
     7. Upload under a fresh key, never the playlist's own identifier,
        which is stable across rebuilds and would mean overwriting live
-       objects.
+       objects. The `uploading` stage is set immediately before this call,
+       the same as the addition consumer's own upload stage.
     8. Validate the document these segments render into, against the set
        of keys actually uploaded, and only then record the swap. On any
        validation failure nothing is pointed at anything: this is the one
@@ -220,12 +290,30 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
     9. If the swap reports the playlist is no longer active, delete every
        object just uploaded -- the row is gone, nothing will ever point at
        them, and no artifact row exists for the deletion sweep to find
-       them by.
+       them by. The job finishes `cancelled`, not `failed`: nothing went
+       wrong, the operator deleted the playlist while this build ran.
     """
     settings = get_settings()
     work_dir = Path(settings.work_dir)
     scratch: list[Path] = []
     uploaded: list[str] = []
+    cancel_state = {"requested": False}
+
+    async def _heartbeat(*, stage: str, progress_pct: float | None = None) -> None:
+        async with pool.acquire() as conn:
+            row = await queries.heartbeat_job(
+                conn,
+                job.job_id,
+                worker_name=PLAYLIST_CONSUMER_WORKER_NAME,
+                attempt=job.attempt,
+                stage=stage,
+                progress_pct=progress_pct,
+            )
+        if row is not None and row["cancel_requested"]:
+            cancel_state["requested"] = True
+
+    def _should_cancel() -> bool:
+        return cancel_state["requested"]
 
     try:
         async with pool.acquire() as conn:
@@ -234,6 +322,7 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
         live = [m for m in members if not m["dropped"] and m["object_key"]]
         if not live:
             await _record_failure(pool, job.playlist_id, REASON_KEY_EMPTY, {})
+            await _finish(pool, job, outcome="failed", reason_key=REASON_KEY_EMPTY)
             return
 
         parity = playlist_build.parity_verdict(live)
@@ -256,9 +345,13 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
                 f"{free} free bytes < {required} required in {settings.work_dir}"
             )
 
+        total = len(live)
         artifacts = []
         sections = []
         for index, member in enumerate(live):
+            if cancel_state["requested"]:
+                raise _JobCancelled()
+
             source = work_dir / f"{job.playlist_id}-{index}-source"
             segment = work_dir / f"{job.playlist_id}-{index}-segment"
             scratch.extend((source, segment))
@@ -266,14 +359,34 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
             await asyncio.to_thread(
                 download_object_to_file, member["object_key"], str(source)
             )
-            await asyncio.to_thread(
-                remux.run_ffmpeg,
-                playlist_build.build_segment_command(source, segment),
+
+            cmd = playlist_build.build_segment_command(source, segment)
+            cmd = cmd[:-1] + ["-progress", "pipe:1", "-nostats", cmd[-1]]
+
+            async def on_progress(_progress, percent):
+                # Safe to close over the loop variable `index` directly:
+                # this callback is only ever invoked while this
+                # iteration's own `run_ffmpeg_with_progress` call is in
+                # flight, entirely before the loop advances to the next
+                # member.
+                segment_fraction = (percent / 100.0) if percent is not None else 0.0
+                overall = (index + segment_fraction) / total * 100.0
+                await _heartbeat(stage="working", progress_pct=overall)
+
+            result = await run_ffmpeg_with_progress(
+                cmd,
+                duration_seconds=member["duration_seconds"],
+                on_progress=on_progress,
+                should_cancel=_should_cancel,
                 timeout=SEGMENT_TIMEOUT_SECONDS,
             )
+            if result.cancelled:
+                raise _JobCancelled()
+
             duration = await _check_segment(segment)
 
             key = f"{uuid.uuid4()}.mp4"
+            await _heartbeat(stage="uploading")
             await asyncio.to_thread(
                 put_object_from_file, str(segment), key, SEGMENT_CONTENT_TYPE
             )
@@ -314,17 +427,31 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
                 len(uploaded),
             )
             await _discard(uploaded)
+            await _finish(pool, job, outcome="cancelled")
             return
+
+        async with pool.acquire() as conn:
+            await queries.finish_job(
+                conn,
+                job.job_id,
+                worker_name=PLAYLIST_CONSUMER_WORKER_NAME,
+                attempt=job.attempt,
+                outcome="done",
+            )
 
         logger.info(
             "playlist %s built: %d segment(s)", job.playlist_id, len(artifacts)
         )
+    except _JobCancelled:
+        logger.info("playlist build %s cancelled", job.playlist_id)
+        await _discard(uploaded)
+        await _finish(pool, job, outcome="cancelled")
     except Exception as exc:
         logger.exception("playlist build %s failed", job.playlist_id)
         await _discard(uploaded)
-        await _record_failure(
-            pool, job.playlist_id, _reason_key_for(exc), _reason_params_for(exc)
-        )
+        reason_key = _reason_key_for(exc)
+        await _record_failure(pool, job.playlist_id, reason_key, _reason_params_for(exc))
+        await _finish(pool, job, outcome="failed", reason_key=reason_key)
     finally:
         for path in scratch:
             try:
@@ -341,7 +468,10 @@ def _reason_key_for(exc: Exception) -> str:
     A produced file that failed its own checks gets a different key from
     an assembly that failed outright, because they send the operator to
     different places: the first means the clip that came out is wrong, the
-    second means it never came out.
+    second means it never came out. `FfmpegFailed` (the shared progress
+    runner's own exception, raised for a non-zero exit or a timeout) falls
+    into the same assembly-failure bucket the previous `RemuxError` did --
+    both mean the segment never came out.
     """
     if isinstance(exc, _InsufficientSpaceError):
         return REASON_KEY_STORAGE_FULL

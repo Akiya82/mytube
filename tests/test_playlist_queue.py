@@ -1,11 +1,13 @@
 """The playlist build worker's failure and cleanup branches.
 
 No database, no bucket, no ffmpeg: the pool is a stub whose `.acquire()`
-hands out an object nothing looks at, the three catalog calls the worker
-makes are replaced at the module boundary, and every storage and
-subprocess call is a fake that records what it was asked to do. What is
-under test is the worker's own decisions -- what it refuses to start,
-what it deletes when a step fails, and what it declines to publish.
+hands out an object nothing looks at, the catalog calls the worker makes
+are replaced at the module boundary, and every storage and subprocess
+call is a fake that records what it was asked to do. What is under test
+is the worker's own decisions -- what it refuses to start, what it
+deletes when a step fails, what it declines to publish, and (since this
+plan) how it reports progress and honours a cancellation through the same
+durable job lifecycle every other kind of work now shares.
 
 These are the branches that only run when something has already gone
 wrong, which is exactly when nobody is watching. The happy path is
@@ -22,24 +24,27 @@ arguments, and which call it did not make at all.
 import asyncio
 import contextlib
 import shutil
+import uuid
 from collections import namedtuple
 from pathlib import Path
 
 import pytest
 
 from mytube_media import compat, remux
+from mytube_media.runner import Progress, RunResult
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media import add as add_module
 from orchestrator.media import playlist_queue as worker
 from orchestrator.media.playlist_queue import (
+    PLAYLIST_CONSUMER_WORKER_NAME,
     REASON_KEY_ASSEMBLY,
     REASON_KEY_CHECKS,
     REASON_KEY_EMPTY,
     REASON_KEY_STORAGE_FULL,
     PlaylistBuildJob,
-    PlaylistBuildQueue,
     process_playlist_build,
+    run_playlist_consumer,
 )
 
 from conftest import ADMIN_FQDN, WORKER_TOKEN
@@ -100,6 +105,14 @@ NO_VIDEO_STREAM = {"streams": [{"codec_type": "audio"}], "format": {"duration": 
 NO_USABLE_DURATION = {"streams": [{"codec_type": "video"}], "format": {}}
 
 
+def _claim_row(playlist_id, *, job_id=None, attempt=1):
+    """One row as the durable table's `claim_job` would return it for a
+    `playlist` kind -- only the three fields `PlaylistBuildJob.from_row`
+    reads.
+    """
+    return {"id": job_id or uuid.uuid4(), "attempts": attempt, "playlist_id": playlist_id}
+
+
 @pytest.fixture
 def build(tmp_path, monkeypatch):
     """The worker's whole environment, recorded.
@@ -108,6 +121,11 @@ def build(tmp_path, monkeypatch):
     the build did. `state["members"]` may be a list or a callable taking
     the number of reads already made, so a test can change the membership
     between two builds the way pressing save twice does.
+
+    `state["pending_claims"]` is the durable table's own queue, as far as
+    `claim_job` is concerned -- a plain list a test pushes `_claim_row(...)`
+    onto and `run_playlist_consumer` pops from in order, standing in for
+    rows a route would otherwise have inserted for real.
     """
     work_dir = tmp_path / "work"
     work_dir.mkdir()
@@ -133,6 +151,13 @@ def build(tmp_path, monkeypatch):
         "probes": {},
         "ffmpeg_error": None,
         "record_failure_error": None,
+        # A heartbeat's own cancel answer, keyed by how many heartbeats
+        # have already been written this build -- None means never
+        # cancelled. See test_a_cancel_mid_build_... below for how a test
+        # uses this to simulate the operator's cancel button firing
+        # between two segments.
+        "cancel_after_heartbeat_index": None,
+        "pending_claims": [],
     }
     calls = {
         "events": [],
@@ -145,6 +170,8 @@ def build(tmp_path, monkeypatch):
         "deleted": [],
         "built": [],
         "failed": [],
+        "heartbeats": [],
+        "finished": [],
     }
 
     async def playlist_build_inputs(conn, playlist_id):
@@ -165,10 +192,43 @@ def build(tmp_path, monkeypatch):
         if state["record_failure_error"] is not None:
             raise state["record_failure_error"]
 
+    async def claim_job(conn, *, kind, worker_name):
+        assert kind == "playlist"
+        assert worker_name == PLAYLIST_CONSUMER_WORKER_NAME
+        if not state["pending_claims"]:
+            return None
+        return state["pending_claims"].pop(0)
+
+    async def heartbeat_job(
+        conn, job_id, *, worker_name, attempt, stage,
+        progress_pct=None, eta_seconds=None, realtime_factor=None,
+    ):
+        index = len(calls["heartbeats"])
+        calls["heartbeats"].append(
+            {"job_id": job_id, "stage": stage, "progress_pct": progress_pct}
+        )
+        calls["events"].append(("heartbeat", job_id))
+        threshold = state["cancel_after_heartbeat_index"]
+        cancel = threshold is not None and index >= threshold
+        return {"cancel_requested": cancel}
+
+    async def finish_job(
+        conn, job_id, *, worker_name, attempt, outcome,
+        reason_key=None, realtime_factor=None,
+    ):
+        calls["finished"].append(
+            {"job_id": job_id, "outcome": outcome, "reason_key": reason_key}
+        )
+        calls["events"].append(("finished", job_id))
+        return True
+
     for name, fake in (
         ("playlist_build_inputs", playlist_build_inputs),
         ("set_playlist_built", set_playlist_built),
         ("set_playlist_build_failed", set_playlist_build_failed),
+        ("claim_job", claim_job),
+        ("heartbeat_job", heartbeat_job),
+        ("finish_job", finish_job),
     ):
         monkeypatch.setattr(queries, name, fake, raising=False)
 
@@ -181,11 +241,25 @@ def build(tmp_path, monkeypatch):
         calls["downloaded"].append((key, destination))
         Path(destination).write_bytes(b"stub member bytes")
 
-    def fake_run_ffmpeg(argv, *, timeout):
+    async def fake_run_ffmpeg_with_progress(
+        argv, *, duration_seconds, on_progress, should_cancel, timeout
+    ):
+        """Stands in for `mytube_media.runner.run_ffmpeg_with_progress` --
+        no real subprocess. Emits exactly one closed progress block (as if
+        the whole segment copy finished in a single block) before checking
+        `should_cancel`, mirroring the real runner's own order: a block is
+        always processed before a cancellation between blocks is honoured.
+        """
         calls["ffmpeg"].append((list(argv), timeout))
         if state["ffmpeg_error"] is not None:
             raise state["ffmpeg_error"]
+        await on_progress(
+            Progress(out_time_seconds=duration_seconds, speed=1.0, done=True), 100.0
+        )
+        if should_cancel():
+            return RunResult(cancelled=True, returncode=None)
         Path(argv[-1]).write_bytes(b"stub segment bytes")
+        return RunResult(cancelled=False, returncode=0)
 
     def fake_probe(path):
         index = len(calls["probed"])
@@ -206,7 +280,7 @@ def build(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "put_object_from_file", fake_put)
     monkeypatch.setattr(worker, "abort_dangling_multipart", fake_abort)
     monkeypatch.setattr(worker, "delete_object", fake_delete)
-    monkeypatch.setattr(remux, "run_ffmpeg", fake_run_ffmpeg)
+    monkeypatch.setattr(worker, "run_ffmpeg_with_progress", fake_run_ffmpeg_with_progress)
     monkeypatch.setattr(compat, "probe", fake_probe)
 
     yield state, calls
@@ -221,8 +295,14 @@ def _reasons(calls):
     return [reason for _id, reason, _params in calls["failed"]]
 
 
-async def _run(playlist_id="playlist-a"):
-    await process_playlist_build(_PoolLike(), PlaylistBuildJob(playlist_id=playlist_id))
+def _outcomes(calls):
+    return [f["outcome"] for f in calls["finished"]]
+
+
+async def _run(playlist_id="playlist-a", *, job_id=None, attempt=1) -> PlaylistBuildJob:
+    job = PlaylistBuildJob(job_id=job_id or uuid.uuid4(), attempt=attempt, playlist_id=playlist_id)
+    await process_playlist_build(_PoolLike(), job)
+    return job
 
 
 # --- a playlist deleted while its build was running -------------------
@@ -249,7 +329,9 @@ async def test_a_playlist_deleted_mid_build_leaves_none_of_its_objects_behind(bu
 async def test_a_deleted_playlist_is_not_marked_failed_and_the_swap_is_not_retried(build):
     """Nothing went wrong -- the operator deleted the playlist. Writing a
     refusal onto a row the reaper has already finished would resurrect a
-    deleted playlist as a failed one.
+    deleted playlist as a failed one. The job itself still needs a
+    terminal state, and it is `cancelled`, not `failed`, for the same
+    reason.
     """
     state, calls = build
     state["swapped"] = False
@@ -258,6 +340,7 @@ async def test_a_deleted_playlist_is_not_marked_failed_and_the_swap_is_not_retri
 
     assert calls["failed"] == []
     assert len(calls["built"]) == 1
+    assert _outcomes(calls) == ["cancelled"]
 
 
 # --- not enough room to build ----------------------------------------
@@ -278,6 +361,7 @@ async def test_a_build_scratch_cannot_hold_is_refused_before_a_byte_moves(build)
     assert calls["uploaded"] == []
     assert calls["built"] == []
     assert _reasons(calls) == [REASON_KEY_STORAGE_FULL]
+    assert _outcomes(calls) == ["failed"]
 
 
 async def test_the_room_a_build_demands_is_its_own_figure_not_the_add_paths(build):
@@ -328,6 +412,7 @@ async def test_a_segment_failing_its_check_publishes_nothing(build, broken_probe
 
     assert calls["built"] == [], "no swap was recorded, so nothing points at this build"
     assert _reasons(calls) == [REASON_KEY_CHECKS]
+    assert _outcomes(calls) == ["failed"]
 
 
 async def test_a_segment_failing_its_check_takes_the_earlier_uploads_with_it(build):
@@ -356,6 +441,7 @@ async def test_ffmpeg_failing_is_reported_as_an_assembly_failure_not_a_check_one
 
     assert _reasons(calls) == [REASON_KEY_ASSEMBLY]
     assert calls["uploaded"] == []
+    assert _outcomes(calls) == ["failed"]
 
 
 async def test_a_failed_build_leaves_nothing_in_scratch(build):
@@ -381,6 +467,7 @@ async def test_a_playlist_whose_clips_were_all_deleted_downloads_nothing(build):
 
     assert calls["downloaded"] == []
     assert _reasons(calls) == [REASON_KEY_EMPTY]
+    assert _outcomes(calls) == ["failed"]
 
 
 async def test_a_deleted_clip_drops_out_and_the_rest_are_still_assembled(build):
@@ -399,6 +486,7 @@ async def test_a_deleted_clip_drops_out_and_the_rest_are_still_assembled(build):
     _id, mode, artifacts = calls["built"][0]
     assert mode == "hls"
     assert [a["position"] for a in artifacts] == [1, 3]
+    assert _outcomes(calls) == ["done"]
 
 
 # --- rebuilds, and the generation a rebuild replaces ------------------
@@ -428,18 +516,72 @@ async def test_a_rebuild_writes_fresh_keys_and_deletes_nothing(build):
     assert calls["aborted"] == []
 
 
-# --- the queue around it ----------------------------------------------
+# --- progress and cancellation (this plan) -----------------------------
 
 
-@contextlib.asynccontextmanager
-async def _running(queue, pool):
-    task = asyncio.create_task(queue.run(pool))
-    try:
-        yield
-    finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+async def test_the_combined_percentage_advances_across_segments(build):
+    """The reported percentage combines how many segments are already
+    done with the current one's own progress -- for two equal-size
+    members, each fully finishing in a single reported block, that is
+    50% after the first and 100% after the second.
+    """
+    state, calls = build
+
+    await _run()
+
+    working = [h for h in calls["heartbeats"] if h["stage"] == "working"]
+    assert [h["progress_pct"] for h in working] == [50.0, 100.0]
+
+    uploading = [h for h in calls["heartbeats"] if h["stage"] == "uploading"]
+    assert len(uploading) == 2, "the uploading stage is set once per segment, same as the addition consumer's own"
+
+
+async def test_a_cancel_mid_build_discards_the_segment_already_uploaded_and_finishes_cancelled(
+    build,
+):
+    """The operator's cancel button, answered through the first segment's
+    own `uploading`-stage heartbeat (index 1: the second heartbeat this
+    build writes, after the first segment's `working` heartbeat at index
+    0) -- honoured before the second segment's download ever starts. What
+    the first segment already uploaded is discarded, and the job finishes
+    `cancelled`, not `failed`: an operator's decision is not a fault.
+    """
+    state, calls = build
+    state["cancel_after_heartbeat_index"] = 1
+
+    await _run()
+
+    keys = _uploaded_keys(calls)
+    assert len(keys) == 1, "only the first segment ever reached the bucket"
+    assert calls["aborted"] == keys
+    assert calls["deleted"] == keys
+    assert calls["downloaded"] == [
+        ("member-1.mp4", str(state["work_dir"] / "playlist-a-0-source"))
+    ]
+    assert calls["built"] == [], "a cancelled build never reaches the swap"
+    assert calls["failed"] == [], "a cancellation is not recorded as a refusal"
+    assert _outcomes(calls) == ["cancelled"]
+
+
+async def test_a_cancel_reported_by_the_runner_itself_is_also_honoured(build):
+    """`run_ffmpeg_with_progress` can report `cancelled=True` on its own
+    return value too (the real runner does this when its own cancellation
+    watcher stops the process mid-block) -- this build must not need a
+    second heartbeat round trip to notice.
+    """
+    state, calls = build
+    state["members"] = [_member(1)]
+    state["cancel_after_heartbeat_index"] = 0
+
+    await _run()
+
+    assert calls["uploaded"] == [], "the single segment never finished its own copy"
+    assert calls["built"] == []
+    assert calls["failed"] == []
+    assert _outcomes(calls) == ["cancelled"]
+
+
+# --- the queue around it ------------------------------------------------
 
 
 async def _until(predicate, timeout=5.0):
@@ -448,25 +590,42 @@ async def _until(predicate, timeout=5.0):
             await asyncio.sleep(0)
 
 
+@contextlib.asynccontextmanager
+async def _running_consumer(pool, *, poll_interval=0.01):
+    task = asyncio.create_task(run_playlist_consumer(pool, poll_interval=poll_interval))
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 async def test_two_saves_in_a_row_build_one_after_the_other_from_a_fresh_read(build):
     """A job carries a playlist identifier and nothing else, so what gets
     built is the membership in the catalog when the build starts, not the
     one that was on screen when save was pressed. Two saves in a row are
     ordinary; a job carrying a snapshot from the first would build the
-    wrong list.
+    wrong list. Driven through `run_playlist_consumer`'s own claiming
+    loop now, not a direct `.enqueue()` call onto an in-memory queue.
     """
     state, calls = build
     state["members"] = lambda read_index: (
         [_member(1)] if read_index == 0 else [_member(1), _member(2)]
     )
 
-    queue = PlaylistBuildQueue()
-    async with _running(queue, _PoolLike()):
-        await queue.enqueue(PlaylistBuildJob(playlist_id="playlist-a"))
-        await queue.enqueue(PlaylistBuildJob(playlist_id="playlist-a"))
+    # Both claims pushed up front, exactly as two saves in a row would
+    # leave two real rows sitting in the table at once -- what is under
+    # test is that the consumer's own one-claim-at-a-time loop, not this
+    # test's own timing, is what keeps the second build's read from
+    # starting until the first one's swap has completed.
+    state["pending_claims"].append(_claim_row("playlist-a"))
+    state["pending_claims"].append(_claim_row("playlist-a"))
+
+    async with _running_consumer(_PoolLike()):
         await _until(lambda: len(calls["built"]) == 2)
 
-    assert [kind for kind, _id in calls["events"]] == [
+    assert [kind for kind, _id in calls["events"] if kind in ("read", "built")] == [
         "read",
         "built",
         "read",
@@ -485,14 +644,29 @@ async def test_one_build_blowing_up_does_not_stop_the_next(build):
     state["ffmpeg_error"] = remux.RemuxError("ffmpeg exited 1")
     state["record_failure_error"] = RuntimeError("the catalog write exploded")
 
-    queue = PlaylistBuildQueue()
-    async with _running(queue, _PoolLike()):
-        await queue.enqueue(PlaylistBuildJob(playlist_id="doomed"))
+    async with _running_consumer(_PoolLike()):
+        state["pending_claims"].append(_claim_row("doomed"))
         await _until(lambda: len(calls["failed"]) == 1)
 
         state["ffmpeg_error"] = None
         state["record_failure_error"] = None
-        await queue.enqueue(PlaylistBuildJob(playlist_id="playlist-b"))
+        state["pending_claims"].append(_claim_row("playlist-b"))
         await _until(lambda: len(calls["built"]) == 1)
 
     assert calls["built"][0][0] == "playlist-b"
+
+
+async def test_the_consumer_sleeps_and_retries_when_the_queue_is_empty(build):
+    """No claim available -> the loop sleeps `poll_interval` and asks
+    again, rather than busy-looping or giving up.
+    """
+    state, calls = build
+
+    async with _running_consumer(_PoolLike(), poll_interval=0.01):
+        await asyncio.sleep(0.05)
+        assert calls["built"] == [] and calls["failed"] == []
+
+        state["pending_claims"].append(_claim_row("late-arrival"))
+        await _until(lambda: len(calls["built"]) == 1)
+
+    assert calls["built"][0][0] == "late-arrival"

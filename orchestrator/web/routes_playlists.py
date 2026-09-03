@@ -32,7 +32,6 @@ from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media import playlist_build
-from orchestrator.media.playlist_queue import PlaylistBuildJob
 from orchestrator.reaper import reap_playlists_once
 from orchestrator.resolve import external_base_url
 from orchestrator.signing import blob_path, sign_object_key
@@ -89,28 +88,22 @@ def _signed_blob_url(request: Request, object_key: str) -> str:
 
 
 async def _enqueue_build(request: Request, playlist_id) -> None:
-    """Hand the assembly off to the background worker and come straight
-    back, the way the add route returns before its own work happens.
+    """Insert a queued `playlist` job row and come straight back, the way
+    the add route returns before its own work happens.
 
     Save is the one trigger. Adding, removing or moving a member does not
     rebuild: a burst of arrow clicks would otherwise start a burst of
     multi-gigabyte builds, and the screen already carries a save button
     and a note about when a change reaches a viewer.
 
-    `getattr` rather than a bare attribute because the queue is created in
-    the application lifespan, and the unit tests for these screens drive
-    the app without one -- a save in that setting has nothing to enqueue
-    onto and must not raise on the way to its redirect.
+    The row is durable the instant this insert commits -- there is no
+    in-memory handle to be missing here any more, unlike before this
+    plan, when the unit tests for these screens drove the app with no
+    queue object attached at all.
     """
-    queue = getattr(request.app.state, "playlist_queue", None)
-    if queue is None:
-        logger.warning(
-            "no build worker on this application: playlist %s was saved but "
-            "nothing will assemble it",
-            playlist_id,
-        )
-        return
-    await queue.enqueue(PlaylistBuildJob(playlist_id=playlist_id))
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        await queries.enqueue_job(conn, kind="playlist", playlist_id=playlist_id)
 
 
 @router.get("/playlists/new")
