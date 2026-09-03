@@ -1,3 +1,4 @@
+import functools
 import os
 import re
 import subprocess
@@ -17,6 +18,46 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Exported so test modules can build a matching `X-Forwarded-Host` header
 # without retyping the string.
 ADMIN_FQDN = "admin.mytube.example"
+
+# The worker-facing bearer token, forward-compatible with the field
+# `MYTUBE_WORKER_TOKEN` will become once a later plan makes it required.
+# Exported so test modules can build a matching `Authorization` header
+# without retyping the string.
+WORKER_TOKEN = "test-worker-token-do-not-use-in-prod"
+
+
+@functools.lru_cache(maxsize=1)
+def _docker_daemon_reachable() -> bool:
+    """Probed once per session and cached -- a probe per test would add a
+    subprocess call to every one of them. `docker info` is used rather
+    than a bare `docker ps` because it fails fast and unambiguously when
+    no daemon is listening, without needing an image pulled first.
+    """
+    try:
+        subprocess.run(
+            ["docker", "info"], capture_output=True, timeout=5, check=True
+        )
+        return True
+    except Exception:
+        return False
+
+
+def pytest_collection_modifyitems(config, items):
+    """Makes the `integration` marker mean what this suite's own docstrings
+    already claim it means: skipped, not errored, when the Docker daemon
+    the testcontainers-backed fixtures need is unreachable. Before this
+    hook, the marker was only registered in pyproject.toml -- nothing
+    acted on it, so a run with no Docker daemon errored deep inside the
+    `postgres_url` container fixture instead of skipping cleanly.
+    """
+    if _docker_daemon_reachable():
+        return
+    skip_no_docker = pytest.mark.skip(
+        reason="Docker daemon unreachable -- integration tests skipped"
+    )
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_no_docker)
 
 
 @pytest.fixture
@@ -39,6 +80,12 @@ def settings(monkeypatch):
     # stays green on this edit alone. It stops being a no-op the moment
     # plan 04 makes the field required.
     monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
+    # Forward-compatible, same reasoning as MYTUBE_ADMIN_FQDN above: this
+    # field does not exist on Settings yet, so this edit is a no-op today
+    # and stops being one the moment a later plan makes the field required
+    # with no default -- done here, in wave 1, so that edit does not turn
+    # the entire suite red in a later wave.
+    monkeypatch.setenv("MYTUBE_WORKER_TOKEN", WORKER_TOKEN)
 
     from orchestrator.config import Settings
 
@@ -108,6 +155,7 @@ def migrated_db_url(postgres_url) -> str:
         "MYTUBE_S3_SECRET": "test-secret",
         "MYTUBE_PUBLIC_BASE_URL": "https://mytube.example",
         "MYTUBE_ADMIN_FQDN": ADMIN_FQDN,
+        "MYTUBE_WORKER_TOKEN": WORKER_TOKEN,
     }
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
