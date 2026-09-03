@@ -81,6 +81,7 @@ async def create_title_with_edition(
     source_path: str | None = None,
     audio_stream_index: int | None = None,
     audio_channels: int | None = None,
+    stereo_layout: str | None = None,
 ):
     """One transaction: title, season #1, episode #1, edition, and the
     slug's first history row -- then point episode.default_edition_id at
@@ -95,6 +96,15 @@ async def create_title_with_edition(
     also ride on the `remux` job row itself once one is enqueued
     (`enqueue_job`); `audio_channels` stays edition-side only, read back
     by `edition_for_remux` when the addition consumer claims that job.
+
+    `stereo_layout` is stored here only for the as-is (remux) branch,
+    which never gets a second chance to record it (D-139): a file that
+    arrives already stereo-compatible takes this path and this is the one
+    write that ever happens for it. A convert branch leaves this `None`
+    here on purpose -- its own edition's layout is recorded once the
+    conversion actually reports done, through
+    `set_edition_conversion_detail`, so the two stay one write each rather
+    than the as-is branch writing it twice.
 
     The slug_history insert is delegated to `reuse_slug`: mechanically it is
     the exact same statement whether `slug` is brand new or is a tombstoned
@@ -153,8 +163,8 @@ async def create_title_with_edition(
             """
             INSERT INTO editions (
                 id, episode_id, object_key, source_path,
-                audio_stream_index, audio_channels
-            ) VALUES ($1, $2, $3, $4, $5, $6)
+                audio_stream_index, audio_channels, stereo_layout
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
             edition_id,
             episode_id,
@@ -162,6 +172,7 @@ async def create_title_with_edition(
             source_path,
             audio_stream_index,
             audio_channels,
+            stereo_layout,
         )
         await conn.execute(
             "UPDATE episodes SET default_edition_id = $1 WHERE id = $2",
@@ -415,6 +426,15 @@ async def editions_by_source_paths(
     Each row carries the edition's source_path, the title's name and
     status, and the title's *current* slug (via slug_history) -- the
     listing links to /v/{slug}, not to the edition id.
+
+    `edition_kind` (CONV-01/D-147) is the `kind` of the earliest `jobs` row
+    ever created for this title -- `'remux'` for an as-is addition,
+    `'transcode'` for a conversion, or `None` for a title this phase never
+    queued a job for at all (every title the CLI creates directly, from
+    before this phase existed). The add form's second-edition gate (D-147)
+    only ever fires when this is a real, known kind that differs from the
+    action about to be taken -- a `None` here is "unknown", not "same",
+    and is never treated as a mismatch.
     """
     if not paths:
         return []
@@ -425,7 +445,13 @@ async def editions_by_source_paths(
             t.id AS title_id,
             t.name AS title_name,
             t.status AS title_status,
-            sh.slug AS slug
+            sh.slug AS slug,
+            (
+                SELECT j.kind FROM jobs j
+                WHERE j.title_id = t.id
+                ORDER BY j.created_at
+                LIMIT 1
+            ) AS edition_kind
         FROM editions e
         JOIN episodes ep ON ep.id = e.episode_id
         JOIN seasons s ON s.id = ep.season_id

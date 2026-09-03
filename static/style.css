@@ -729,6 +729,60 @@ button.site-nav__link {
   padding: var(--space-sm) var(--space-xs);
 }
 
+/* Conversion block (04-UI-SPEC.md Screens, Add form item 7) -- the
+   subtitle picker, the 3D-refuses-subtitles note, the preview panel and
+   the convert estimate, all inside one section of the same .add-form.
+   No new custom property, no new colour: the heading reuses
+   .section-heading (already defined above for the playlist assembly
+   screen), the spacing reuses .add-form's own gap. */
+.convert-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+/* The manual subtitle path field, revealed only while its own radio is
+   checked (04-UI-SPEC.md States -> Subtitles, item 5). `:has()` reaches
+   into the radio-group fieldset for the one option's checked state --
+   the input sits inside its own <label>, so a bare `:checked ~` sibling
+   selector cannot see past that wrapper; `:has()` is plain CSS, still no
+   script, and is the mechanism this rule actually needs for the markup
+   shape every other radio option in this project already uses. */
+.manual-path-field {
+  display: none;
+}
+
+.radio-group:has(#subtitle-choice-manual:checked) ~ .manual-path-field {
+  display: flex;
+}
+
+/* The preview panel (04-UI-SPEC.md States -> Preview) -- empty until a
+   render is requested, then holds the frame image, the frame-time field
+   and the "Try another frame" control. Reuses .form-field__input's
+   border/radius for the frame image so it reads as part of the same
+   form, not a foreign element. */
+.preview-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.preview-panel:empty {
+  display: none;
+}
+
+.preview-panel__image {
+  max-width: 100%;
+  border: 1px solid var(--surface-secondary-border);
+  border-radius: 4px;
+}
+
+.preview-panel__error {
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+  margin: 0;
+}
+
 /* Accessible-but-invisible label text (the missing-thumbnail placeholder's
    "No preview available", read by a screen reader, seen by no one). */
 .visually-hidden {

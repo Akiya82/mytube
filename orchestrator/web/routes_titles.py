@@ -42,16 +42,20 @@ an event loop with `GET /v/{slug}` and `/healthz`, and a bucket
 enumeration on a cold cache run bare stops both for its whole duration.
 """
 import asyncio
+import shutil
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse, Response
 
 from mytube_media.compat import ProbeError, audio_tracks, probe
-from mytube_media.share import ShareEscape, safe_join
+from mytube_media.share import ShareEscape, relative_to_root, safe_join
+from mytube_media.stereo3d import LAYOUTS as STEREO_LAYOUTS
+from mytube_media.subtitles import embedded_tracks
+from mytube_media.transcode import bitrate_for_output, output_dimensions, required_free_bytes_for_transcode
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media.add import SlugPlan, plan_slug
@@ -67,6 +71,104 @@ router = APIRouter()
 # created_at -- see that route's own docstring.
 _EPOCH_FALLBACK = datetime.min.replace(tzinfo=timezone.utc)
 
+# The vocabulary a submitted subtitle_choice value may carry (D-140/D-145):
+# no burn-in at all, an embedded stream picked by its absolute ffprobe
+# index (text and bitmap both -- the different rendering path is not the
+# operator's choice to encode), or a sidecar file named by its
+# share-relative path (whether it was one this form found on its own or
+# one the operator typed by hand -- both resolve to the same shape by the
+# time they reach this route, see _parse_subtitle_choice below).
+_SUBTITLE_KIND_NONE = "none"
+_SUBTITLE_KIND_EMBEDDED_PREFIX = "embedded:"
+_SUBTITLE_KIND_EXTERNAL_PREFIX = "external:"
+_SUBTITLE_KIND_MANUAL = "manual"
+
+
+class _ConvertRefused(Exception):
+    """Raised internally to short-circuit the convert branch's own
+    validation -- never a catalog key shown to the operator (this route
+    redraws no template of its own, see the module's own discussion of
+    that simplification), just a signal to answer the same refusal shape
+    every other validation failure in this route already answers with.
+    """
+
+
+async def convert_estimate_seconds(conn, duration_seconds, settings) -> float | None:
+    """D-148's pre-start time estimate: source duration divided by the
+    median realtime factor of recent finished conversions, falling back
+    to the configured constant when no conversion has finished yet. A
+    median, not a mean -- one pathological source must not poison the
+    estimate for weeks. Reads through `queries.median_realtime_factor`
+    rather than any SQL of its own, since the query module is what owns
+    this table (D-148); this function exists so both the GET-rendered
+    form (`routes_share._render_add_form`) and this route's own
+    free-space precheck compute the estimate identically instead of two
+    slightly different formulas drifting apart.
+    """
+    if not duration_seconds:
+        return None
+    factor = await queries.median_realtime_factor(conn, kind="transcode")
+    if not factor:
+        factor = settings.transcode_estimate_realtime_factor
+    if not factor:
+        return None
+    return duration_seconds / factor
+
+
+def _parse_subtitle_choice(
+    value: str, *, manual_path: str, root: Path, rel_path: str
+) -> tuple[str, int | None, str | None]:
+    """`(subtitle_kind, subtitle_stream_index, subtitle_path)` from the
+    form's single `subtitle_choice` radio value, or raises `_ConvertRefused`
+    for anything malformed. `subtitle_path` is always a share-relative
+    string here, never an absolute one and never trusted un-contained --
+    the caller still has to resolve it through `safe_join` before it
+    touches the filesystem (T-04-01); this function only shapes the value,
+    it does not validate it against the share.
+    """
+    if value == _SUBTITLE_KIND_NONE or not value:
+        return "none", None, None
+
+    if value.startswith(_SUBTITLE_KIND_EMBEDDED_PREFIX):
+        raw_index = value[len(_SUBTITLE_KIND_EMBEDDED_PREFIX):]
+        try:
+            return "embedded", int(raw_index), None
+        except ValueError:
+            raise _ConvertRefused() from None
+
+    if value.startswith(_SUBTITLE_KIND_EXTERNAL_PREFIX):
+        rel = value[len(_SUBTITLE_KIND_EXTERNAL_PREFIX):]
+        if not rel:
+            raise _ConvertRefused()
+        return "external", None, rel
+
+    if value == _SUBTITLE_KIND_MANUAL:
+        if not manual_path:
+            raise _ConvertRefused()
+        # Relative to the source's own folder (the copywriting contract's
+        # own placeholder text says so) -- joined onto the source's
+        # share-relative directory, not onto the share root directly, so
+        # "../Subs/movie.srt" reaches a sibling folder the way an operator
+        # typing it beside the source file expects.
+        combined = (PurePosixPath(rel_path).parent / manual_path).as_posix()
+        return "external", None, combined
+
+    raise _ConvertRefused()
+
+
+def _embedded_subtitle_kind(probe_json: dict, stream_index: int) -> str | None:
+    """`"embedded_text"`/`"embedded_bitmap"` for a stream index the probe
+    actually reported among its subtitle streams, `None` otherwise -- the
+    check that keeps a stream index the operator never saw offered from
+    ever reaching the filter chain (T-04-01 in spirit: never trust an
+    index from the form over what the file, re-probed just now, actually
+    has).
+    """
+    for track in embedded_tracks(probe_json):
+        if track.stream_index == stream_index:
+            return track.kind
+    return None
+
 
 @router.post("/add/{path:path}")
 async def add_confirm_route(
@@ -75,10 +177,22 @@ async def add_confirm_route(
     name: str = Form(...),
     slug: str = Form(...),
     audio_track: str = Form(...),
+    stereo_layout: str = Form("2d"),
+    subtitle_choice: str = Form("none"),
+    subtitle_manual_path: str = Form(""),
     confirm_reuse: str = Form("false"),
+    confirm_add_anyway: str = Form("false"),
+    add: str | None = Form(None),
+    convert: str | None = Form(None),
 ):
+    """One address, two branches (D-145) -- which submit control the
+    browser sent (`add` or `convert`, the two buttons' own `name`) decides
+    which runs; a POST naming neither (every pre-existing caller of this
+    route, before this plan) still takes the as-is branch, unchanged.
+    """
     settings = get_settings()
     root = Path(settings.share_root)
+    is_convert = convert is not None
 
     # `rel_path` is the identity the "already added" chip and the
     # duplicate-detection query both key on -- derived from the validated
@@ -100,6 +214,9 @@ async def add_confirm_route(
     except ValueError:
         return _unreachable_response(request, status_code=400)
 
+    if stereo_layout not in STEREO_LAYOUTS:
+        return _unreachable_response(request, status_code=400)
+
     # Re-probed here, not trusted from the form that opened the page (T-02-06):
     # `audio_index` ends up as an ffmpeg stream selector, so it is checked
     # against the file as it is right now, not as it was when the form drew.
@@ -112,6 +229,73 @@ async def add_confirm_route(
     selected = next((t for t in tracks if t.index == audio_index), None)
     if selected is None:
         return _unreachable_response(request, status_code=400)
+
+    clean_subtitle_kind = "none"
+    clean_subtitle_stream_index: int | None = None
+    clean_subtitle_path: str | None = None
+
+    if is_convert:
+        try:
+            raw_kind, raw_stream_index, raw_path = _parse_subtitle_choice(
+                subtitle_choice,
+                manual_path=subtitle_manual_path.strip(),
+                root=root,
+                rel_path=rel_path,
+            )
+        except _ConvertRefused:
+            return _unreachable_response(request, status_code=400)
+
+        # D-140: a stereo source refuses a burn-in outright -- a job that
+        # will refuse itself minutes later on a shared card is a waste of
+        # the operator's time and the card's, so this is checked before
+        # anything is queued, not left to the converter to discover.
+        if stereo_layout != "2d" and raw_kind != "none":
+            return _unreachable_response(request, status_code=400)
+
+        if raw_kind == "embedded":
+            embedded_kind = _embedded_subtitle_kind(probe_json, raw_stream_index)
+            if embedded_kind is None:
+                return _unreachable_response(request, status_code=400)
+            clean_subtitle_kind = embedded_kind
+            clean_subtitle_stream_index = raw_stream_index
+        elif raw_kind == "external":
+            try:
+                subtitle_target = safe_join(root, raw_path)
+            except ShareEscape:
+                return _unreachable_response(request, status_code=400)
+            exists = await asyncio.to_thread(subtitle_target.is_file)
+            if not exists:
+                return _unreachable_response(request, status_code=400)
+            clean_subtitle_kind = "external"
+            clean_subtitle_path = relative_to_root(root, subtitle_target)
+        else:
+            clean_subtitle_kind = "none"
+
+        # The free-space precheck for the conversion path (D-52's
+        # conversion-side equivalent): the source is read over the share
+        # and never copied, so what needs room is the encoded output plus
+        # the +faststart rewrite that follows it -- mytube_media.transcode's
+        # own formula, not the as-is one, since the two paths cost
+        # completely different amounts of scratch space.
+        duration_seconds = probe_json.get("format", {}).get("duration")
+        try:
+            duration_seconds = float(duration_seconds)
+        except (TypeError, ValueError):
+            duration_seconds = None
+        video = next(
+            (s for s in probe_json["streams"] if s.get("codec_type") == "video"), None
+        )
+        if duration_seconds and video is not None:
+            out_w, out_h = output_dimensions(
+                video.get("width") or 0, video.get("height") or 0, stereo_layout
+            )
+            target_bitrate = bitrate_for_output(out_w, out_h, stereo_layout)
+            required = required_free_bytes_for_transcode(target_bitrate, duration_seconds)
+            free_bytes = await asyncio.to_thread(
+                lambda: shutil.disk_usage(settings.work_dir).free
+            )
+            if free_bytes < required:
+                return _unreachable_response(request, status_code=400)
 
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
@@ -136,6 +320,23 @@ async def add_confirm_route(
                 # refused the same way the CLI's --reuse-slug refuses it.
                 return _unreachable_response(request, status_code=400)
 
+            # D-147's second-edition gate, enforced here too -- a form can
+            # be submitted with no page's own control at all, and this is
+            # the check that actually decides. Only fires when the
+            # existing edition's own kind is known and differs from the
+            # action about to be taken; a title this phase never queued a
+            # job for (edition_kind None) is not treated as a mismatch.
+            existing_rows = await queries.editions_by_source_paths(conn, [rel_path])
+            existing = existing_rows[0] if existing_rows else None
+            actioned_kind = "transcode" if is_convert else "remux"
+            if (
+                existing is not None
+                and existing["edition_kind"] is not None
+                and existing["edition_kind"] != actioned_kind
+                and confirm_add_anyway != "true"
+            ):
+                return _unreachable_response(request, status_code=400)
+
             edition_id = uuid.uuid4()
             object_key = f"{edition_id}.mp4"
             title_id = await queries.create_title_with_edition(
@@ -148,24 +349,46 @@ async def add_confirm_route(
                 source_path=rel_path,
                 audio_stream_index=audio_index,
                 audio_channels=selected.channels,
+                # D-139: both actions carry the layout selector and both
+                # store what it says -- a file that arrives already
+                # stereo-compatible takes this as-is path, and it is the
+                # one that most needs the badge. The convert branch stores
+                # its own layout later, once the conversion reports done
+                # (see routes_worker.done_route's own
+                # set_edition_conversion_detail call) -- not here, so the
+                # edition is never written twice for the same fact.
+                stereo_layout=None if is_convert else stereo_layout,
             )
 
             # The row is written and the response returns before the
-            # actual remux/upload work happens (D-49) -- the durable
-            # `jobs` table row is what the addition consumer
-            # (`orchestrator.media.queue.run_add_consumer`) claims, not an
-            # in-memory handle. Inserted inside the same transaction as
-            # the title/edition themselves, so a crash between the two
-            # can never leave a 'preparing' title with nothing queued to
-            # work it.
-            await queries.enqueue_job(
-                conn,
-                kind="remux",
-                title_id=title_id,
-                edition_id=edition_id,
-                source_path=rel_path,
-                audio_stream_index=audio_index,
-            )
+            # actual work happens (D-49) -- the durable `jobs` table row
+            # is what the matching consumer claims, not an in-memory
+            # handle. Inserted inside the same transaction as the
+            # title/edition themselves, so a crash between the two can
+            # never leave a 'preparing' title with nothing queued to work
+            # it.
+            if is_convert:
+                await queries.enqueue_job(
+                    conn,
+                    kind="transcode",
+                    title_id=title_id,
+                    edition_id=edition_id,
+                    source_path=rel_path,
+                    audio_stream_index=audio_index,
+                    subtitle_kind=clean_subtitle_kind,
+                    subtitle_stream_index=clean_subtitle_stream_index,
+                    subtitle_path=clean_subtitle_path,
+                    stereo_layout=stereo_layout,
+                )
+            else:
+                await queries.enqueue_job(
+                    conn,
+                    kind="remux",
+                    title_id=title_id,
+                    edition_id=edition_id,
+                    source_path=rel_path,
+                    audio_stream_index=audio_index,
+                )
 
     return RedirectResponse("/library", status_code=302)
 

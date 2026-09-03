@@ -28,8 +28,28 @@ def _fixture(name: str) -> dict:
     return json.loads((FIXTURES_DIR / name).read_text(encoding="utf-8"))
 
 
+class _DummyTxCtx:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
 class _DummyConn:
-    pass
+    """A stand-in `asyncpg.Connection` for the POST route's own
+    transaction/advisory-lock statements -- `create_title_with_edition`
+    and `enqueue_job` are stubbed out entirely by the tests that need
+    them, so nothing here ever reaches real SQL; only the route's own
+    `async with conn.transaction():` / `conn.execute(...)` wrapper needs
+    something to call.
+    """
+
+    def transaction(self):
+        return _DummyTxCtx()
+
+    async def execute(self, *args, **kwargs):
+        return None
 
 
 class _DummyAcquireCtx:
@@ -82,8 +102,14 @@ def db_stub(monkeypatch):
         resolve_slug_result = None
         taken_slugs_result: set[str] = set()
         already_added_rows: list[dict] = []
+        median_realtime_factor_result = None
+        create_title_calls: list[dict] = []
+        enqueue_job_calls: list[dict] = []
+        create_title_id = "11111111-1111-1111-1111-111111111111"
 
     stub = _Stub()
+    stub.create_title_calls = []
+    stub.enqueue_job_calls = []
 
     async def _resolve_slug(conn, slug):
         return stub.resolve_slug_result
@@ -94,9 +120,25 @@ def db_stub(monkeypatch):
     async def _editions_by_source_paths(conn, paths):
         return stub.already_added_rows
 
+    async def _median_realtime_factor(conn, kind="transcode", last_n=20):
+        return stub.median_realtime_factor_result
+
+    async def _create_title_with_edition(conn, name, slug, edition_id, object_key, **kwargs):
+        stub.create_title_calls.append(
+            {"name": name, "slug": slug, "edition_id": edition_id, "object_key": object_key, **kwargs}
+        )
+        return stub.create_title_id
+
+    async def _enqueue_job(conn, **kwargs):
+        stub.enqueue_job_calls.append(kwargs)
+        return "22222222-2222-2222-2222-222222222222"
+
     monkeypatch.setattr(queries, "resolve_slug", _resolve_slug)
     monkeypatch.setattr(queries, "taken_slugs", _taken_slugs)
     monkeypatch.setattr(queries, "editions_by_source_paths", _editions_by_source_paths)
+    monkeypatch.setattr(queries, "median_realtime_factor", _median_realtime_factor)
+    monkeypatch.setattr(queries, "create_title_with_edition", _create_title_with_edition)
+    monkeypatch.setattr(queries, "enqueue_job", _enqueue_job)
     return stub
 
 
@@ -160,8 +202,11 @@ async def test_incompatible_file_renders_no_enabled_add_control_and_disabled_con
         resp = await web_client.get("/add/a-video.mp4")
 
     assert resp.status_code == 200
-    assert 'type="submit"' not in resp.text
-    assert 'type="button" class="btn btn--secondary" disabled' in resp.text
+    # No "Add as-is" control at all (still not eligible) -- but Convert
+    # is now live for any readable file, compatible or not (CONV-01).
+    assert 'name="add"' not in resp.text
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "disabled" not in convert_tag
     assert "hevc" in resp.text  # reason.codec's {codec} parameter
 
 
@@ -170,7 +215,9 @@ async def test_silent_file_renders_no_add_control_and_explains_why(
 ):
     """The third state the form must never reach: a live Add button over a
     track picker with no options, whose POST can only answer the required
-    audio_track field with a 422.
+    audio_track field with a 422. A conversion needs a track chosen
+    exactly as a copy does (Amendment 2), so a source with none has no
+    live action at all -- Convert renders, disabled.
     """
     monkeypatch.setattr(routes_share, "probe", _probe_returning("no_audio.json"))
 
@@ -178,8 +225,10 @@ async def test_silent_file_renders_no_add_control_and_explains_why(
         resp = await web_client.get("/add/a-video.mp4")
 
     assert resp.status_code == 200
-    assert 'type="submit"' not in resp.text
+    assert 'name="add"' not in resp.text
     assert 'name="audio_track"' not in resp.text
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "disabled" in convert_tag
     assert "no audio track" in resp.text.lower()
 
 
@@ -384,6 +433,7 @@ async def test_already_added_banner_names_existing_title_and_submit_stays_enable
             "title_name": "Existing Title",
             "title_status": "active",
             "slug": "existing-title-slug",
+            "edition_kind": "remux",
         }
     ]
 
@@ -394,6 +444,174 @@ async def test_already_added_banner_names_existing_title_and_submit_stays_enable
     assert "/v/existing-title-slug" in resp.text
     submit_tag = resp.text.split('type="submit"')[1].split(">")[0]
     assert "disabled" not in submit_tag
+
+
+# --- the layout selector ------------------------------------------------
+
+
+async def test_layout_selector_preselects_from_detection_and_names_its_source(
+    web_client, monkeypatch
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("stereo_sbs_tag.json"))
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert 'name="stereo_layout" value="sbs_full" checked' in resp.text
+    assert "Detected from the file" in resp.text
+
+
+async def test_layout_selector_defaults_to_2d_with_none_detected_caption(
+    web_client, monkeypatch
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert 'name="stereo_layout" value="2d" checked' in resp.text
+    assert "Not detected, defaulting to 2D." in resp.text
+
+
+# --- the subtitle group --------------------------------------------------
+
+
+async def test_subtitle_group_lists_embedded_tracks_and_defaults_to_none(
+    web_client, monkeypatch
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("subtitles_mixed.json"))
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert 'name="subtitle_choice" value="none" checked' in resp.text
+    assert 'name="subtitle_choice" value="embedded:2"' in resp.text
+    assert 'name="subtitle_choice" value="embedded:3"' in resp.text
+    assert "Russian" in resp.text
+    assert "English" in resp.text
+
+
+async def test_manual_path_reveal_is_script_free_css_only(web_client, monkeypatch):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert 'id="subtitle-choice-manual"' in resp.text
+    assert 'name="subtitle_manual_path"' in resp.text
+    # No inline script and no data-* hook driving the reveal -- it is a
+    # plain radio input plus a plain text field, shown or hidden by
+    # style.css's own :has() rule alone.
+    assert "<script>" not in resp.text
+
+
+async def test_subtitle_group_is_disabled_under_a_stereo_layout(web_client, monkeypatch):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("stereo_sbs_tag.json"))
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert "can" in resp.text and "subtitles burned in during conversion" in resp.text
+    assert 'name="subtitle_choice" value="embedded' not in resp.text
+
+
+# --- the second-edition gate (D-147) -------------------------------------
+
+
+async def test_second_edition_gate_blocks_convert_when_existing_is_remux(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [
+        {
+            "source_path": "a-video.mp4",
+            "title_id": "existing-id",
+            "title_name": "Existing Title",
+            "title_status": "active",
+            "slug": "existing-title-slug",
+            "edition_kind": "remux",
+        }
+    ]
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    assert "disabled" not in add_tag
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "disabled" in convert_tag
+    assert "Add anyway" in resp.text
+
+
+async def test_second_edition_gate_is_lifted_once_confirmed(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [
+        {
+            "source_path": "a-video.mp4",
+            "title_id": "existing-id",
+            "title_name": "Existing Title",
+            "title_status": "active",
+            "slug": "existing-title-slug",
+            "edition_kind": "remux",
+        }
+    ]
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4?confirm_add_anyway=1")
+
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "disabled" not in convert_tag
+
+
+async def test_second_edition_gate_does_not_fire_for_a_title_with_no_known_job_kind(
+    web_client, monkeypatch, db_stub
+):
+    """A title the CLI created directly, before this phase, carries no
+    `jobs` row and so no known `edition_kind` -- unknown is never treated
+    as a mismatch.
+    """
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [
+        {
+            "source_path": "a-video.mp4",
+            "title_id": "existing-id",
+            "title_name": "Existing Title",
+            "title_status": "active",
+            "slug": "existing-title-slug",
+            "edition_kind": None,
+        }
+    ]
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    assert "disabled" not in add_tag
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "disabled" not in convert_tag
+
+
+# --- which action is primary ---------------------------------------------
+
+
+async def test_add_as_is_is_primary_when_compatible(web_client, monkeypatch):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert 'name="add" value="1" class="btn btn--primary"' in resp.text
+    assert 'name="convert" value="1" class="btn btn--secondary"' in resp.text
+
+
+async def test_convert_is_primary_when_incompatible(web_client, monkeypatch):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("hevc.json"))
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert 'name="add"' not in resp.text
+    assert 'name="convert" value="1" class="btn btn--primary"' in resp.text
 
 
 # --- cost line / free space --------------------------------------------

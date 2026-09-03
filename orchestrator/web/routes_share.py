@@ -29,6 +29,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
 from mytube_media.compat import ProbeError, analyze, moov_before_mdat, probe
+from mytube_media.subtitles import external_tracks
+from mytube_media.transcode import (
+    bitrate_for_output,
+    output_dimensions,
+    required_free_bytes_for_transcode,
+)
 from mytube_media.share import (
     ShareEscape,
     ShareUnavailable,
@@ -127,7 +133,35 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
             moov_first = False
         verdict = analyze(probe_json, moov_first=moov_first, filename=entry_name)
 
+    # External subtitle sidecars (D-122) -- a filesystem-only search, no
+    # probe needed, but scoped to a readable/probed source anyway (Screen
+    # 2 hierarchy item 2: an unprobed file shows no track picker of any
+    # kind, embedded or external). Runs off the event loop like every
+    # other filesystem walk this route makes.
+    root = Path(settings.share_root)
+    subtitle_tracks_external: list[dict] = []
+    if verdict is not None:
+        try:
+            found = await asyncio.to_thread(external_tracks, target, root)
+        except (OSError, TypeError):
+            # Best-effort: a sidecar scan going wrong (an unreadable
+            # directory, or -- in one existing test's own deliberate
+            # dangerous-path double -- a stand-in object that is not a
+            # real Path) never breaks the rest of the form (T-04-01
+            # already covers the containment side of this, not the
+            # filesystem-availability side).
+            found = []
+        for track in found:
+            try:
+                rel = relative_to_root(root, Path(track.path))
+            except ValueError:
+                continue
+            subtitle_tracks_external.append(
+                {"rel_path": rel, "name": Path(track.path).name, "language": track.language}
+            )
+
     pool = request.app.state.db_pool
+    convert_estimate_value = None
     async with pool.acquire() as conn:
         try:
             slug_plan: SlugPlan = await plan_slug(conn, entry_name)
@@ -142,9 +176,22 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
 
         already_added_rows = await queries.editions_by_source_paths(conn, [rel_path])
 
+        if verdict is not None and verdict.duration_seconds:
+            # Local import: routes_titles.py already imports this module
+            # for _resolve_share_path/_unreachable_response, so importing
+            # it back at module scope here would be circular. Deferred
+            # until this function actually runs, by which point both
+            # modules have finished loading.
+            from orchestrator.web.routes_titles import convert_estimate_seconds
+
+            convert_estimate_value = await convert_estimate_seconds(
+                conn, verdict.duration_seconds, settings
+            )
+
     already_added = already_added_rows[0] if already_added_rows else None
 
     reuse_confirmed = request.query_params.get("confirm_reuse") == "1"
+    add_anyway_confirmed = request.query_params.get("confirm_add_anyway") == "1"
 
     try:
         size_bytes = await asyncio.to_thread(lambda: target.stat().st_size)
@@ -161,15 +208,57 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         size_bytes, already_correct=already_correct
     )
 
+    # The conversion path's own free-space precheck (D-52's conversion
+    # equivalent) -- the encoded output plus the +faststart rewrite, never
+    # the as-is formula, since the source is never copied for this path.
+    not_enough_space_convert = False
+    if verdict is not None:
+        out_w, out_h = output_dimensions(
+            verdict.width or 0, verdict.height or 0, verdict.stereo_layout
+        )
+        target_bitrate = bitrate_for_output(out_w, out_h, verdict.stereo_layout)
+        if verdict.duration_seconds:
+            required_convert_bytes = required_free_bytes_for_transcode(
+                target_bitrate, verdict.duration_seconds
+            )
+            not_enough_space_convert = free_bytes < required_convert_bytes
+
     estimate_seconds = 0.0
     if settings.add_estimate_mb_per_second > 0:
         estimate_seconds = size_bytes / (settings.add_estimate_mb_per_second * 1024 * 1024)
+
+    # D-147: the second-edition gate applies to at most one of the two
+    # actions at a time -- the existing edition is either a remux or a
+    # transcode, never both, so only the action that would create a
+    # *different* kind ever needs the confirm-first control.
+    differs_add = already_added is not None and already_added["edition_kind"] == "transcode"
+    differs_convert = already_added is not None and already_added["edition_kind"] == "remux"
 
     can_add = bool(
         verdict is not None
         and verdict.eligible
         and (not slug_plan.is_tombstone or reuse_confirmed)
         and not not_enough_space
+        and not (differs_add and not add_anyway_confirmed)
+    )
+
+    can_convert = bool(
+        verdict is not None
+        and verdict.tracks
+        # A conversion needs an audio track chosen exactly as a copy does
+        # (Amendment 2) -- a source with none has no add path either way
+        # (see analyze()'s own reason.no_audio branch).
+        and (not slug_plan.is_tombstone or reuse_confirmed)
+        and not not_enough_space_convert
+        and not (differs_convert and not add_anyway_confirmed)
+    )
+
+    # Computed here, not concatenated in the template: the template-key
+    # scan test_i18n.py::test_every_template_translation_key_exists_in_both_catalogs
+    # runs looks for a literal t("...") string and would otherwise flag
+    # the shared prefix "layout.detected." itself as if it were a key.
+    layout_detected_key = (
+        "layout.detected." + verdict.stereo_layout_source if verdict is not None else None
     )
 
     return render(
@@ -178,15 +267,24 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         entry_name=entry_name,
         rel_path=rel_path,
         verdict=verdict,
+        layout_detected_key=layout_detected_key,
         probe_failed=probe_json is None,
         slug_plan=slug_plan,
         already_added=already_added,
+        differs_add=differs_add,
+        differs_convert=differs_convert,
         reuse_confirmed=reuse_confirmed,
+        add_anyway_confirmed=add_anyway_confirmed,
         size_bytes=size_bytes,
         estimate_seconds=estimate_seconds,
         not_enough_space=not_enough_space,
+        not_enough_space_convert=not_enough_space_convert,
+        convert_estimate_seconds=convert_estimate_value,
+        subtitle_tracks_external=subtitle_tracks_external,
         can_add=can_add,
+        can_convert=can_convert,
         reuse_href=_href(rel_path) + "?confirm_reuse=1",
+        add_anyway_href=_href(rel_path) + "?confirm_add_anyway=1",
         form_action=_href(rel_path),
     )
 
