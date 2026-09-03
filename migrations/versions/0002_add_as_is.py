@@ -25,9 +25,9 @@ depends_on = None
 def upgrade() -> None:
     # titles.failure_reason holds a TRANSLATION CATALOG KEY, never a
     # sentence -- the interface is localized (D-66), so an English sentence
-    # stored here would be untranslatable at render time. Values look like
-    # "failed.reason.upload" or "failed.reason.interrupted", matching the
-    # keys already living in orchestrator/locales/{en,ru}.json.
+    # stored here would be untranslatable at render time. A value looks
+    # like "failed.reason.upload", matching the keys already living in
+    # orchestrator/locales/{en,ru}.json.
     op.execute("ALTER TABLE titles ADD COLUMN failure_reason text")
 
     # titles.started_at: null while a title is only queued, set the moment

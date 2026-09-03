@@ -3,11 +3,13 @@
 /healthz, plus /v/{slug} and /refresh/{edition_id} (plan 04, D-04/D-06/D-08/
 D-09), plus the delayed-delete reaper (D-13) running as a background task
 for the lifetime of the process. Also the share-browsing interface (D-57
-onward): /static/ assets and the share router. The add worker (D-49/D-50)
-is a second lifespan-scoped background task, started and cancelled exactly
-the way the reaper task already is -- see orchestrator.media.queue. The
-playlist build worker is a third, in the same shape -- see
-orchestrator.media.playlist_queue.
+onward): /static/ assets and the share router. The addition consumer
+(D-49/D-50, D-118) is a second lifespan-scoped background task, started
+and cancelled exactly the way the reaper task already is -- see
+orchestrator.media.queue.run_add_consumer. The assembly consumer is a
+third, in the same shape and entirely independent of the addition
+consumer's own loop -- see
+orchestrator.media.playlist_queue.run_playlist_consumer.
 
 Two pieces of middleware run here, in this order (D-75, D-83):
 `auth.auth_gate`, registered last and therefore outermost, closes the
@@ -25,7 +27,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import asyncpg
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -33,11 +34,10 @@ from fastapi.staticfiles import StaticFiles
 from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import create_pool, queries
-from orchestrator.media.playlist_queue import PlaylistBuildQueue
-from orchestrator.media.queue import AddJob, AddQueue
+from orchestrator.media.playlist_queue import run_playlist_consumer
+from orchestrator.media.queue import run_add_consumer
 from orchestrator.reaper import run_reaper
 from orchestrator.resolve import router as resolve_router
-from orchestrator.storage import abort_dangling_multipart, delete_object
 from orchestrator.web.routes_auth import router as auth_router
 from orchestrator.web.routes_playlists import router as playlists_router
 from orchestrator.web.routes_share import router as share_router
@@ -47,75 +47,35 @@ from orchestrator.web.routes_worker import router as worker_router
 STATIC_DIR = Path(__file__).parents[1] / "static"
 logger = logging.getLogger(__name__)
 
+# How often each consumer polls the durable queue when it finds nothing to
+# claim (D-118). The trade this makes: shorter means an addition or an
+# assembly starts sooner after it is confirmed; longer means fewer idle
+# queries against a queue that is empty most of the time. Weighted toward
+# the operator noticing a prompt start -- this service serves 7-15 people
+# who are already in the room waiting, not a queue with any real
+# throughput to protect, and an idle SELECT every half second costs this
+# database nothing at this scale.
+CONSUMER_POLL_INTERVAL_SECONDS = 0.5
 
-async def _sweep_preparing_titles(pool: asyncpg.Pool, add_queue: AddQueue) -> None:
-    """Startup reconciliation for interrupted adds (D-53) -- run once,
-    before the worker task starts pulling, so a stale 'preparing' row
-    never sits waiting for a worker that will never see it again. The
-    in-process queue holds nothing across a restart, so this is the only
-    remaining place D-53's "leaves nothing behind" promise can be kept
-    for a row that was mid-flight when the process died.
 
-    A row with `started_at` set was genuinely interrupted: its object
-    (and its poster, if one was uploaded before the crash) may be fully
-    present in storage with nothing pointing at it once this sweep marks
-    the row failed, so the same abort-then-delete cleanup pair
-    `process_add`'s own failure path uses runs here too, before the row
-    is marked failed -- a crash between the cleanup and the mark leaves
-    the row still saying "preparing", and this sweep runs again on the
-    next restart.
+def _clear_stale_scratch_files(work_dir: Path) -> None:
+    """A process that was killed never ran its own scratch cleanup -- this
+    is the only place that promise can be kept. /work is a plain
+    container-layer directory (never a named volume), so on a genuine
+    recreate it is already empty; this also covers a plain restart, which
+    does not clear it on its own.
 
-    A row with `started_at` still null never began any work at all;
-    marking it "interrupted" would be a lie about a row that was only
-    ever sitting in the queue, so it goes back on the queue instead,
-    rebuilt through `AddJob.from_row` -- the one shape a job can have.
-
-    Every blocking storage call here goes through `asyncio.to_thread`,
-    exactly like every other blocking call in `orchestrator.media.queue`:
-    an unbounded number of mid-flight rows after a crash would otherwise
-    mean an unbounded serial run of storage calls before this process
-    ever answers `/healthz`, against the five-second health check `edge`'s
-    `depends_on: service_healthy` condition is waiting on.
+    Recovery for an interrupted *job* no longer needs a startup pass at
+    all: the row is durable now, its heartbeat simply goes stale, and the
+    reaper's own continuously-running sweep (`orchestrator.reaper
+    .sweep_stale_jobs`) requeues or fails it without waiting for a
+    restart to notice. A startup sweep that also marked rows failed would
+    race that sweep's own requeue for the same row -- the same
+    interruption producing two outcomes for one job. This function is
+    what remains of the old startup sweep once that race is removed along
+    with the sweep itself: leftover scratch bytes on local disk, which
+    nothing else in this project clears.
     """
-    settings = get_settings()
-
-    async with pool.acquire() as conn:
-        queued, started = await queries.preparing_rows_at_startup(conn)
-
-        for row in started:
-            title_id = row["title_id"]
-            try:
-                job_row = await queries.job_row(conn, title_id)
-                if job_row is not None:
-                    await asyncio.to_thread(abort_dangling_multipart, job_row["object_key"])
-                    await asyncio.to_thread(delete_object, job_row["object_key"])
-                    poster_key = job_row["poster_key"]
-                    if poster_key:
-                        await asyncio.to_thread(abort_dangling_multipart, poster_key)
-                        await asyncio.to_thread(delete_object, poster_key)
-                await queries.mark_title_failed(conn, title_id, "failed.reason.interrupted")
-            except Exception:
-                logger.exception(
-                    "startup sweep: failed to reconcile interrupted title %s", title_id
-                )
-
-        for row in queued:
-            title_id = row["title_id"]
-            try:
-                job_row = await queries.job_row(conn, title_id)
-                if job_row is not None:
-                    await add_queue.enqueue(AddJob.from_row(title_id, job_row))
-            except Exception:
-                logger.exception(
-                    "startup sweep: failed to re-enqueue queued title %s", title_id
-                )
-
-    # A process that was killed never ran its own scratch cleanup -- this
-    # is the only place that promise can be kept. /work is a plain
-    # container-layer directory (never a named volume), so on a genuine
-    # recreate it is already empty; this also covers a plain restart,
-    # which does not clear it on its own.
-    work_dir = Path(settings.work_dir)
     if work_dir.is_dir():
         for leftover in work_dir.iterdir():
             if leftover.is_file():
@@ -125,12 +85,6 @@ async def _sweep_preparing_titles(pool: asyncpg.Pool, add_queue: AddQueue) -> No
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.db_pool = await create_pool()
-    app.state.add_queue = AddQueue()
-    # A second one-at-a-time worker, started and cancelled exactly the
-    # way the add worker below is. Its own queue rather than a shared
-    # one: a playlist build and an add have nothing to say to each
-    # other, and one queue would make a long add block a save.
-    app.state.playlist_queue = PlaylistBuildQueue()
 
     async with app.state.db_pool.acquire() as conn:
         app.state.operator_exists = await queries.operator_exists(conn)
@@ -165,11 +119,15 @@ async def lifespan(app: FastAPI):
             app.state.setup_token,
         )
 
-    await _sweep_preparing_titles(app.state.db_pool, app.state.add_queue)
+    _clear_stale_scratch_files(Path(get_settings().work_dir))
 
-    add_worker_task = asyncio.create_task(app.state.add_queue.run(app.state.db_pool))
+    add_worker_task = asyncio.create_task(
+        run_add_consumer(app.state.db_pool, poll_interval=CONSUMER_POLL_INTERVAL_SECONDS)
+    )
     playlist_worker_task = asyncio.create_task(
-        app.state.playlist_queue.run(app.state.db_pool)
+        run_playlist_consumer(
+            app.state.db_pool, poll_interval=CONSUMER_POLL_INTERVAL_SECONDS
+        )
     )
     reaper_task = asyncio.create_task(run_reaper(app.state.db_pool))
     try:
