@@ -139,6 +139,25 @@ def _reason_key_for(exc: Exception) -> str:
     return "failed.reason.unknown"
 
 
+async def _abort_upload_quietly(s3_client, settings: WorkerSettings, key: str, job_id) -> None:
+    """The one way this program aborts a dangling upload -- every cleanup
+    path goes through here rather than calling `abort_multipart` directly.
+
+    Cleanup runs after the outcome is already decided, so a storage error
+    in it must not become the outcome. Left to propagate it does real
+    damage: a wrong storage region made the abort raise
+    SignatureDoesNotMatch, that escaped the job, killed the process and
+    got the container restarted -- and the job it was cleaning up after
+    stayed `running` with nobody left to report it, until the service's
+    stale sweep noticed minutes later. Logged with the job id, swallowed,
+    and the report the caller was about to send still goes out.
+    """
+    try:
+        await asyncio.to_thread(worker_storage.abort_multipart, s3_client, settings, key)
+    except Exception:
+        logger.exception("job %s: could not abort the dangling upload of %s", job_id, key)
+
+
 async def _process_job(
     client: WorkerClient,
     s3_client,
@@ -357,9 +376,7 @@ async def _process_job(
             # multipart upload of its own -- the service removes the
             # completed object itself, on this same refusal, since only it
             # holds the credential wide enough to do that.
-            await asyncio.to_thread(
-                worker_storage.abort_multipart, s3_client, settings, object_key
-            )
+            await _abort_upload_quietly(s3_client, settings, object_key, job_id)
             logger.info(
                 "job %s: the done report was refused (superseded) -- our own dangling "
                 "upload was aborted; the service removes the completed object",
@@ -367,7 +384,7 @@ async def _process_job(
             )
 
     except _JobCancelled:
-        await asyncio.to_thread(worker_storage.abort_multipart, s3_client, settings, object_key)
+        await _abort_upload_quietly(s3_client, settings, object_key, job_id)
         if shutdown_event.is_set():
             # Shutting down: the heartbeat going stale is what the
             # service is already built to handle, and attempting a report
@@ -385,7 +402,7 @@ async def _process_job(
         logger.exception("job %s: failed", job_id)
         # Unconditional, whether or not an upload was ever attempted --
         # abort_multipart on a key with nothing dangling is a safe no-op.
-        await asyncio.to_thread(worker_storage.abort_multipart, s3_client, settings, object_key)
+        await _abort_upload_quietly(s3_client, settings, object_key, job_id)
         reason_key = _reason_key_for(exc)
         try:
             await client.failed(job_id, attempt=attempt, reason_key=reason_key)
