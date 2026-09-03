@@ -6,6 +6,7 @@ acquired from a pool) as its first argument -- pool lifecycle is
 `orchestrator.db.create_pool`'s job, not this module's.
 """
 import json
+import re
 
 import asyncpg
 
@@ -1585,3 +1586,440 @@ async def sweep_expired_sessions(conn: asyncpg.Connection) -> int:
     # asyncpg's command tag looks like "DELETE 3" -- the row count is
     # everything after the last space.
     return int(result.split()[-1])
+
+
+# --- The durable job queue (D-118) --------------------------------------
+#
+# One table, `jobs` (migrations/versions/0005_jobs.py), holds all three
+# kinds of background work -- `remux`, `playlist`, `transcode`. Every
+# function below is a single statement or a tightly scoped pair; none
+# opens a transaction the caller is expected to close, and `claim_job` in
+# particular must never hold its row lock across the caller's own work
+# (see its own docstring for why).
+
+JOB_MAX_ATTEMPTS = 3
+
+_FAILURE_REASON_KEY_RE = re.compile(r"^[a-z]+(\.[a-z_]+)+$")
+
+
+def _validate_failure_reason_key(reason_key: str) -> None:
+    """A failure reason is a dotted translation-catalog key, never a
+    sentence and never tool output -- the same rule titles.failure_reason
+    already carries, enforced here in code because this column is written
+    by the worker over the network, a caller this module cannot vet at
+    the call site the way an in-process one could be.
+    """
+    if not _FAILURE_REASON_KEY_RE.match(reason_key):
+        raise ValueError(
+            f"failure reason key {reason_key!r} is not a dotted catalog "
+            "key -- only translation-catalog keys (e.g. "
+            "'failed.reason.upload') may be stored here, never raw tool "
+            "output or a sentence"
+        )
+
+
+async def enqueue_job(
+    conn: asyncpg.Connection,
+    *,
+    kind: str,
+    title_id=None,
+    playlist_id=None,
+    edition_id=None,
+    source_path: str | None = None,
+    audio_stream_index: int | None = None,
+    subtitle_kind: str | None = None,
+    subtitle_stream_index: int | None = None,
+    subtitle_path: str | None = None,
+    stereo_layout: str | None = None,
+):
+    """Insert a queued job of `kind` and return its id.
+
+    Carries only what the operator chose (D-119) -- source path, audio
+    track, subtitle choice, 3D layout. The worker re-probes the file and
+    builds its own ffmpeg command at claim time with the same shared code
+    the add form used, so shipping a command across the network here would
+    only guarantee the two disagree.
+    """
+    return await conn.fetchval(
+        """
+        INSERT INTO jobs (
+            kind, title_id, playlist_id, edition_id, source_path,
+            audio_stream_index, subtitle_kind, subtitle_stream_index,
+            subtitle_path, stereo_layout
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING id
+        """,
+        kind,
+        title_id,
+        playlist_id,
+        edition_id,
+        source_path,
+        audio_stream_index,
+        subtitle_kind,
+        subtitle_stream_index,
+        subtitle_path,
+        stereo_layout,
+    )
+
+
+async def claim_job(
+    conn: asyncpg.Connection, *, kind: str, worker_name: str
+) -> asyncpg.Record | None:
+    """Claim the oldest queued job of `kind` for `worker_name`, or return
+    None when nothing is queued.
+
+    One statement: a `SELECT ... FOR UPDATE SKIP LOCKED` CTE feeding the
+    status-flipping `UPDATE`, run as a single `fetchrow` call with no
+    transaction opened around it. This is deliberate, not merely
+    convenient -- a claim spread across an opened transaction, a return to
+    the caller, and a commit made later holds the row lock for as long as
+    the caller works, which for a conversion is minutes across a network,
+    and serialises the whole queue the moment a second claimer exists
+    (WORK-03). Skipping locked rows rather than waiting on them means a
+    slow or wedged claimer never blocks any other claimer behind it
+    (T-04-15).
+    """
+    return await conn.fetchrow(
+        """
+        WITH next_job AS (
+            SELECT id FROM jobs
+            WHERE status = 'queued' AND kind = $1
+            ORDER BY created_at
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        )
+        UPDATE jobs
+        SET status = 'running', stage = 'working', attempts = attempts + 1,
+            worker_name = $2, started_at = now(), heartbeat_at = now()
+        FROM next_job
+        WHERE jobs.id = next_job.id
+        RETURNING jobs.*
+        """,
+        kind,
+        worker_name,
+    )
+
+
+async def heartbeat_job(
+    conn: asyncpg.Connection,
+    job_id,
+    *,
+    worker_name: str,
+    attempt: int,
+    stage: str,
+    progress_pct: float | None = None,
+    eta_seconds: int | None = None,
+    realtime_factor: float | None = None,
+) -> asyncpg.Record | None:
+    """Write progress only when the job id, the worker name and the
+    attempt number all match the row as it currently stands; returns the
+    row it wrote, or None when they do not (T-04-06).
+
+    The mismatch case is the whole point, not an edge case: a converter
+    that lost contact with the orchestrator and kept encoding must not be
+    able to overwrite the progress of the attempt that superseded it once
+    the reaper has already requeued the job and a second worker claimed
+    it.
+    """
+    return await conn.fetchrow(
+        """
+        UPDATE jobs
+        SET stage = $4,
+            progress_pct = COALESCE($5, progress_pct),
+            eta_seconds = COALESCE($6, eta_seconds),
+            realtime_factor = COALESCE($7, realtime_factor),
+            heartbeat_at = now()
+        WHERE id = $1 AND worker_name = $2 AND attempts = $3
+        RETURNING *
+        """,
+        job_id,
+        worker_name,
+        attempt,
+        stage,
+        progress_pct,
+        eta_seconds,
+        realtime_factor,
+    )
+
+
+async def finish_job(
+    conn: asyncpg.Connection,
+    job_id,
+    *,
+    worker_name: str,
+    attempt: int,
+    outcome: str,
+    reason_key: str | None = None,
+    realtime_factor: float | None = None,
+) -> bool:
+    """Record the terminal outcome (`done`, `failed` or `cancelled`) and
+    report whether it wrote. Like `heartbeat_job`, writes only when the
+    job id, the worker name and the attempt all match the row as it
+    currently stands (T-04-06) -- both halves are the contract: a
+    superseded attempt must neither silently write the row nor silently
+    report success.
+
+    `reason_key` is required for `outcome='failed'` and is validated
+    against a dotted catalog-key shape before it is stored (T-04-07), so
+    tool output cannot reach the column the library row renders even if a
+    caller passes it.
+    """
+    if outcome == "failed":
+        if not reason_key:
+            raise ValueError("finish_job(outcome='failed') requires reason_key")
+        _validate_failure_reason_key(reason_key)
+    row = await conn.fetchrow(
+        """
+        UPDATE jobs
+        SET status = $4, finished_at = now(), failure_reason = $5,
+            realtime_factor = COALESCE($6, realtime_factor)
+        WHERE id = $1 AND worker_name = $2 AND attempts = $3
+        RETURNING id
+        """,
+        job_id,
+        worker_name,
+        attempt,
+        outcome,
+        reason_key,
+        realtime_factor,
+    )
+    return row is not None
+
+
+async def request_job_cancel(
+    conn: asyncpg.Connection, job_id
+) -> asyncpg.Record | None:
+    """Ask for a job to stop (D-129).
+
+    A running job has no way to be told anything except through its next
+    heartbeat, so this only sets the flag and leaves the row `running` --
+    the worker reads it back on its next heartbeat, kills ffmpeg and
+    reports the outcome itself. A queued job has no worker to tell at
+    all, so it is finished as `cancelled` outright, on the spot. The two
+    cases are distinguishable by the caller through the returned row's
+    own `status`: `running` (with `cancel_requested` now true) means
+    "wait", `cancelled` means "already done, the row can disappear
+    immediately".
+    """
+    row = await conn.fetchrow(
+        """
+        UPDATE jobs SET cancel_requested = true
+        WHERE id = $1 AND status = 'running'
+        RETURNING *
+        """,
+        job_id,
+    )
+    if row is not None:
+        return row
+    return await conn.fetchrow(
+        """
+        UPDATE jobs
+        SET status = 'cancelled', finished_at = now()
+        WHERE id = $1 AND status = 'queued'
+        RETURNING *
+        """,
+        job_id,
+    )
+
+
+async def due_for_requeue(
+    conn: asyncpg.Connection, *, stale_after_seconds: int
+) -> list[asyncpg.Record]:
+    """Every `running` job whose heartbeat has gone stale -- what the
+    reaper's sweep reads before deciding, per row, whether to requeue it,
+    fail it outright (attempts exhausted) or finish it cancelled (D-129).
+    """
+    return await conn.fetch(
+        """
+        SELECT * FROM jobs
+        WHERE status = 'running'
+          AND heartbeat_at < now() - make_interval(secs => $1)
+        """,
+        stale_after_seconds,
+    )
+
+
+async def requeue_job(conn: asyncpg.Connection, job_id) -> None:
+    """Return a stale job to the queue: worker name, heartbeat and
+    progress cleared, `attempts` preserved -- the attempt count is the
+    cap's own memory and must survive a requeue for the cap to mean
+    anything.
+    """
+    await conn.execute(
+        """
+        UPDATE jobs
+        SET status = 'queued', stage = 'queued', worker_name = NULL,
+            heartbeat_at = NULL, progress_pct = NULL, eta_seconds = NULL,
+            realtime_factor = NULL
+        WHERE id = $1
+        """,
+        job_id,
+    )
+
+
+async def fail_job_exhausted(
+    conn: asyncpg.Connection, job_id, *, reason_key: str
+) -> None:
+    """Mark a job failed because its attempt cap was reached -- not a
+    requeue, and `attempts` is left exactly where it was, since this is
+    the terminal outcome the cap exists to produce, not one more attempt.
+    """
+    _validate_failure_reason_key(reason_key)
+    await conn.execute(
+        """
+        UPDATE jobs SET status = 'failed', finished_at = now(), failure_reason = $2
+        WHERE id = $1
+        """,
+        job_id,
+        reason_key,
+    )
+
+
+async def record_worker_seen(
+    conn: asyncpg.Connection, *, worker_name: str, status: str
+) -> None:
+    """Upsert a converter's check-in: when it was last seen, and whether
+    it is idle, working, or waiting for room on the shared card (D-113).
+
+    `clock_timestamp()`, not `now()` -- the same reason `slug_history`
+    uses it (migrations/versions/0001_initial_catalog.py): `now()` is
+    frozen for the lifetime of a transaction, and two check-ins from the
+    same test or the same short-lived caller would otherwise record an
+    identical timestamp.
+    """
+    await conn.execute(
+        """
+        INSERT INTO worker_checkins (worker_name, last_seen_at, status)
+        VALUES ($1, clock_timestamp(), $2)
+        ON CONFLICT (worker_name) DO UPDATE
+        SET last_seen_at = EXCLUDED.last_seen_at, status = EXCLUDED.status
+        """,
+        worker_name,
+        status,
+    )
+
+
+async def last_worker_seen(conn: asyncpg.Connection) -> asyncpg.Record | None:
+    """The most recently seen converter's name, time and status, or None
+    when none has ever checked in -- the interface's three sentences
+    (D-113/D-131): a named worker some minutes ago, none ever, or the
+    named worker waiting for the card.
+    """
+    return await conn.fetchrow(
+        "SELECT worker_name, last_seen_at, status FROM worker_checkins "
+        "ORDER BY last_seen_at DESC LIMIT 1"
+    )
+
+
+async def count_queued_ahead(conn: asyncpg.Connection, job_id) -> int:
+    """How many queued jobs of the *same kind* were created before this
+    one (D-118) -- counted within a kind so a playlist assembly never
+    appears to be ahead of a conversion in the position an operator is
+    told.
+    """
+    return await conn.fetchval(
+        """
+        SELECT count(*) FROM jobs
+        WHERE status = 'queued'
+          AND kind = (SELECT kind FROM jobs WHERE id = $1)
+          AND created_at < (SELECT created_at FROM jobs WHERE id = $1)
+        """,
+        job_id,
+    )
+
+
+async def job_for_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
+    """The live (queued or running) job for a title, if any -- lets the
+    library render a stage without the caller knowing a job id.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT * FROM jobs
+        WHERE title_id = $1 AND status IN ('queued', 'running')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        title_id,
+    )
+
+
+async def job_for_playlist(
+    conn: asyncpg.Connection, playlist_id
+) -> asyncpg.Record | None:
+    """The live (queued or running) job for a playlist, if any -- the
+    playlist-build equivalent of `job_for_title` above.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT * FROM jobs
+        WHERE playlist_id = $1 AND status IN ('queued', 'running')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        playlist_id,
+    )
+
+
+async def set_edition_conversion_detail(
+    conn: asyncpg.Connection,
+    edition_id,
+    *,
+    source_codec: str | None,
+    source_profile: str | None,
+    subtitle_burned_language: str | None,
+    subtitle_burned_title: str | None,
+    stereo_layout: str | None,
+) -> None:
+    """Record what a conversion made and what it made it from (D-146) --
+    a *separate* function from `set_edition_technical` above rather than
+    five more keyword arguments on it: that one records what the stored
+    object is, and every one of its callers knows all of it; this one
+    records what the source was and what was done to it, which only a
+    conversion knows.
+    """
+    await conn.execute(
+        """
+        UPDATE editions
+        SET source_codec = $2, source_profile = $3,
+            subtitle_burned_language = $4, subtitle_burned_title = $5,
+            stereo_layout = $6
+        WHERE id = $1
+        """,
+        edition_id,
+        source_codec,
+        source_profile,
+        subtitle_burned_language,
+        subtitle_burned_title,
+        stereo_layout,
+    )
+
+
+async def median_realtime_factor(
+    conn: asyncpg.Connection, kind: str = "transcode", last_n: int = 20
+) -> float | None:
+    """The median recorded speed of the last `last_n` finished jobs of
+    `kind`, or None when none has finished yet -- what makes D-148's
+    pre-start time estimate measured rather than assumed. Median, not
+    mean: one pathological source triples a mean and leaves the estimate
+    lying for weeks.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT realtime_factor FROM (
+            SELECT realtime_factor FROM jobs
+            WHERE kind = $1 AND status = 'done' AND realtime_factor IS NOT NULL
+            ORDER BY finished_at DESC
+            LIMIT $2
+        ) recent
+        """,
+        kind,
+        last_n,
+    )
+    values = sorted(row["realtime_factor"] for row in rows)
+    if not values:
+        return None
+    mid = len(values) // 2
+    if len(values) % 2 == 1:
+        return values[mid]
+    return (values[mid - 1] + values[mid]) / 2
