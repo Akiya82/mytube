@@ -11,12 +11,12 @@
 # once with a placeholder value to learn the real one from the FAIL output
 # below, then re-run with that value pasted in for a clean PASS.
 #
-# Usage: verify_ffmpeg_build.sh <dated-tag> <expected-sha256> [test-clip]
+# Usage: verify_ffmpeg_build.sh <dated-tag> <expected-sha256> [test-clip] [ffmpeg-line]
 set -euo pipefail
 
 usage() {
   cat <<'USAGE' >&2
-Usage: verify_ffmpeg_build.sh <dated-tag> <expected-sha256> [test-clip]
+Usage: verify_ffmpeg_build.sh <dated-tag> <expected-sha256> [test-clip] [ffmpeg-line]
 
   dated-tag        A BtbN/FFmpeg-Builds release tag shaped like
                     autobuild-YYYY-MM-DD-HH-MM (see the repository's
@@ -24,13 +24,18 @@ Usage: verify_ffmpeg_build.sh <dated-tag> <expected-sha256> [test-clip]
                     a tag that can be rebuilt under the same name is not a
                     pin, and this project already pins its other binary by
                     digest for exactly that reason.
-  expected-sha256   The checksum already recorded for the linux64-lgpl-9.0
-                    asset under that tag. Unknown on a first run against a
-                    new tag -- pass any value, the FAIL line prints the
+  expected-sha256   The checksum already recorded for the linux64-lgpl asset
+                    under that tag and line. Unknown on a first run against
+                    a new tag -- pass any value, the FAIL line prints the
                     real computed checksum so it can be pasted back in.
   test-clip         Optional path to a small local video file. Enables the
                     end-to-end NVENC/NVDEC probe; omitted, that probe
                     prints SKIP rather than a silent pass.
+  ffmpeg-line       Optional. Which BtbN LGPL release line to fetch, shaped
+                    like N.N (e.g. 8.1). Defaults to 8.1, the line this
+                    project's experiment record has verified end-to-end on
+                    the GPU host -- the 9.0 line fails the end-to-end probe
+                    on that host's driver. Refused if not shaped like N.N.
 USAGE
 }
 
@@ -42,9 +47,15 @@ fi
 TAG="$1"
 EXPECTED_CHECKSUM="$2"
 TEST_CLIP="${3:-}"
+FFMPEG_LINE="${4:-8.1}"
+
+if ! [[ "$FFMPEG_LINE" =~ ^[0-9]+\.[0-9]+$ ]]; then
+  echo "REFUSED: '$FFMPEG_LINE' is not a release line shaped like N.N (e.g. 8.1)." >&2
+  exit 1
+fi
 
 REPO="BtbN/FFmpeg-Builds"
-ASSET_SUFFIX="-linux64-lgpl-9.0.tar.xz"
+ASSET_SUFFIX="-linux64-lgpl-${FFMPEG_LINE}.tar.xz"
 
 # A rebuildable label is not a pin -- refuse outright rather than resolve it.
 if [[ "$TAG" == "latest" ]] || ! [[ "$TAG" =~ ^autobuild-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]]; then
@@ -177,7 +188,7 @@ fi
 echo "=== Step 4: hardware acceleration methods ==="
 HWACCELS=$(run_bin ffmpeg -hwaccels 2>&1)
 echo "$HWACCELS"
-if echo "$HWACCELS" | grep -qx 'cuda'; then
+if grep -qx 'cuda' <<<"$HWACCELS"; then
   verdict "PASS: the card's hwaccel method (cuda) is listed"
 else
   verdict "FAIL: cuda hwaccel not listed"
@@ -186,7 +197,7 @@ fi
 echo "=== Step 5: encoders (the card's H.264 encoder) ==="
 ENCODERS=$(run_bin ffmpeg -encoders 2>&1)
 echo "$ENCODERS" | grep -i nvenc || true
-if echo "$ENCODERS" | grep -q 'h264_nvenc'; then
+if grep -q 'h264_nvenc' <<<"$ENCODERS"; then
   verdict "PASS: h264_nvenc encoder listed"
 else
   verdict "FAIL: h264_nvenc encoder not listed"
@@ -195,7 +206,7 @@ fi
 echo "=== Step 5: decoders (the card's H.264 decode path) ==="
 DECODERS=$(run_bin ffmpeg -decoders 2>&1)
 echo "$DECODERS" | grep -Ei 'nvdec|cuvid' || true
-if echo "$DECODERS" | grep -qE 'h264_cuvid|h264_nvdec'; then
+if grep -qE 'h264_cuvid|h264_nvdec' <<<"$DECODERS"; then
   verdict "PASS: h264 decode path (cuvid or nvdec) listed"
 else
   verdict "FAIL: h264 decode path not listed"
@@ -204,7 +215,7 @@ fi
 echo "=== Step 6: filters (subtitle burn-in) ==="
 FILTERS=$(run_bin ffmpeg -filters 2>&1)
 echo "$FILTERS" | grep -i subtitles || true
-if echo "$FILTERS" | grep -q 'subtitles'; then
+if grep -q 'subtitles' <<<"$FILTERS"; then
   verdict "PASS: subtitles filter listed"
 else
   verdict "FAIL: subtitles filter not listed"
