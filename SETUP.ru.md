@@ -54,7 +54,7 @@ Self-hosted раздача progressive MP4 для просмотра синхр�
 | `MYTUBE_DATABASE_URL` | Строка подключения к Postgres, должна совпадать с `POSTGRES_*` выше | `postgresql://mytube:...@db:5432/mytube` | Обязательно держать в синхроне с `POSTGRES_*` |
 | `MYTUBE_S3_ENDPOINT` | S3-эндпоинт хранилища. Если указан внешний хост — используется он | `http://storage:8333` | Опционально |
 | `MYTUBE_S3_UPSTREAM` | `host:port` того же хранилища для собственного upstream-блока edge | `storage:8333` | **Обязательно менять вместе с `MYTUBE_S3_ENDPOINT`** — см. предупреждение ниже |
-| `MYTUBE_S3_BUCKET` / `MYTUBE_S3_REGION` | Имя бакета и произвольный непустой регион | `mytube` / `mytube` | Опционально |
+| `MYTUBE_S3_BUCKET` / `MYTUBE_S3_REGION` | Имя бакета и регион, которым хранилище подписывает запросы — значение годится любое непустое, но **воркеру надо задать ровно то же самое** | `mytube` / `mytube` | Опционально |
 | `MYTUBE_S3_KEY` / `MYTUBE_S3_SECRET` | Учётные данные S3-идентичности `mytube` (Admin/Read/Write/List/Tagging) | — | Обязательно сгенерировать: `openssl rand -hex 16` / `openssl rand -hex 32` |
 | `MYTUBE_DELETE_GRACE_SECONDS` | Окно между `410` и физическим удалением объекта | `300` (5 мин) | Опционально |
 | `MYTUBE_CACHE_MODE` | `memory` или `off` — выбирает `edge/cache-${MYTUBE_CACHE_MODE}.conf.template` | `memory` | Опционально, см. «Режимы кэша» |
@@ -278,7 +278,7 @@ docker compose -f docker-compose.worker.yml up -d --build
 |---|---|---|
 | `MYTUBE_ORCHESTRATOR_URL` | Куда воркер обращается к этому сервису — со схемой, без завершающего слэша | Обязательно, значения по умолчанию нет |
 | `MYTUBE_WORKER_TOKEN` | Общие учётные данные. **Должны совпадать** со значением `MYTUBE_WORKER_TOKEN` этого сервиса (см. таблицу переменных выше) | Обязательно, значения по умолчанию нет |
-| `MYTUBE_S3_ENDPOINT` / `MYTUBE_S3_BUCKET` | Тот же адрес и бакет хранилища, что использует сервис | Обязательно |
+| `MYTUBE_S3_ENDPOINT` / `MYTUBE_S3_BUCKET` / `MYTUBE_S3_REGION` | Тот же адрес, бакет и регион хранилища, что использует сервис. Регион входит в подпись запроса, поэтому значение, отличное от заданного сервису, роняет каждую загрузку с `SignatureDoesNotMatch` | Обязательно |
 | `MYTUBE_WORKER_S3_KEY` / `MYTUBE_WORKER_S3_SECRET` | **Собственные** учётные данные воркера для хранилища — под этими именами, а не `MYTUBE_S3_KEY`/`MYTUBE_S3_SECRET` | Обязательно, значения по умолчанию нет, **без отката на ключ сервиса** |
 | `MYTUBE_SHARE_HOST_PATH` | Где на этом хосте смонтирована исходная шара — прокидывается в контейнер как read-only bind-mount | Обязательно |
 | `MYTUBE_WORKER_SCRATCH_PATH` | Каталог для черновой работы с местом под большой файл плюс его собственную перезапись | Обязательно |

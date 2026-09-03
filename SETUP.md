@@ -54,7 +54,7 @@ marked "must be generated".
 | `MYTUBE_DATABASE_URL` | Postgres connection string, must match `POSTGRES_*` above | `postgresql://mytube:...@db:5432/mytube` | Must be kept in sync with `POSTGRES_*` |
 | `MYTUBE_S3_ENDPOINT` | The storage's S3 endpoint. If it names an external host, the external storage is used | `http://storage:8333` | Optional |
 | `MYTUBE_S3_UPSTREAM` | `host:port` of that same storage, used by edge's own upstream block to the storage | `storage:8333` | **Must change together with `MYTUBE_S3_ENDPOINT`** — see the warning below |
-| `MYTUBE_S3_BUCKET` / `MYTUBE_S3_REGION` | Bucket name and an arbitrary non-empty region | `mytube` / `mytube` | Optional |
+| `MYTUBE_S3_BUCKET` / `MYTUBE_S3_REGION` | Bucket name, and the region the storage signs requests with — any non-empty value will do, but **the converter must be given the same one** | `mytube` / `mytube` | Optional |
 | `MYTUBE_S3_KEY` / `MYTUBE_S3_SECRET` | Credentials for the `mytube` S3 identity (Admin/Read/Write/List/Tagging) | — | Must be generated: `openssl rand -hex 16` / `openssl rand -hex 32` |
 | `MYTUBE_DELETE_GRACE_SECONDS` | Window between the `410` response and the object's physical deletion | `300` (5 min) | Optional |
 | `MYTUBE_CACHE_MODE` | `memory` or `off` — selects `edge/cache-${MYTUBE_CACHE_MODE}.conf.template` | `memory` | Optional, see "Cache modes" |
@@ -281,7 +281,7 @@ It reads its own variables from the same `.env`:
 |---|---|---|
 | `MYTUBE_ORCHESTRATOR_URL` | Where the worker reaches this service — scheme included, no trailing slash | Required, no default |
 | `MYTUBE_WORKER_TOKEN` | The shared credential. **Must be the exact same value** given to this service's own `MYTUBE_WORKER_TOKEN` (see the variable table above) | Required, no default |
-| `MYTUBE_S3_ENDPOINT` / `MYTUBE_S3_BUCKET` | The same storage endpoint and bucket this service uses | Required |
+| `MYTUBE_S3_ENDPOINT` / `MYTUBE_S3_BUCKET` / `MYTUBE_S3_REGION` | The same storage endpoint, bucket and region this service uses. The region is part of what the storage signs a request with, so a value that differs from this service's own fails every upload with `SignatureDoesNotMatch` | Required |
 | `MYTUBE_WORKER_S3_KEY` / `MYTUBE_WORKER_S3_SECRET` | The worker's **own** storage credential — under these names, not `MYTUBE_S3_KEY`/`MYTUBE_S3_SECRET` | Required, no default, **no fallback to the service's own key pair** |
 | `MYTUBE_SHARE_HOST_PATH` | Where the source share is mounted on this host, bind-mounted read-only into the container | Required |
 | `MYTUBE_WORKER_SCRATCH_PATH` | A scratch directory with room for a large file plus its own rewrite pass | Required |
