@@ -418,3 +418,67 @@ def test_the_effective_audio_codec_describes_the_stored_object_not_the_source(
     from orchestrator.media.compat import effective_audio_codec
 
     assert effective_audio_codec(source_codec, reencoded) == "aac"
+
+
+# --- the extended verdict (CONV-01, D-136, D-138) ---------------------------
+# All failing today: `Verdict` does not yet carry `plan`, `plan_reason_key`,
+# `plan_reason_params`, `bitrate_bps`, `over_bitrate_ceiling`,
+# `subtitle_tracks`, `stereo_layout` or `stereo_layout_source`. This section
+# fixes those field names as the contract a later plan implements against.
+
+
+def test_a_compatible_source_plans_a_passthrough():
+    verdict = analyze(_load("compatible.json"), moov_first=True)
+    assert verdict.plan == "passthrough"
+
+
+@pytest.mark.parametrize("fixture_name", ["high10_10bit.json", "hevc.json"])
+def test_an_incompatible_source_plans_a_transcode_and_says_why(fixture_name):
+    verdict = analyze(_load(fixture_name))
+    assert verdict.plan == "transcode"
+    assert verdict.plan_reason_key == verdict.reason_key
+    assert verdict.plan_reason_key is not None
+
+
+def test_a_compatible_source_over_the_bitrate_ceiling_still_plans_a_passthrough():
+    """A recommendation that quietly became a refusal is exactly the
+    regression this pins.
+    """
+    data = _load("compatible.json")
+    below_the_fixture_s_own_bitrate = 500_000
+    verdict = analyze(data, moov_first=True, bitrate_ceiling_bps=below_the_fixture_s_own_bitrate)
+
+    assert verdict.plan == "passthrough"
+    assert verdict.over_bitrate_ceiling is True
+
+
+def test_the_measured_bitrate_is_read_from_the_probe_not_computed():
+    data = _load("compatible.json")
+    assert analyze(data).bitrate_bps == int(data["format"]["bit_rate"])
+
+    data.pop("bit_rate", None)
+    data["format"].pop("bit_rate")
+    assert analyze(data).bitrate_bps is None
+
+
+def test_the_verdict_carries_the_subtitle_tracks_and_the_stereo_layout():
+    from mytube_media.subtitles import embedded_tracks
+
+    mixed = _load("subtitles_mixed.json")
+    verdict = analyze(mixed)
+    assert verdict.subtitle_tracks == embedded_tracks(mixed)
+
+    sbs = _load("stereo_sbs_tag.json")
+    verdict = analyze(sbs)
+    assert verdict.stereo_layout == "sbs_full"
+    assert verdict.stereo_layout_source == "tag"
+
+
+def test_the_audio_track_list_is_unchanged_by_the_extension():
+    """This test exists so the extension cannot quietly rewrite a shipped
+    behaviour.
+    """
+    for fixture_name in ("compatible.json", "multitrack.json", "mixed_codecs.json"):
+        data = _load(fixture_name)
+        verdict = analyze(data)
+        assert verdict.tracks == audio_tracks(data)
