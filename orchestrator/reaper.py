@@ -17,10 +17,14 @@ Never touches the slug history table: a deleted title's slug stays a
 tombstone and keeps answering 410 forever (D-10) -- a dead link is honest,
 a link that quietly starts playing something else is not.
 
-The three sweeps run inside their own `try/except` in `run_reaper`'s loop
-body, each isolated from the other two: a failure in the session sweep
-must never stop the title reaper's cycle, nor the playlist reaper's, and
-in any other pairing of the three.
+Also sweeps stale job heartbeats (D-118, D-130): a running job whose
+converter went silent comes back to the queue on its own, up to a named
+attempt cap, after which it fails with a reason a person can read.
+
+The four sweeps run inside their own `try/except` in `run_reaper`'s loop
+body, each isolated from the other three: a failure in the session sweep
+must never stop the title reaper's cycle, nor the playlist reaper's, nor
+the stale-job sweep's, and in any other pairing of the four.
 """
 import asyncio
 import logging
@@ -130,6 +134,60 @@ async def sweep_sessions_once(pool: asyncpg.Pool) -> None:
             logger.info("reaper: swept %d expired session(s)", removed)
 
 
+# Chosen against the larger of two lower bounds (see the migration's own
+# constraint statement in queries.due_for_requeue's caller here): it has
+# to be comfortably longer than the interval between a worker's
+# heartbeats (a report piggybacked on every progress tick, on the order
+# of a few seconds), and comfortably longer than the time this process
+# takes to restart. The pod-restart bound is the binding one -- a restart
+# that outlasts this threshold would requeue every job that was, in
+# fact, still legitimately running, not merely stuck.
+JOB_STALE_SECONDS = 180
+
+
+async def sweep_stale_jobs(pool: asyncpg.Pool) -> None:
+    """Return, fail or finish every `running` job whose heartbeat has gone
+    stale (D-116, D-130, D-131).
+
+    Three branches per row, and the cancelled check runs first because it
+    must win over the other two: a row already flagged for cancellation
+    (D-129) ends `cancelled`, never requeued and never failed, even when
+    it is also past the attempt cap. This is the case where the operator
+    pressed cancel and the converter then died before it could confirm --
+    with only the other two branches, that cancellation would silently
+    become a requeue and the job the operator stopped would start over on
+    a fresh attempt, which looks exactly like the cancel button simply not
+    working.
+
+    Composes three queries and isolates their per-row failures; it holds
+    no other knowledge of the schema, talks to no converter, and holds no
+    lock beyond each individual statement.
+    """
+    async with pool.acquire() as conn:
+        due = await queries.due_for_requeue(
+            conn, stale_after_seconds=JOB_STALE_SECONDS
+        )
+        for row in due:
+            job_id = row["id"]
+            try:
+                if row["cancel_requested"]:
+                    await queries.finish_job(
+                        conn,
+                        job_id,
+                        worker_name=row["worker_name"],
+                        attempt=row["attempts"],
+                        outcome="cancelled",
+                    )
+                elif row["attempts"] >= queries.JOB_MAX_ATTEMPTS:
+                    await queries.fail_job_exhausted(
+                        conn, job_id, reason_key="failed.reason.crashed_converter"
+                    )
+                else:
+                    await queries.requeue_job(conn, job_id)
+            except Exception:
+                logger.exception("reaper: failed to sweep stale job %s", job_id)
+
+
 async def run_reaper(pool: asyncpg.Pool) -> None:
     while True:
         try:
@@ -144,4 +202,8 @@ async def run_reaper(pool: asyncpg.Pool) -> None:
             await sweep_sessions_once(pool)
         except Exception:
             logger.exception("reaper: session-sweep cycle failed")
+        try:
+            await sweep_stale_jobs(pool)
+        except Exception:
+            logger.exception("reaper: stale-job sweep cycle failed")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)

@@ -21,6 +21,7 @@
   "check.hairpin_note": "This player loads {address}. If it stays blank on this network but plays from a phone on mobile data, the video is fine: the router is not sending this address back to itself.",
   "check.heading": "Check before sharing",
   "check.inactive": "This address is not playing right now.",
+  "failed.reason.crashed_converter": "The converter stopped responding and did not recover after several attempts.",
   "failed.reason.interrupted": "The service restarted while this was working.",
   "failed.reason.remux": "Preparing the video for playback did not finish.",
   "failed.reason.unknown": "Something went wrong. The service log has the details.",
