@@ -334,6 +334,15 @@ def build_filter_chain(plan: TranscodePlan, subtitle: SubtitleChoice) -> FilterG
 
     if subtitle.kind in ("embedded_text", "external"):
         parts.append(_subtitle_term(subtitle))
+    elif subtitle.kind != "none":
+        # Every kind this builder understands has been branched on by
+        # here. Anything left is a value that was carried this far without
+        # ever being resolved -- "embedded" is the one that has actually
+        # happened, the form's own word for a choice that still has to be
+        # read against the file as text or bitmap. Falling through would
+        # produce a perfectly good conversion with no subtitle in it,
+        # reported as a success: the failure mode this raise exists for.
+        raise ValueError(f"unknown subtitle kind {subtitle.kind!r}")
 
     return FilterGraph(flag="-vf", value=",".join(parts), video_map="0:v:0")
 

@@ -149,6 +149,27 @@ def embedded_tracks(probe_json: dict) -> list[SubtitleTrack]:
     return tracks
 
 
+def embedded_subtitle_kind(probe_json: dict, stream_index: int) -> str | None:
+    """`"embedded_text"`/`"embedded_bitmap"` for a stream index the probe
+    actually reported among its subtitle streams, `None` otherwise -- the
+    check that keeps a stream index nobody was ever offered from reaching
+    the filter chain (T-04-01 in spirit: never trust an index from a form
+    over what the file, re-probed just now, actually has).
+
+    Both programs need this answer and neither may import the other, so it
+    lives here rather than beside either one's own form handling: the
+    interface resolves the operator's choice when the job is queued, and
+    the converter resolves it again against the file as it is at claim
+    time. "embedded" is a choice, not a kind -- the text and bitmap tracks
+    take two different filter branches, and a caller that never resolves
+    it burns nothing in while reporting that it did.
+    """
+    for track in embedded_tracks(probe_json):
+        if track.stream_index == stream_index:
+            return track.kind
+    return None
+
+
 def subtitle_ordinal(probe_json: dict, stream_index: int) -> int | None:
     """How many subtitle streams come before `stream_index` in the file,
     or `None` when that index is not a subtitle stream at all.

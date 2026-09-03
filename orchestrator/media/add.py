@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 
 import asyncpg
 
-from mytube_media.subtitles import embedded_tracks
+from mytube_media.subtitles import embedded_subtitle_kind as embedded_subtitle_kind
 from orchestrator.db import queries
 from orchestrator.slugs import SlugError, normalize_slug, pick_unique_slug
 
@@ -169,17 +169,9 @@ def parse_subtitle_choice(
     raise SubtitleChoiceRefused()
 
 
-def embedded_subtitle_kind(probe_json: dict, stream_index: int) -> str | None:
-    """`"embedded_text"`/`"embedded_bitmap"` for a stream index the probe
-    actually reported among its subtitle streams, `None` otherwise -- the
-    check that keeps a stream index the operator never saw offered from
-    ever reaching the filter chain (T-04-01 in spirit: never trust an
-    index from the form over what the file, re-probed just now, actually
-    has). Shared by the convert POST branch and the preview route, both of
-    which re-probe the source rather than trusting anything the form
-    itself claims.
-    """
-    for track in embedded_tracks(probe_json):
-        if track.stream_index == stream_index:
-            return track.kind
-    return None
+# `embedded_subtitle_kind` used to be defined here and is now imported at
+# the top of this module: the converter needs the same resolution and
+# imports nothing from `orchestrator`, so it moved down to
+# `mytube_media.subtitles`, beside the enumeration it walks. The name is
+# still exported from here, which is where the rest of the service
+# already reaches for it.

@@ -399,6 +399,21 @@ def test_a_bracketed_release_filename_is_escaped_at_the_graph_level():
         assert character not in stripped
 
 
+def test_a_kind_this_builder_does_not_know_is_refused_not_dropped():
+    """"embedded" is the add form's own word for a choice that still has to
+    be read against the file as text or bitmap. Building a chain from it
+    silently produces a conversion with no subtitle in it, which uploads
+    and plays and is reported as a success -- so it raises instead.
+    """
+    from mytube_media.transcode import build_filter_chain
+
+    with pytest.raises(ValueError):
+        build_filter_chain(
+            plan=_plan(),
+            subtitle=_subtitle(kind="embedded", stream_index=2, path="/share/movie.mkv"),
+        )
+
+
 def test_no_subtitle_choice_produces_a_chain_with_only_scaling():
     from mytube_media.transcode import build_filter_chain
 

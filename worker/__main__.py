@@ -21,7 +21,12 @@ from mytube_media import compat, transcode
 from mytube_media.compat import ProbeError
 from mytube_media.runner import FfmpegFailed, run_ffmpeg_with_progress
 from mytube_media.share import ShareEscape, safe_join
-from mytube_media.subtitles import collect_fonts, read_text, subtitle_ordinal
+from mytube_media.subtitles import (
+    collect_fonts,
+    embedded_subtitle_kind,
+    read_text,
+    subtitle_ordinal,
+)
 from mytube_media.transcode import (
     SubtitleChoice,
     TranscodePlan,
@@ -197,6 +202,20 @@ async def _process_job(
             subtitle_abs_path = safe_join(root, subtitle_rel_path)
 
         probe_json = await asyncio.to_thread(compat.probe, source)
+
+        if subtitle_kind == "embedded":
+            # "embedded" is the operator's choice, not a kind this
+            # converter can burn in: a text track and a bitmap track take
+            # two different filter branches. Resolved here, against the
+            # file as it is right now, because leaving it unresolved is
+            # silent -- the job reports a burned-in subtitle and the file
+            # it produces carries none.
+            resolved_kind = embedded_subtitle_kind(probe_json, subtitle_stream_index)
+            if resolved_kind is None:
+                raise _ProbeMismatchError(
+                    f"subtitle stream {subtitle_stream_index} is no longer present"
+                )
+            subtitle_kind = resolved_kind
 
         subtitle_si = None
         if subtitle_kind == "embedded_text":
