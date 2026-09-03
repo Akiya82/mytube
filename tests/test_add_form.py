@@ -17,7 +17,7 @@ from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
 from orchestrator.media.add import required_free_bytes
-from orchestrator.web import routes_share
+from orchestrator.web import routes_share, routes_titles
 
 from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
@@ -644,6 +644,190 @@ async def test_not_enough_space_banner_when_disk_usage_is_low(web_client, monkey
     assert "Not enough free space" in resp.text
     submit_tag = resp.text.split('type="submit"')[1].split(">")[0]
     assert "disabled" in submit_tag
+
+
+# --- POST /add/{path} -- the convert branch (D-145, D-147, D-148) -------
+
+
+@pytest.fixture
+def post_client(web_client, monkeypatch):
+    """The POST route re-probes the file itself (T-02-06) -- same
+    `_probe_returning` doubles as GET's, applied to `routes_titles.probe`
+    rather than `routes_share.probe`.
+    """
+    monkeypatch.setattr(routes_titles, "probe", _probe_returning("subtitles_mixed.json"))
+    return web_client
+
+
+def _post_add(client, **overrides):
+    data = {
+        "name": "A Video",
+        "slug": "a-video",
+        "audio_track": "1",
+        "stereo_layout": "2d",
+        "subtitle_choice": "none",
+        "subtitle_manual_path": "",
+        "confirm_reuse": "false",
+        "confirm_add_anyway": "false",
+        "add": "1",
+    }
+    data.update(overrides)
+    return client.post("/add/a-video.mp4", data=data, follow_redirects=False)
+
+
+async def test_as_is_and_layout_stores_the_stereo_layout_on_the_created_edition(
+    post_client, db_stub
+):
+    async with post_client:
+        resp = await _post_add(post_client, stereo_layout="sbs_full")
+
+    assert resp.status_code == 302
+    assert len(db_stub.create_title_calls) == 1
+    assert db_stub.create_title_calls[0]["stereo_layout"] == "sbs_full"
+    # The as-is branch queues a remux job and nothing else.
+    assert len(db_stub.enqueue_job_calls) == 1
+    assert db_stub.enqueue_job_calls[0]["kind"] == "remux"
+
+
+async def test_convert_refuses_a_stereo_layout_with_a_real_subtitle_choice(
+    post_client, db_stub
+):
+    async with post_client:
+        resp = await _post_add(
+            post_client,
+            add=None,
+            convert="1",
+            stereo_layout="sbs_full",
+            subtitle_choice="embedded:2",
+        )
+
+    assert resp.status_code == 400
+    assert db_stub.create_title_calls == []
+
+
+async def test_convert_refuses_an_embedded_stream_index_the_probe_never_reported(
+    post_client, db_stub
+):
+    async with post_client:
+        resp = await _post_add(
+            post_client, add=None, convert="1", subtitle_choice="embedded:999"
+        )
+
+    assert resp.status_code == 400
+    assert db_stub.create_title_calls == []
+
+
+async def test_convert_refuses_a_manual_subtitle_path_that_does_not_exist(
+    post_client, db_stub
+):
+    async with post_client:
+        resp = await _post_add(
+            post_client,
+            add=None,
+            convert="1",
+            subtitle_choice="manual",
+            subtitle_manual_path="no-such-file.srt",
+        )
+
+    assert resp.status_code == 400
+    assert db_stub.create_title_calls == []
+
+
+async def test_convert_refuses_an_out_of_vocabulary_layout_value(post_client, db_stub):
+    async with post_client:
+        resp = await _post_add(
+            post_client, add=None, convert="1", stereo_layout="not-a-real-layout"
+        )
+
+    assert resp.status_code == 400
+    assert db_stub.create_title_calls == []
+
+
+async def test_second_edition_gate_refuses_a_convert_post_with_no_confirmation(
+    post_client, db_stub
+):
+    """The gate is enforced here, not only by the page's own control -- a
+    form can be submitted with no `confirm_add_anyway` field at all
+    (D-147).
+    """
+    db_stub.already_added_rows = [
+        {
+            "source_path": "a-video.mp4",
+            "title_id": "existing-id",
+            "title_name": "Existing Title",
+            "title_status": "active",
+            "slug": "existing-title-slug",
+            "edition_kind": "remux",
+        }
+    ]
+
+    async with post_client:
+        resp = await _post_add(post_client, add=None, convert="1", subtitle_choice="none")
+
+    assert resp.status_code == 400
+    assert db_stub.create_title_calls == []
+
+
+async def test_second_edition_gate_lets_a_confirmed_convert_post_through(
+    post_client, db_stub
+):
+    db_stub.already_added_rows = [
+        {
+            "source_path": "a-video.mp4",
+            "title_id": "existing-id",
+            "title_name": "Existing Title",
+            "title_status": "active",
+            "slug": "existing-title-slug",
+            "edition_kind": "remux",
+        }
+    ]
+
+    async with post_client:
+        resp = await _post_add(
+            post_client,
+            add=None,
+            convert="1",
+            subtitle_choice="none",
+            confirm_add_anyway="true",
+        )
+
+    assert resp.status_code == 302
+    assert len(db_stub.create_title_calls) == 1
+
+
+async def test_convert_payload_carries_only_the_operators_choices(post_client, db_stub):
+    async with post_client:
+        resp = await _post_add(
+            post_client,
+            add=None,
+            convert="1",
+            stereo_layout="2d",
+            subtitle_choice="embedded:2",
+        )
+
+    assert resp.status_code == 302
+    assert len(db_stub.enqueue_job_calls) == 1
+    job = db_stub.enqueue_job_calls[0]
+    assert job["kind"] == "transcode"
+    assert job["title_id"] == db_stub.create_title_id
+    assert job["source_path"] == "a-video.mp4"
+    assert job["audio_stream_index"] == 1
+    assert job["subtitle_kind"] == "embedded_text"
+    assert job["subtitle_stream_index"] == 2
+    assert job["subtitle_path"] is None
+    assert job["stereo_layout"] == "2d"
+    # Nothing derived -- no command, no encoder settings, no filter string.
+    assert set(job.keys()) == {
+        "kind",
+        "title_id",
+        "edition_id",
+        "source_path",
+        "audio_stream_index",
+        "subtitle_kind",
+        "subtitle_stream_index",
+        "subtitle_path",
+        "stereo_layout",
+    }
 
 
 # --- required_free_bytes: already-correct vs. not ------------------------
