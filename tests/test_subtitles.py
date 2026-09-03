@@ -92,6 +92,33 @@ def test_every_listed_kind_is_in_the_frozen_vocabulary():
     assert all(t.kind in ("none", "embedded_text", "embedded_bitmap", "external") for t in tracks)
 
 
+def test_the_ordinal_counts_subtitle_streams_not_file_streams():
+    """The number the burn-in filter is matched against. In the fixture the
+    two subtitle tracks are streams 2 and 3, behind a video and an audio
+    stream, so they are the first and second subtitles: 0 and 1.
+    """
+    from mytube_media.subtitles import subtitle_ordinal
+
+    probe_json = _load("subtitles_mixed.json")
+
+    assert subtitle_ordinal(probe_json, 2) == 0
+    assert subtitle_ordinal(probe_json, 3) == 1
+
+
+def test_an_index_that_is_not_a_subtitle_stream_has_no_ordinal():
+    """A video or audio index, or one the file does not carry at all --
+    an answer of `None`, never a count that would silently select some
+    other track.
+    """
+    from mytube_media.subtitles import subtitle_ordinal
+
+    probe_json = _load("subtitles_mixed.json")
+
+    assert subtitle_ordinal(probe_json, 0) is None
+    assert subtitle_ordinal(probe_json, 1) is None
+    assert subtitle_ordinal(probe_json, 99) is None
+
+
 # --- external discovery, against a real tmp_path tree -----------------------
 
 

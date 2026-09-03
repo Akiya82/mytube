@@ -48,6 +48,7 @@ def _subtitle(**overrides):
     defaults = dict(
         kind="none",
         stream_index=None,
+        subtitle_ordinal=None,
         path=None,
         language=None,
         title=None,
@@ -61,6 +62,10 @@ def _subtitle(**overrides):
 # a path carrying the three characters the filter grammar has to escape:
 # a single quote, a colon and a backslash.
 _DANGEROUS_SUBTITLE_PATH = r"/share/O'Brien: back\slash sub.srt"
+
+# the four characters the filtergraph itself reads, in the shape a release
+# group actually ships a filename in.
+_BRACKETED_SUBTITLE_PATH = "/share/Show - 01 [BDRip 1080p, HEVC; FLAC].srt"
 
 
 # --- encoder flags: the part CLAUDE.md already paid for once ---------------
@@ -271,7 +276,7 @@ def test_scale_comes_before_subtitles_in_the_chain():
 
     graph = build_filter_chain(
         plan=_plan(),
-        subtitle=_subtitle(kind="embedded_text", stream_index=2, path="/share/movie.mkv"),
+        subtitle=_subtitle(kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv"),
     )
     assert graph.value.index("scale") < graph.value.index("subtitles")
 
@@ -282,7 +287,7 @@ def test_the_three_simple_branches_are_a_one_input_graph(kind):
 
     subtitle_kwargs = {"kind": kind}
     if kind == "embedded_text":
-        subtitle_kwargs.update(stream_index=2, path="/share/movie.mkv")
+        subtitle_kwargs.update(stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv")
     elif kind == "external":
         subtitle_kwargs.update(path="/share/movie.srt")
 
@@ -334,6 +339,66 @@ def test_an_external_subtitle_file_is_passed_by_path_and_its_path_is_escaped():
     assert stripped.count(":") <= 1
 
 
+def test_an_embedded_text_track_is_selected_by_its_subtitle_relative_ordinal():
+    """The filter's own si option counts subtitle streams alone, measured
+    on both pinned builds: a track that is stream 6 of the file and the
+    second subtitle in it renders at si=1, while si=6 answers "Unable to
+    locate subtitle stream" and takes the whole conversion down with it.
+    """
+    from mytube_media.transcode import build_filter_chain
+
+    graph = build_filter_chain(
+        plan=_plan(),
+        subtitle=_subtitle(
+            kind="embedded_text",
+            stream_index=6,
+            subtitle_ordinal=1,
+            path="/share/movie.mkv",
+        ),
+    )
+
+    assert "si=1" in graph.value
+    assert "si=6" not in graph.value
+
+
+def test_an_embedded_text_track_without_its_ordinal_is_refused_not_guessed():
+    """Falling back to the file's stream index here is exactly the failure
+    this pair of indices exists to prevent, so an absent ordinal raises
+    rather than substituting the one value that is known to be wrong.
+    """
+    from mytube_media.transcode import build_filter_chain
+
+    with pytest.raises(ValueError):
+        build_filter_chain(
+            plan=_plan(),
+            subtitle=_subtitle(
+                kind="embedded_text", stream_index=6, path="/share/movie.mkv"
+            ),
+        )
+
+
+def test_a_bracketed_release_filename_is_escaped_at_the_graph_level():
+    """The shape a release group actually ships. Unescaped, `[` opens a
+    link label and the graph fails to parse at all -- a conversion that
+    never starts, not one that renders imperfectly.
+    """
+    import re
+
+    from mytube_media.transcode import build_filter_chain
+
+    graph = build_filter_chain(
+        plan=_plan(),
+        subtitle=_subtitle(kind="external", path=_BRACKETED_SUBTITLE_PATH),
+    )
+
+    term = graph.value.split("subtitles=", 1)[1]
+    # Same reading as the injection test above: strip every escaped pair,
+    # and nothing structural may remain from the raw path.
+    stripped = re.sub(r"\\.", "", term)
+    for character in "[],;":
+        assert character not in stripped
+
+
 def test_no_subtitle_choice_produces_a_chain_with_only_scaling():
     from mytube_media.transcode import build_filter_chain
 
@@ -355,14 +420,14 @@ def test_the_font_directory_is_a_filter_parameter_and_never_a_command_flag():
     with_dir = build_filter_chain(
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, path="/share/movie.mkv", font_dir="/fonts"
+            kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", font_dir="/fonts"
         ),
     )
     assert "fontsdir=/fonts" in with_dir.value
 
     without_dir = build_filter_chain(
         plan=_plan(),
-        subtitle=_subtitle(kind="embedded_text", stream_index=2, path="/share/movie.mkv"),
+        subtitle=_subtitle(kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv"),
     )
     assert "fontsdir" not in without_dir.value
 
@@ -371,7 +436,7 @@ def test_the_font_directory_is_a_filter_parameter_and_never_a_command_flag():
         "/work/out.mp4",
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, path="/share/movie.mkv", font_dir="/fonts"
+            kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", font_dir="/fonts"
         ),
     )
     preview_cmd = build_preview_command(
@@ -379,7 +444,7 @@ def test_the_font_directory_is_a_filter_parameter_and_never_a_command_flag():
         "/work/preview.jpg",
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, path="/share/movie.mkv", font_dir="/fonts"
+            kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", font_dir="/fonts"
         ),
         at_seconds=90.0,
     )
@@ -399,21 +464,21 @@ def test_a_non_utf8_subtitle_file_is_burned_with_its_own_encoding():
     cyrillic = build_filter_chain(
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, path="/share/movie.mkv", charenc="windows-1251"
+            kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", charenc="windows-1251"
         ),
     )
     assert "charenc=windows-1251" in cyrillic.value
 
     default_unicode = build_filter_chain(
         plan=_plan(),
-        subtitle=_subtitle(kind="embedded_text", stream_index=2, path="/share/movie.mkv", charenc=None),
+        subtitle=_subtitle(kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", charenc=None),
     )
     assert "charenc" not in default_unicode.value
 
     explicit_utf8 = build_filter_chain(
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, path="/share/movie.mkv", charenc="UTF-8"
+            kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", charenc="UTF-8"
         ),
     )
     assert "charenc" not in explicit_utf8.value
@@ -494,7 +559,7 @@ def test_only_the_chosen_audio_track_is_mapped(kind):
 
     subtitle_kwargs = {"kind": kind}
     if kind == "embedded_text":
-        subtitle_kwargs.update(stream_index=2, path="/share/movie.mkv")
+        subtitle_kwargs.update(stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv")
     elif kind == "external":
         subtitle_kwargs.update(path="/share/movie.srt")
     elif kind == "embedded_bitmap":
@@ -529,7 +594,7 @@ def test_burning_subtitles_into_a_stereo_source_is_refused_with_a_catalog_key(la
 
     subtitle_kwargs = {"kind": kind}
     if kind == "embedded_text":
-        subtitle_kwargs.update(stream_index=2, path="/share/movie.mkv")
+        subtitle_kwargs.update(stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv")
     elif kind == "external":
         subtitle_kwargs.update(path="/share/movie.srt")
     elif kind == "embedded_bitmap":
@@ -604,7 +669,7 @@ def test_the_preview_and_the_conversion_share_one_filter_chain(kind):
 
     subtitle_kwargs = {"kind": kind}
     if kind == "embedded_text":
-        subtitle_kwargs.update(stream_index=2, path="/share/movie.mkv")
+        subtitle_kwargs.update(stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv")
     elif kind == "external":
         subtitle_kwargs.update(path="/share/movie.srt")
     elif kind == "embedded_bitmap":

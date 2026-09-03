@@ -114,10 +114,20 @@ class SubtitleChoice:
     (the overlay branch reads the stream directly via its own input
     specifier). `font_dir`/`charenc` are the collected font directory and
     the encoding `subtitles.read_text` reported, both optional.
+
+    Two indices, not one, and they are not interchangeable. `stream_index`
+    is the file's own absolute stream index, which is what the bitmap
+    branch's `-map 0:{index}` needs. `subtitle_ordinal` counts subtitle
+    streams only (the first subtitle track is 0 whatever its file index),
+    which is what the `subtitles=` filter's `si` option needs -- see
+    `_subtitle_term`. Required for `embedded_text`, unused otherwise;
+    `subtitles.subtitle_ordinal` derives it from the same probe the caller
+    already holds.
     """
 
     kind: str  # "none" | "embedded_text" | "embedded_bitmap" | "external"
     stream_index: int | None = None
+    subtitle_ordinal: int | None = None
     path: str | None = None
     language: str | None = None
     title: str | None = None
@@ -221,17 +231,30 @@ def required_free_bytes_for_transcode(
 # --- the filter chain (CONV-07, D-122, D-124, D-140) -----------------------
 
 
+# Backslash first, so escaping everything after it does not double-escape
+# the backslashes those additions introduce. Then the three characters the
+# filter's own argument grammar reads (`:` separates key=value pairs, `'`
+# quotes a value) and the four the *graph* grammar reads before the filter
+# ever sees the term: `[`/`]` delimit a link label, `,` chains one filter
+# to the next and `;` ends a chain. A real library filename carrying
+# brackets -- `Show - 01 [BDRip 1080p HEVC].mkv`, the shape a release group
+# actually ships -- is rejected unescaped by both pinned builds ("Trailing
+# garbage after a filter"), which is a failure to even start, not a
+# rendering flaw. Spaces need no escaping at any level.
+_FILTER_ESCAPED_CHARACTERS = ("\\", ":", "'", "[", "]", ",", ";")
+
+
 def _escape_filter_value(value: str) -> str:
-    """Escape a value that will ride inside an ffmpeg filter term:
-    backslash first (so escaping the colon/quote below does not
-    double-escape the backslashes those two additions introduce), then the
-    colon (the filter grammar's own key=value separator) and the single
-    quote. No surrounding quoting is added -- this project's pinned
-    ffmpeg accepts backslash-escaped values with no quotes, and the
-    injection test (T-04-02) exercises exactly this path with all three
-    characters at once.
+    """Escape a value that will ride inside an ffmpeg filter term, at both
+    levels that parse it: the filter's own argument grammar and the
+    filtergraph grammar around it. No surrounding quoting is added -- this
+    project's pinned ffmpeg accepts backslash-escaped values with no
+    quotes, and the injection test (T-04-02) exercises this path with
+    several of these characters at once.
     """
-    return value.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    for character in _FILTER_ESCAPED_CHARACTERS:
+        value = value.replace(character, "\\" + character)
+    return value
 
 
 def _subtitle_term(subtitle: SubtitleChoice) -> str:
@@ -242,12 +265,19 @@ def _subtitle_term(subtitle: SubtitleChoice) -> str:
     """
     parts = [f"filename={_escape_filter_value(subtitle.path)}"]
     if subtitle.kind == "embedded_text":
-        # Matches the absolute-ffprobe-index convention `remux.py` already
-        # uses for `audio_stream_index` (D-42) -- confirmed against a real
-        # ffmpeg build that the subtitles filter's own stream_index/si
-        # option is matched against the *file's* stream index, not a
-        # subtitle-relative count.
-        parts.append(f"si={subtitle.stream_index}")
+        # Not the file's stream index, unlike every other index this
+        # project carries: measured on both pinned builds that the
+        # subtitles filter's si option counts subtitle streams alone. A
+        # file whose four subtitle tracks are streams 5..8 renders its
+        # second one at si=1 and answers "Unable to locate subtitle
+        # stream" at si=6. Passing the absolute index therefore does not
+        # burn in the wrong track, it fails the conversion outright.
+        if subtitle.subtitle_ordinal is None:
+            raise ValueError(
+                "an embedded text subtitle needs its subtitle-relative ordinal, "
+                "not only the file's stream index"
+            )
+        parts.append(f"si={subtitle.subtitle_ordinal}")
     if subtitle.font_dir:
         # ffmpeg has no `-fontsdir` command-line flag -- a real build
         # answers "Unrecognized option" for that spelling and exits before

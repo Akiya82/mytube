@@ -21,7 +21,7 @@ from mytube_media import compat, transcode
 from mytube_media.compat import ProbeError
 from mytube_media.runner import FfmpegFailed, run_ffmpeg_with_progress
 from mytube_media.share import ShareEscape, safe_join
-from mytube_media.subtitles import collect_fonts, read_text
+from mytube_media.subtitles import collect_fonts, read_text, subtitle_ordinal
 from mytube_media.transcode import (
     SubtitleChoice,
     TranscodePlan,
@@ -195,13 +195,23 @@ async def _process_job(
                     "an external subtitle was chosen but no path was recorded"
                 )
             subtitle_abs_path = safe_join(root, subtitle_rel_path)
-        elif subtitle_kind == "embedded_text":
-            # The subtitles= filter always needs a filename to read from,
-            # even for a track embedded in the file being decoded --
-            # mytube_media.transcode.SubtitleChoice's own docstring.
-            subtitle_abs_path = source
 
         probe_json = await asyncio.to_thread(compat.probe, source)
+
+        subtitle_si = None
+        if subtitle_kind == "embedded_text":
+            # The subtitles= filter always needs a filename to read from,
+            # even for a track embedded in the file being decoded --
+            # mytube_media.transcode.SubtitleChoice's own docstring. The
+            # ordinal beside it comes from this fresh probe, never from the
+            # job: it is what the filter's si option counts, and it is only
+            # knowable from the file's current stream list.
+            subtitle_si = subtitle_ordinal(probe_json, subtitle_stream_index)
+            if subtitle_si is None:
+                raise _ProbeMismatchError(
+                    f"subtitle stream {subtitle_stream_index} is no longer present"
+                )
+            subtitle_abs_path = source
         verdict = compat.analyze(
             probe_json,
             selected_audio_index=job["audio_stream_index"],
@@ -265,6 +275,7 @@ async def _process_job(
         subtitle = SubtitleChoice(
             kind=subtitle_kind,
             stream_index=subtitle_stream_index,
+            subtitle_ordinal=subtitle_si,
             path=str(subtitle_abs_path) if subtitle_abs_path else None,
             font_dir=font_dir,
             charenc=charenc,

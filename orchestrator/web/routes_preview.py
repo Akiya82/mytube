@@ -55,6 +55,7 @@ from mytube_media.subtitles import (
     bitmap_cue_after,
     missing_font_from_log,
     read_text,
+    subtitle_ordinal,
 )
 from mytube_media.transcode import (
     SubtitleChoice,
@@ -180,6 +181,7 @@ async def preview_render_route(
 
     subtitle_path_for_burn: str | None = None
     charenc: str | None = None
+    ordinal: int | None = None
     cues: list[float] = []
 
     if kind == "embedded":
@@ -195,6 +197,11 @@ async def preview_render_route(
             except (SubtitleExtractError, SubtitleReadError, OSError):
                 return panel_error()
             subtitle_path_for_burn = str(source)
+            # What the burn-in filter counts is subtitle streams, not file
+            # streams -- the preview has to hand it the same ordinal the
+            # conversion will, or the two render different pictures (and
+            # the file index it would otherwise carry renders none).
+            ordinal = subtitle_ordinal(probe_json, stream_index)
             cues = cue_times(text)
             at_seconds = first_cue_after(cues, after_seconds)
         else:
@@ -204,6 +211,7 @@ async def preview_render_route(
         subtitle = SubtitleChoice(
             kind=embedded_kind,
             stream_index=stream_index,
+            subtitle_ordinal=ordinal,
             path=subtitle_path_for_burn,
             font_dir=None,
             charenc=charenc,
@@ -236,6 +244,7 @@ async def preview_render_route(
     subtitle = SubtitleChoice(
         kind=subtitle.kind,
         stream_index=subtitle.stream_index,
+        subtitle_ordinal=subtitle.subtitle_ordinal,
         path=subtitle.path,
         font_dir=font_dir,
         charenc=subtitle.charenc,

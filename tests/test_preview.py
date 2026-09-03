@@ -377,7 +377,9 @@ def test_the_preview_and_the_conversion_command_share_the_same_filter_value():
         reencode_audio=False,
         stereo_layout="2d",
     )
-    subtitle = SubtitleChoice(kind="embedded_text", stream_index=2, path="/share/a-video.mp4")
+    subtitle = SubtitleChoice(
+        kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/a-video.mp4"
+    )
 
     preview_cmd = build_preview_command(
         "/share/a-video.mp4", "/work/frame.jpg", plan=plan, subtitle=subtitle, at_seconds=5.0
