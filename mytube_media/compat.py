@@ -24,11 +24,31 @@ an English sentence) plus a parameter dict -- the interface is localized
 (D-66) and renders these through `t(key)` with the parameters substituted.
 See `.planning/phases/02-as-is-clips/02-UI-SPEC.md` "Incompatibility
 reasons" for the exact four keys and which of them take parameters.
+
+`Verdict.plan` is one of two values -- `"passthrough"` for an eligible
+source, `"transcode"` for one that is not -- and `plan_reason_key`/
+`plan_reason_params` are exactly the eligibility branch's own `reason_key`/
+`reason_params`, never a second sentence computed here (CONV-01). The
+bitrate ceiling `over_bitrate_ceiling` compares against is advisory only:
+nothing in `_video_eligibility` or in the `plan` computation ever reads
+it, so a compatible source above the ceiling still plans a passthrough
+and stays addable as-is -- the ceiling recommends conversion, it never
+gates it.
+
+`stereo_layout`/`stereo_layout_source` and `subtitle_tracks` come from
+`mytube_media.stereo3d`/`mytube_media.subtitles`, called once each from
+the same `probe()` output this module already has -- never a second
+`ffprobe` invocation. Both of those modules are, like this one, stdlib
+only: importing them here does not weaken the bare-python guarantee
+`check_faststart.py` depends on.
 """
 import json
 import struct
 import subprocess
 from dataclasses import dataclass
+
+from mytube_media.stereo3d import detect_layout
+from mytube_media.subtitles import SubtitleTrack, embedded_tracks
 
 
 class ProbeError(Exception):
@@ -105,6 +125,13 @@ COMPATIBLE_PROFILES = frozenset({"Baseline", "Constrained Baseline", "Main", "Hi
 # contains "level": 41.
 MAX_H264_LEVEL = 41
 
+# D-136: the per-viewer bandwidth figure the constraint section names, as
+# a default for the keyword `analyze` takes -- passed in rather than read
+# from settings, so this module stays free of the application's config
+# (the whole point of the package it lives in). Advisory only: see the
+# module docstring's own statement of that rule.
+DEFAULT_BITRATE_CEILING_BPS = 9_000_000
+
 
 @dataclass(frozen=True)
 class AudioTrack:
@@ -147,6 +174,21 @@ class Verdict:
     the remux actually stores is `effective_audio_codec`'s job, not this
     dataclass's: this module describes the source, and the caller that
     knows the remux's own outcome does the reconciliation.
+
+    The eight fields below (`plan` through `stereo_layout_source`) are
+    CONV-01's "why this path" answer. `plan`/`plan_reason_key`/
+    `plan_reason_params` are the eligibility branch's own verdict restated
+    as a plan -- one place decides the reason, this dataclass just carries
+    it under a second name. `bitrate_bps` is read from the probe's own
+    `format.bit_rate`, never computed from size and duration (a computed
+    figure would silently differ from what every other tool reports for
+    the same file), and is `None` when the probe did not report one --
+    `over_bitrate_ceiling` is then `False`, never `True`: an unmeasurable
+    bitrate is an unknown, not a warning. `subtitle_tracks` is the
+    *embedded* list only; external files come from the filesystem, which
+    `analyze` never touches, and the route that draws the form joins the
+    two. `stereo_layout`/`stereo_layout_source` are `stereo3d.detect_layout`'s
+    own two-tuple, unpacked.
     """
 
     eligible: bool
@@ -167,6 +209,14 @@ class Verdict:
     audio_codec: str | None
     audio_sample_rate: int | None
     audio_channel_layout: str | None
+    plan: str
+    plan_reason_key: str | None
+    plan_reason_params: dict[str, str]
+    bitrate_bps: int | None
+    over_bitrate_ceiling: bool
+    subtitle_tracks: list[SubtitleTrack]
+    stereo_layout: str
+    stereo_layout_source: str
 
 
 def probe(path) -> dict:
@@ -342,7 +392,12 @@ def _video_eligibility(video: dict | None) -> tuple[bool, str | None, dict[str, 
 
 
 def analyze(
-    probe_json: dict, *, selected_audio_index: int | None = None, moov_first: bool | None = None
+    probe_json: dict,
+    *,
+    selected_audio_index: int | None = None,
+    moov_first: bool | None = None,
+    filename: str = "",
+    bitrate_ceiling_bps: int = DEFAULT_BITRATE_CEILING_BPS,
 ) -> Verdict:
     """Turn one `probe()` result into the `Verdict` the add form renders.
 
@@ -359,6 +414,11 @@ def analyze(
     drop the tracks it did not select -- so a source with more than one
     audio stream can never be already-correct, no matter how compliant the
     selected one is.
+
+    `filename` feeds `stereo3d.detect_layout`'s filename-token check only
+    -- it defaults to the empty string, under which that check simply
+    finds nothing and falls through to geometry, exactly as if the caller
+    genuinely does not have a name for the file yet.
     """
     video = _video_stream(probe_json)
     eligible, reason_key, reason_params = _video_eligibility(video)
@@ -400,6 +460,11 @@ def analyze(
 
     fmt = probe_json.get("format", {})
 
+    plan = "passthrough" if eligible else "transcode"
+    bitrate_bps = _maybe_number(fmt.get("bit_rate"), int)
+    over_bitrate_ceiling = bitrate_bps is not None and bitrate_bps > bitrate_ceiling_bps
+    stereo_layout, stereo_layout_source = detect_layout(probe_json, filename)
+
     return Verdict(
         eligible=eligible,
         reason_key=reason_key,
@@ -419,4 +484,12 @@ def analyze(
         audio_codec=selected_track.codec if selected_track else None,
         audio_sample_rate=selected_track.sample_rate if selected_track else None,
         audio_channel_layout=selected_track.channel_layout if selected_track else None,
+        plan=plan,
+        plan_reason_key=reason_key,
+        plan_reason_params=reason_params,
+        bitrate_bps=bitrate_bps,
+        over_bitrate_ceiling=over_bitrate_ceiling,
+        subtitle_tracks=embedded_tracks(probe_json),
+        stereo_layout=stereo_layout,
+        stereo_layout_source=stereo_layout_source,
     )

@@ -125,7 +125,7 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
             # verdict -- treat it the same as "not faststart", the safe
             # default that never claims already_correct incorrectly.
             moov_first = False
-        verdict = analyze(probe_json, moov_first=moov_first)
+        verdict = analyze(probe_json, moov_first=moov_first, filename=entry_name)
 
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
