@@ -27,12 +27,11 @@ from pathlib import Path
 
 import pytest
 
+from mytube_media import compat, remux
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media import add as add_module
-from orchestrator.media import compat
 from orchestrator.media import playlist_queue as worker
-from orchestrator.media import remux
 from orchestrator.media.playlist_queue import (
     REASON_KEY_ASSEMBLY,
     REASON_KEY_CHECKS,

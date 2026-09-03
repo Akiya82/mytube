@@ -96,7 +96,7 @@ def settings(monkeypatch):
 def share_root(tmp_path):
     """A stand-in mount root: two folders, three files, one file named with
     markup. This machine has no CIFS client and
-    `orchestrator.media.share` cannot tell the difference -- that is the
+    `mytube_media.share` cannot tell the difference -- that is the
     point. Reused by this plan's tests and by later plans.
     """
     root = tmp_path / "share"

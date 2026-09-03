@@ -4,23 +4,38 @@ version = "0.1.0"
 description = "Self-hosted progressive-MP4 delivery for VRChat AVPro and browser playback"
 requires-python = ">=3.13"
 license = { text = "MIT" }
+# Only what both the interface and the converter genuinely import: boto3
+# (both upload), pydantic-settings (both read their own settings), httpx
+# (the converter's client -- also already used by orchestrator/cli/
+# cache_warm.py, so left shared rather than duplicated across extras).
 dependencies = [
+    "boto3",
+    "pydantic-settings",
+    "httpx",
+]
+
+[project.optional-dependencies]
+# The interface: the web framework, the server, the database driver, the
+# migration tool (and sqlalchemy, which alembic's own env.py logging
+# config pulls in), the template engine, the form parser, the password
+# hasher, the slug library and the command-line framework. None of these
+# are imported anywhere mytube_media or (eventually) worker would import.
+api = [
     "fastapi>=0.141,<0.150",
     "uvicorn[standard]",
     "asyncpg",
     "alembic",
     "sqlalchemy",
-    "boto3",
-    "pydantic-settings",
     "python-slugify",
     "typer",
-    "httpx",
     "jinja2>=3.1.6",
     "python-multipart>=0.0.32",
     "argon2-cffi>=25.1,<26",
 ]
-
-[project.optional-dependencies]
+# The converter, beyond the shared set above. Empty for now -- the worker
+# package itself lands in a later plan in this phase, and every dependency
+# it will need (httpx, boto3) is already shared.
+worker = []
 dev = [
     "pytest",
     "pytest-asyncio",
@@ -32,7 +47,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["orchestrator*"]
+include = ["mytube_media*", "orchestrator*", "worker*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

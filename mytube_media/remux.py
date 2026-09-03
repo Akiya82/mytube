@@ -9,7 +9,7 @@ source path containing a space, a quote or a semicolon still reaches
 ffmpeg as exactly one argument (T-02-06).
 
 Video is always `-c:v copy` in every branch this module builds -- the
-compatibility gate in `orchestrator.media.compat` is what guarantees the
+compatibility gate in `mytube_media.compat` is what guarantees the
 source is already H.264/High/<=4.1/yuv420p before this module ever runs,
 so there is no video-encode branch here to guard. `-movflags +faststart`
 is present in both remux branches without exception: without it the
@@ -49,7 +49,7 @@ class RemuxError(Exception):
     """ffmpeg exited non-zero or timed out. Carries the last few lines of
     stderr -- enough for a log line, never surfaced to a user (the
     interface renders a translation catalog key, same discipline as
-    `orchestrator.media.compat.ProbeError`).
+    `mytube_media.compat.ProbeError`).
     """
 
 

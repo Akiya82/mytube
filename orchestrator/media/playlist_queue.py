@@ -55,9 +55,10 @@ from pathlib import Path
 
 import asyncpg
 
+from mytube_media import compat, remux
 from orchestrator.config import get_settings
 from orchestrator.db import queries
-from orchestrator.media import compat, playlist_build, remux
+from orchestrator.media import playlist_build
 from orchestrator.storage import (
     abort_dangling_multipart,
     delete_object,

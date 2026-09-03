@@ -14,9 +14,10 @@ from pathlib import Path
 import asyncpg
 import pytest
 
+from mytube_media import compat
 from orchestrator.cli import backfill_technical as cli
 from orchestrator.db import queries
-from orchestrator.media import backfill, compat
+from orchestrator.media import backfill
 
 
 def _probe_json(*, audio_codec="aac", with_video=True, audio_index=1):

@@ -41,12 +41,12 @@ from pathlib import Path
 
 import asyncpg
 
+from mytube_media import compat, remux
+from mytube_media.compat import ProbeError
+from mytube_media.share import ShareEscape, safe_join
 from orchestrator.config import get_settings
 from orchestrator.db import queries
-from orchestrator.media import compat, remux
 from orchestrator.media.add import required_free_bytes
-from orchestrator.media.compat import ProbeError
-from orchestrator.media.share import ShareEscape, safe_join
 from orchestrator.storage import abort_dangling_multipart, delete_object, put_object_from_file
 
 logger = logging.getLogger(__name__)

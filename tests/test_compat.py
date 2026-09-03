@@ -1,4 +1,4 @@
-"""Unit tests for orchestrator.media.compat, driven by real ffprobe output
+"""Unit tests for mytube_media.compat, driven by real ffprobe output
 frozen into tests/fixtures/probe/*.json rather than hand-typed JSON --
 02-RESEARCH.md Pitfall 2 flags the H.264 level x10 convention specifically
 as the kind of fact that is easy to get subtly wrong from memory, and a
@@ -44,7 +44,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.media.compat import (
+from mytube_media.compat import (
     AudioTrack,
     ProbeError,
     analyze,
@@ -415,7 +415,7 @@ def test_the_effective_audio_codec_describes_the_stored_object_not_the_source(
     is always copied -- and the audio sample rate and channel layout
     survive too, because no downmix or resample argument is ever emitted.
     """
-    from orchestrator.media.compat import effective_audio_codec
+    from mytube_media.compat import effective_audio_codec
 
     assert effective_audio_codec(source_codec, reencoded) == "aac"
 

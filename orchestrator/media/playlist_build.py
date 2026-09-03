@@ -4,7 +4,7 @@ needs, the argument list that turns one member into a deliverable
 segment, and the manifest renderer with the validator that stands in
 front of it.
 
-Same split as `orchestrator.media.remux`: everything here is a pure
+Same split as `mytube_media.remux`: everything here is a pure
 function over plain values, unit-testable with no ffmpeg installed, no
 database and no network. There is exactly one ffmpeg runner in this
 codebase -- `remux.run_ffmpeg` -- and the caller imports it directly;
@@ -54,7 +54,7 @@ holds; only the key spelling is fixed by the edge.
 import math
 from dataclasses import dataclass
 
-from orchestrator.media.compat import _parse_frame_rate, audio_tracks
+from mytube_media.compat import _parse_frame_rate, audio_tracks
 
 # Log tags, deliberately outside the `playlist.refused.*` namespace the
 # interface renders from. The verdict below never reaches an operator: a

@@ -1,6 +1,6 @@
 """Path containment (safe_join) and directory listing (list_dir) for the
 mounted network share. `tmp_path` stands in for the CIFS/NFS mount --
-`orchestrator.media.share` cannot tell the difference, which is the point.
+`mytube_media.share` cannot tell the difference, which is the point.
 
 The route tests at the bottom of this file cover GET /, GET /add/{path},
 and GET /lang/{code} -- the containment and escaping proven at the unit
@@ -9,9 +9,9 @@ level above, wired into HTTP responses.
 import httpx
 import pytest
 
+from mytube_media.share import ShareEntry, ShareEscape, ShareUnavailable, list_dir, safe_join
 from orchestrator.config import get_settings
 from orchestrator.main import app
-from orchestrator.media.share import ShareEntry, ShareEscape, ShareUnavailable, list_dir, safe_join
 from orchestrator.web import routes_share
 
 from conftest import ADMIN_FQDN, SESSION_COOKIE

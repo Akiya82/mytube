@@ -21,12 +21,12 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from mytube_media import remux as remux_module
+from mytube_media.compat import audio_tracks
+from mytube_media.compat import probe as ffprobe_probe
 from orchestrator.config import get_settings
 from orchestrator.main import app
 from orchestrator.media import queue as queue_module
-from orchestrator.media import remux as remux_module
-from orchestrator.media.compat import audio_tracks
-from orchestrator.media.compat import probe as ffprobe_probe
 from orchestrator.media.queue import AddJob, AddQueue
 
 from conftest import ADMIN_FQDN, SESSION_COOKIE

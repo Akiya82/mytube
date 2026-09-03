@@ -1,4 +1,4 @@
-"""ffmpeg argument construction (orchestrator.media.remux) -- no ffmpeg
+"""ffmpeg argument construction (mytube_media.remux) -- no ffmpeg
 invoked anywhere in this file, only the produced argv lists inspected.
 """
 import subprocess
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestrator.media.remux import (
+from mytube_media.remux import (
     RemuxError,
     aac_bitrate_for,
     build_poster_command,
@@ -130,7 +130,7 @@ def test_poster_timestamp_fallback_when_duration_unknown():
 def test_no_shell_true_in_module():
     import inspect
 
-    from orchestrator.media import remux as remux_module
+    from mytube_media import remux as remux_module
 
     source = inspect.getsource(remux_module)
     assert "shell=True" not in source

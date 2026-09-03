@@ -33,8 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orchestrator.db import queries
-from orchestrator.media import compat
-from orchestrator.media.share import ShareEscape, safe_join
+from mytube_media import compat
+from mytube_media.share import ShareEscape, safe_join
 
 
 @dataclass(frozen=True)

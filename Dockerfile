@@ -12,13 +12,26 @@ WORKDIR /app
 COPY --from=mwader/static-ffmpeg:9.0@sha256:f1e16a2f8fd9c4470fcccf4de56655c58b4ef7f2e6a5fcefb0e636e124363b36 /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=mwader/static-ffmpeg:9.0@sha256:f1e16a2f8fd9c4470fcccf4de56655c58b4ef7f2e6a5fcefb0e636e124363b36 /ffprobe /usr/local/bin/ffprobe
 
+# fontconfig plus one bundled Cyrillic-capable family (DejaVu Sans) --
+# this is the image the preview's burn-in renders in (D-125), and the
+# slim base ships neither a font configuration library nor any font
+# files at all. Without this layer, libass resolves no family and every
+# preview renders blank or boxed text: a feature that appears to work,
+# produces an image, and shows nothing the operator asked to see (D-124).
+# The worker image installs the same package and names the same family
+# so both programs render the same picture.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fontconfig fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml ./
+COPY mytube_media ./mytube_media
 COPY orchestrator ./orchestrator
 COPY static ./static
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ".[api]"
 
 # Ephemeral scratch space for ffmpeg output (D-52's free-space preflight,
 # D-53's "leaves nothing behind"). Deliberately a plain directory in the

@@ -4,17 +4,17 @@
 Without +faststart, moov sits at the end of the file, and a player
 downloads the whole file before it can show the first frame.
 
-Thin wrapper: the actual logic (`orchestrator.media.compat.moov_before_mdat`)
+Thin wrapper: the actual logic (`mytube_media.compat.moov_before_mdat`)
 lives there instead, because it is also needed inside the running container
 (the "already good, skip ffmpeg" decision is made at runtime), not only
 here, during development. Two call sites, one piece of logic -- duplicating
 it would be a trap waiting to spring.
 
 This script still has to run under the host's own python, which has no
-project virtual environment and no `orchestrator` package installed --
+project virtual environment and no `mytube_media` package installed --
 `tools/make_control_clip.sh` and `tools/make_error_clips.sh` call it exactly
 that way. So the repository root is added to sys.path by hand before the
-import, and `orchestrator.media.compat` deliberately pulls in nothing
+import, and `mytube_media.compat` deliberately pulls in nothing
 third-party at module level (see its own docstring).
 
 Usage: check_faststart.py <mp4_path>
@@ -29,7 +29,7 @@ from pathlib import Path
 # package install.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from orchestrator.media.compat import moov_before_mdat  # noqa: E402
+from mytube_media.compat import moov_before_mdat  # noqa: E402
 
 
 def main():

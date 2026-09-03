@@ -9,7 +9,7 @@ never by echoing the raw request path back into a link (T-02-01).
 The file branch of `share_listing_route` is where `ffprobe` runs (D-56):
 once, when the add form opens, and never while drawing a listing. The
 directory branch never imports or calls anything from
-`orchestrator.media.compat` for exactly that reason.
+`mytube_media.compat` for exactly that reason.
 
 **Nothing synchronous is called bare from this module either** -- the rule
 `orchestrator.media.queue`'s docstring states, for the same reason and on
@@ -28,18 +28,18 @@ from urllib.parse import quote
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
-from orchestrator import auth
-from orchestrator.config import get_settings
-from orchestrator.db import queries
-from orchestrator.media.add import SlugPlan, plan_slug, required_free_bytes
-from orchestrator.media.compat import ProbeError, analyze, moov_before_mdat, probe
-from orchestrator.media.share import (
+from mytube_media.compat import ProbeError, analyze, moov_before_mdat, probe
+from mytube_media.share import (
     ShareEscape,
     ShareUnavailable,
     list_dir,
     relative_to_root,
     safe_join,
 )
+from orchestrator import auth
+from orchestrator.config import get_settings
+from orchestrator.db import queries
+from orchestrator.media.add import SlugPlan, plan_slug, required_free_bytes
 from orchestrator.slugs import SlugError
 from orchestrator.web.templates import LOCALES, render
 

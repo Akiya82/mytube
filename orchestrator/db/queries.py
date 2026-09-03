@@ -416,7 +416,7 @@ async def set_edition_technical(
     always copied so its four parameters carry over unchanged, but the
     audio does not, since the remux re-encodes it to one codec whenever
     the source is not already that codec. The caller does that
-    reconciliation (see `orchestrator.media.compat.effective_audio_codec`)
+    reconciliation (see `mytube_media.compat.effective_audio_codec`)
     before calling this; a caller that passes the raw probe output here is
     passing the wrong thing. All seven default to `None` so a caller that
     predates this phase (or a row this phase's migration left null) keeps

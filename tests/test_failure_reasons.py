@@ -5,10 +5,10 @@ ffmpeg -- the mapping is worth its own quick-loop test because a wrong
 reason costs more than a vague one: it sends the operator to look at the
 wrong subsystem.
 """
+from mytube_media.compat import ProbeError
+from mytube_media.remux import RemuxError
+from mytube_media.share import ShareEscape
 from orchestrator.media import queue as queue_module
-from orchestrator.media.compat import ProbeError
-from orchestrator.media.remux import RemuxError
-from orchestrator.media.share import ShareEscape
 
 _reason_key_for = queue_module._reason_key_for
 

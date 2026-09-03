@@ -49,12 +49,12 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse, Response
 
+from mytube_media.compat import ProbeError, audio_tracks, probe
+from mytube_media.share import ShareEscape, safe_join
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media.add import SlugPlan, plan_slug
-from orchestrator.media.compat import ProbeError, audio_tracks, probe
 from orchestrator.media.queue import AddJob
-from orchestrator.media.share import ShareEscape, safe_join
 from orchestrator.reaper import reap_once
 from orchestrator.slugs import SlugError
 from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
