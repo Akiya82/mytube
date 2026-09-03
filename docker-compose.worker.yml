@@ -17,8 +17,11 @@ services:
       dockerfile: Dockerfile.worker
     # Carries MYTUBE_ORCHESTRATOR_URL, MYTUBE_WORKER_TOKEN (the same
     # value the service's own MYTUBE_WORKER_TOKEN carries -- one shared
-    # credential), MYTUBE_S3_ENDPOINT/MYTUBE_S3_BUCKET (the same bucket
-    # the service uses) and the converter's own storage credential,
+    # credential), MYTUBE_S3_ENDPOINT / MYTUBE_S3_BUCKET / MYTUBE_S3_REGION
+    # (the same storage, bucket and region the service signs with -- a
+    # region that differs from the one the storage was set up with is
+    # refused as a bad signature at upload time, after the card has
+    # already done the work), and the converter's own storage credential
     # MYTUBE_WORKER_S3_KEY / MYTUBE_WORKER_S3_SECRET -- under their own
     # names, never the service's MYTUBE_S3_KEY/MYTUBE_S3_SECRET pair, so
     # a leak from this host cannot hand out the service's own key

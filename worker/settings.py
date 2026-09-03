@@ -63,6 +63,15 @@ class WorkerSettings(BaseSettings):
     worker_s3_secret: str
 
     # --- shared names with the service, same defaults --------------------
+    # The region is part of every signature this process produces, so it
+    # is not cosmetic the way an arbitrary bucket label is: give the
+    # converter a different region from the one the storage was set up
+    # with and every upload comes back SignatureDoesNotMatch -- after the
+    # whole encode has already been paid for on the card. This default has
+    # to stay equal to `orchestrator.config.Settings.s3_region`'s (a test
+    # in `tests/test_worker_storage.py` holds the two together, since this
+    # package cannot import that class to read it), and a deployment that
+    # overrides one has to set MYTUBE_S3_REGION for the other as well.
     s3_region: str = "mytube"
     share_root: str = "/share"
     work_dir: str = "/work"

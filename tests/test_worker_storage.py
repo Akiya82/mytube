@@ -113,6 +113,25 @@ def test_settings_and_client_need_none_of_the_services_own_required_vars(monkeyp
     assert client is not None
 
 
+def test_the_converter_defaults_to_the_same_storage_region_as_the_service():
+    """The region signs every request, so the two processes talking to one
+    MinIO have to agree on it. They disagree the moment one default drifts
+    from the other -- and the symptom is SignatureDoesNotMatch on the
+    upload, at the end of a conversion the card has already paid for, not
+    at start-up where a misconfiguration belongs.
+
+    The converter cannot import the service's settings class to read the
+    value (that is the whole point of `worker/__init__.py`'s rule), so
+    this test is what actually holds the two literals together.
+    """
+    from orchestrator.config import Settings
+
+    assert (
+        WorkerSettings.model_fields["s3_region"].default
+        == Settings.model_fields["s3_region"].default
+    )
+
+
 def test_upload_calls_against_the_configured_bucket(monkeypatch):
     _set_worker_env(monkeypatch, bucket="mytube")
     settings = WorkerSettings()
