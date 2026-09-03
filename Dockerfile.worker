@@ -1,0 +1,104 @@
+# The converter image. A sibling of the interface's own Dockerfile,
+# sharing the same build context (this directory) rather than a file in
+# a subdirectory that would need a different context root -- do not move
+# this file. Built and run on a separate machine from the interface,
+# never alongside it in docker-compose.yml (see docker-compose.worker.yml).
+#
+# No CUDA toolkit anywhere in this image, and no vendor GPU base image --
+# the host's own driver, injected by the host's container runtime at
+# `docker run`/compose time via NVIDIA_DRIVER_CAPABILITIES below, supplies
+# everything the encoder needs. Adding the toolkit here would add hundreds
+# of megabytes for nothing this image ever calls directly.
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# --- the pinned, checksummed media binary --------------------------------
+#
+# Downloaded and verified as a build step, not copied by digest from a
+# published image the way the interface's ffmpeg is -- there is no such
+# image for this redistribution-safe LGPL build. The tag, asset name and
+# checksum below are exactly what
+# docs/experiments/10-lgpl-ffmpeg-nvenc.md's "What the image must use"
+# block records: BtbN/FFmpeg-Builds, the n8.1 line (not n9.0 -- n9.0's
+# NVENC needs a newer driver than the GPU host runs), a dated
+# autobuild-* tag rather than the publisher's moving "latest" label. A
+# checksum mismatch fails the build outright -- a build that silently
+# accepted different bytes than the ones the experiment actually ran is
+# exactly the failure this step exists to prevent.
+ARG FFMPEG_TAG=autobuild-2026-08-31-13-27
+ARG FFMPEG_ASSET=ffmpeg-n8.1.2-50-g1a748fe2cd-linux64-lgpl-8.1.tar.xz
+ARG FFMPEG_SHA256=7d6d93e9c39e0e461feb13c118e91e4eec2515e4da3a01d4ad6790996731bbee
+
+RUN set -eu; \
+    apt-get update && apt-get install -y --no-install-recommends \
+        curl xz-utils ca-certificates \
+    && curl -fsSL -o /tmp/ffmpeg.tar.xz \
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_TAG}/${FFMPEG_ASSET}" \
+    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
+    && tar -xf /tmp/ffmpeg.tar.xz -C /tmp \
+    && mv /tmp/ffmpeg-*/bin/ffmpeg /usr/local/bin/ffmpeg \
+    && mv /tmp/ffmpeg-*/bin/ffprobe /usr/local/bin/ffprobe \
+    && rm -rf /tmp/ffmpeg* \
+    && apt-get purge -y --auto-remove curl xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- a real init process --------------------------------------------------
+#
+# tini as the container's actual PID 1, ahead of the converter's own
+# process -- Docker does not reap zombies or forward signals to
+# grandchildren unless PID 1 does it itself, and a bare `python -m
+# worker` as the entry point would leave an orphaned ffmpeg process
+# holding the card's NVENC session past a container restart. The
+# converter's own SIGTERM handler (worker/__main__.py) is the second
+# half of this; both are needed.
+RUN apt-get update && apt-get install -y --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- fonts -----------------------------------------------------------------
+#
+# The exact same two packages and the same family the interface image
+# installs for its own preview burn-in. D-125's whole parity claim is
+# that a preview rendered in the interface and the conversion rendered
+# here produce the same picture -- a family present on one image and
+# absent on the other substitutes silently, which is exactly the kind of
+# difference nobody notices until they compare two frames side by side.
+# mytube_media.subtitles.BUNDLED_FONT_FAMILY names the family this image
+# must carry; do not install a different one here.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fontconfig fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- the project -----------------------------------------------------------
+#
+# Only the shared package and the converter package -- no orchestrator,
+# no static files, no alembic.ini, no migrations. Those belong to a
+# program that never runs on this machine.
+COPY pyproject.toml ./
+COPY mytube_media ./mytube_media
+COPY worker ./worker
+
+RUN pip install --no-cache-dir ".[worker]"
+
+# Ephemeral scratch space, the converter's own equivalent of the
+# interface's /work -- a plain container-layer directory, wiped on
+# recreate, never a named volume (see docker-compose.worker.yml's own
+# scratch mount for where a real deployment gives this room to work in).
+RUN mkdir -p /work
+
+# D-144: the value the host's container runtime reads to decide which of
+# the card's capabilities to expose to this container. All three,
+# spelled exactly this way -- `utility` is what injects the vendor's own
+# query tool (nvidia-smi); worker/gpu.py reads the card through that tool
+# on every single poll, and without `utility` that check fails
+# permanently, so the converter either never claims anything or claims
+# blindly depending on how the failure is handled -- either way the
+# free-memory floor stops working on the first poll. Trimming this to
+# the two that sound like an encoder's own business is the mistake this
+# comment exists to prevent.
+ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
+
+# No credential, no address and no name baked in -- all of that arrives
+# through docker-compose.worker.yml's own environment at run time.
+
+ENTRYPOINT ["/usr/bin/tini", "--", "python", "-m", "worker"]

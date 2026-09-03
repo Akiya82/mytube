@@ -32,9 +32,12 @@ api = [
     "python-multipart>=0.0.32",
     "argon2-cffi>=25.1,<26",
 ]
-# The converter, beyond the shared set above. Empty for now -- the worker
-# package itself lands in a later plan in this phase, and every dependency
-# it will need (httpx, boto3) is already shared.
+# The converter, beyond the shared set above. Empty -- the worker package
+# now exists (settings, HTTP client, VRAM check, storage client, the
+# claim-probe-build-run-upload-report loop) and imports nothing beyond
+# what api and mytube_media already share: httpx for the HTTP client,
+# boto3 for its own scoped storage credential, pydantic-settings for its
+# own settings class. No web framework, no database driver, ever.
 worker = []
 dev = [
     "pytest",

@@ -367,15 +367,34 @@ async def _process_job(
         await asyncio.to_thread(shutil.rmtree, job_scratch, ignore_errors=True)
 
 
-async def _check_in(client: WorkerClient, *, status: str) -> dict | None:
+async def _check_in(
+    client: WorkerClient, shutdown_event: asyncio.Event, *, status: str
+) -> dict | None:
     """One claim call, tolerant of the service being unreachable -- a
     poller calling in every few seconds should never stop the loop for a
     condition that resolves itself on the next poll. A refused credential
     is the one exception that is not tolerated: it will not resolve
     itself, and the operator needs to see it, not have it retried away.
+
+    Raced against `shutdown_event`: the client's own bounded retry can
+    run for minutes against an address that never answers, and a polite
+    shutdown must not sit through the rest of that window -- the claim
+    call is cancelled outright the moment shutdown is requested, and this
+    returns `None` (the same "nothing to do" answer an empty queue gives)
+    so the caller's own loop condition is what actually ends the turn.
     """
+    claim_task = asyncio.ensure_future(client.claim(status=status))
+    shutdown_task = asyncio.ensure_future(shutdown_event.wait())
+    done, _pending = await asyncio.wait(
+        {claim_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if claim_task not in done:
+        claim_task.cancel()
+        shutdown_task.cancel()
+        return None
+    shutdown_task.cancel()
     try:
-        return await client.claim(status=status)
+        return claim_task.result()
     except AuthenticationRejected:
         raise
     except Exception:
@@ -413,7 +432,7 @@ async def _run(
             # claim this converter cannot back up with any actual card
             # state.
             logger.error("nvidia-smi could not be read: %s", exc)
-            job = await _check_in(client, status="idle")
+            job = await _check_in(client, shutdown_event, status="idle")
             if job is not None:
                 await _process_job(client, s3_client, settings, job, scratch_root, shutdown_event)
                 continue
@@ -432,11 +451,11 @@ async def _run(
                 free_bytes // _BYTES_PER_MIB,
                 settings.worker_vram_min_mib,
             )
-            await _check_in(client, status="waiting_for_gpu")
+            await _check_in(client, shutdown_event, status="waiting_for_gpu")
             await _sleep_or_wake(settings.worker_poll_seconds, shutdown_event)
             continue
 
-        job = await _check_in(client, status="idle")
+        job = await _check_in(client, shutdown_event, status="idle")
         if job is None:
             await _sleep_or_wake(settings.worker_poll_seconds, shutdown_event)
             continue

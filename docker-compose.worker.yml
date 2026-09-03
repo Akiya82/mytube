@@ -1,0 +1,62 @@
+# The converter's own compose file (D-112) -- run on the machine that has
+# the card, not a profile inside docker-compose.yml. That file is how
+# somebody outside this project brings the service up on its own, and
+# this file must not complicate that path in any way; it keeps working
+# exactly as it does today, untouched by this one.
+#
+# Bring the converter up with:
+#   docker compose -f docker-compose.worker.yml up -d --build
+#
+# One service. No published ports -- the converter listens on nothing; it
+# only ever calls out to the service over MYTUBE_ORCHESTRATOR_URL and to
+# storage over MYTUBE_S3_ENDPOINT.
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    # Carries MYTUBE_ORCHESTRATOR_URL, MYTUBE_WORKER_TOKEN (the same
+    # value the service's own MYTUBE_WORKER_TOKEN carries -- one shared
+    # credential), MYTUBE_S3_ENDPOINT/MYTUBE_S3_BUCKET (the same bucket
+    # the service uses) and the converter's own storage credential,
+    # MYTUBE_WORKER_S3_KEY / MYTUBE_WORKER_S3_SECRET -- under their own
+    # names, never the service's MYTUBE_S3_KEY/MYTUBE_S3_SECRET pair, so
+    # a leak from this host cannot hand out the service's own key
+    # (D-115). No explicit environment: entry is needed for any of these
+    # -- env_file already carries them, the same way docker-compose.yml's
+    # own api service documents this pattern.
+    env_file: .env
+    environment:
+      # D-144: exactly what the image itself also sets -- repeated here
+      # because the host's container runtime reads this from the
+      # container's own environment at run time, not from the image's
+      # baked-in default alone, on every compose stack that sets its own
+      # environment: block. All three, spelled this way: `utility` is
+      # what injects the vendor's own query tool (nvidia-smi), and
+      # worker/gpu.py's free-memory check runs that tool on every single
+      # poll -- trim this to the two that sound like an encoder's own
+      # business and the floor check (D-113) fails permanently.
+      NVIDIA_DRIVER_CAPABILITIES: "video,compute,utility"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # The same relative root the service sees, read-only -- a stored
+      # relative source_path has to mean the same file on both machines.
+      # This compose file does not mount the share itself (unlike the
+      # service's own docker-compose.yml, which owns the CIFS mount): the
+      # converter host is expected to already have the same network share
+      # reachable and mounted by the host's own means, bind-mounted in
+      # here. See SETUP.md for how the GPU host's own mount is arranged.
+      - ${MYTUBE_SHARE_HOST_PATH:-./share}:/share:ro
+      # Scratch space for the encoder's own output and the +faststart
+      # rewrite that follows it -- a bind mount onto a disk with room for
+      # a large file plus its rewrite (D-114 names a spinning disk on the
+      # real deployment host; any disk with enough free space works for
+      # an outside user's own machine).
+      - ${MYTUBE_WORKER_SCRATCH_PATH:-./worker-scratch}:/work
+    restart: unless-stopped
