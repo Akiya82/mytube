@@ -10,6 +10,7 @@ carries its encoding forward -- a caller that only kept the text half of
 that pair would produce a preview and a conversion that both render the
 operator's cp1251 subtitles as mojibake.
 """
+import json
 import os
 import re
 import shutil
@@ -29,6 +30,13 @@ BITMAP_SUBTITLE_CODECS = frozenset({"hdmv_pgs_subtitle", "dvd_subtitle"})
 # What `external_tracks` will treat as a subtitle file at all -- the
 # formats this project's own library actually carries (D-122).
 SUBTITLE_EXTENSIONS = frozenset({"srt", "ass", "ssa", "vtt"})
+
+# The refusal boundary `read_text` enforces before it ever calls
+# `read_bytes()` (T-04-41): a manual subtitle path is operator-chosen and
+# may name any file on the share, including the video itself by a typo of
+# the same stem with the wrong extension. 8 MiB is generous for any real
+# subtitle file and small next to the multi-gigabyte source it refuses.
+MAX_SUBTITLE_BYTES = 8 * 1024 * 1024
 
 # Bounds on the recursive step of `external_tracks` (T-04-11): a share
 # folder with a very large tree must not turn drawing the add form into an
@@ -69,6 +77,19 @@ MAX_FONT_FILES = 50
 MAX_FONT_BYTES = 20 * 1024 * 1024  # 20 MiB -- generous for a fansub's set
 _ATTACHMENT_DUMP_TIMEOUT_SECONDS = 30
 _EXTRACT_TIMEOUT_SECONDS = 30
+
+# The `mimetype` tag values a real muxer sets on a font attachment stream
+# (T-04-40): a font whose container tags it at all uses one of these,
+# never a codec name alone. Consulted only when the attachment carries no
+# `codec_name` a probe can classify on its own.
+_FONT_MIMETYPES = frozenset({
+    "application/x-truetype-font",
+    "application/x-font-ttf",
+    "application/vnd.ms-opentype",
+    "font/ttf",
+    "font/otf",
+    "font/sfnt",
+})
 
 # D-124: the family both images install (`fonts-dejavu-core`, added to the
 # interface image in an earlier plan and to the converter image in a
@@ -321,14 +342,63 @@ def read_text(path) -> tuple[str, str]:
     raise SubtitleReadError(f"{path}: could not decode with any known encoding")
 
 
+def copy_external_track(path, scratch_dir) -> Path:
+    """Copy an operator-chosen subtitle file into `scratch_dir` under a
+    generated name, and return the new path. This exists so the burn-in
+    filter never receives an operator-chosen filename at all -- the
+    filter-value escaper has to be correct either way, but a scratch-local
+    name this project generated is one fewer thing that escaping has to
+    hold up against.
+
+    Validates the source the same way `read_text` does (extension, then
+    size) before copying it, so a share path that would be refused for
+    reading is refused here too rather than being copied first and failing
+    later.
+    """
+    source = Path(path)
+    if source.suffix.lstrip(".").lower() not in SUBTITLE_EXTENSIONS:
+        raise SubtitleReadError(f"{source}: not a subtitle file by its extension")
+    try:
+        size = source.stat().st_size
+    except OSError as exc:
+        raise SubtitleReadError(f"{source}: could not be read") from exc
+    if size > MAX_SUBTITLE_BYTES:
+        raise SubtitleReadError(f"{source}: larger than the subtitle size limit")
+
+    destination = Path(scratch_dir) / f"external{source.suffix.lower()}"
+    try:
+        shutil.copy2(source, destination)
+    except OSError as exc:
+        raise SubtitleReadError(f"{source}: could not be copied into scratch") from exc
+    return destination
+
+
 # --- fonts (D-124) ----------------------------------------------------
 
 
+def _is_font_attachment(stream: dict) -> bool:
+    """Whether an attachment stream from the probe is worth dumping at
+    all -- the mimetype/codec filter T-04-40 also requires, so that this
+    module dumps fonts and not, say, an attached cover image. A stream
+    with neither a usable `codec_name` nor a `mimetype` tag keeps today's
+    behaviour and is dumped anyway: a fansub's own TTF is routinely
+    shipped with neither, and refusing it would break the font parity
+    this project already measured.
+    """
+    codec_name = (stream.get("codec_name") or "").lower()
+    if codec_name:
+        return codec_name in FONT_EXTENSIONS
+    mimetype = (stream.get("tags") or {}).get("mimetype")
+    if mimetype:
+        return mimetype.lower() in _FONT_MIMETYPES
+    return True
+
+
 def _dump_container_font_attachments(source: Path, destination: Path) -> None:
-    """Dump every attachment stream in `source`'s own container into
-    `destination`, using ffmpeg's built-in `-dump_attachment` rather than
-    a second external tool for one feature. Runs unconditionally against
-    the source regardless of whether the chosen subtitle track is the
+    """Dump `source`'s own container font attachments into `destination`,
+    using ffmpeg's built-in `-dump_attachment` rather than a second
+    external tool for one feature. Runs unconditionally against the
+    source regardless of whether the chosen subtitle track is the
     embedded one or an external file -- a container's font attachments
     exist to serve whichever subtitle track ends up burned in, and
     checking is cheap even when nothing is there to find. A source with no
@@ -336,15 +406,62 @@ def _dump_container_font_attachments(source: Path, destination: Path) -> None:
     no-op: the fansub's loose font files (already collected by the
     caller) are still used, and this module never blocks a conversion
     over a font.
+
+    Never lets ffmpeg choose the output name (T-04-40): the bare selector
+    with an empty path reads the attachment's own `filename` tag and opens
+    it relative to the process's working directory, which is exactly the
+    path-traversal surface a hostile container can use. This function
+    probes the attachment streams itself first, then dumps each one by
+    its own absolute stream index to an absolute path this function
+    generates -- the tag is never read at all.
     """
     if not source.is_file():
         return
+    probe_argv = [
+        "ffprobe", "-v", "quiet",
+        "-select_streams", "t",
+        "-show_entries", "stream=index,codec_name:stream_tags=mimetype",
+        "-print_format", "json",
+        str(source),
+    ]
+    try:
+        probe_result = subprocess.run(
+            probe_argv,
+            capture_output=True,
+            timeout=_ATTACHMENT_DUMP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    if probe_result.returncode != 0:
+        return
+    try:
+        probe_json = json.loads(probe_result.stdout or b"{}")
+    except ValueError:
+        return
+    streams = probe_json.get("streams") or []
+    if not streams:
+        return
+
     destination.mkdir(parents=True, exist_ok=True)
-    argv = ["ffmpeg", "-y", "-dump_attachment:t", "", "-i", str(source), "-f", "null", "-"]
+    # `-dump_attachment` is an input-file option: ffmpeg reads it while
+    # parsing the input it precedes, so every dump option has to come
+    # before `-i`, not after -- placed after, ffmpeg reads it as an output
+    # option for the null muxer and refuses to start at all.
+    argv = ["ffmpeg", "-y"]
+    dumped = 0
+    for stream in streams:
+        if not _is_font_attachment(stream):
+            continue
+        target = destination / f"attachment_{dumped}.ttf"
+        argv += [f"-dump_attachment:{stream['index']}", str(target)]
+        dumped += 1
+    if not dumped:
+        return
+    argv += ["-i", str(source), "-f", "null", "-"]
     try:
         subprocess.run(
             argv,
-            cwd=destination,
             capture_output=True,
             timeout=_ATTACHMENT_DUMP_TIMEOUT_SECONDS,
             check=False,
@@ -355,10 +472,11 @@ def _dump_container_font_attachments(source: Path, destination: Path) -> None:
 
 def _enforce_font_caps(destination: Path) -> None:
     """Trim `destination` down to `MAX_FONT_FILES`/`MAX_FONT_BYTES` after
-    everything has landed in it (loose copies and dumped attachments
-    alike) -- one bound applied once to the whole directory, rather than
-    two separate counters that could each stay under their own limit while
-    the directory as a whole does not.
+    everything has landed in it. `collect_fonts`'s own copy loop already
+    bounds what this process writes from loose font files; this sweep
+    bounds what ffmpeg wrote via `_dump_container_font_attachments`, which
+    this module has no per-file control over -- both are needed, one for
+    each writer.
     """
     try:
         files = sorted(p for p in destination.iterdir() if p.is_file())
@@ -385,8 +503,15 @@ def collect_fonts(source, subtitle_path, scratch_dir) -> str | None:
     term* (`transcode.build_filter_chain`), never a command-line flag.
     """
     destination = Path(scratch_dir) / "fonts"
+    file_count = 0
+    byte_total = 0
 
     def copy_from(directory: Path) -> None:
+        # T-04-42: the cap is enforced here, before each copy, so the
+        # scratch disk cannot fill up before the cap is ever consulted --
+        # `_enforce_font_caps` only trims what already landed, which is too
+        # late for the disk itself.
+        nonlocal file_count, byte_total
         if not directory.is_dir():
             return
         try:
@@ -396,6 +521,14 @@ def collect_fonts(source, subtitle_path, scratch_dir) -> str | None:
         for candidate in candidates:
             if candidate.suffix.lstrip(".").lower() not in FONT_EXTENSIONS:
                 continue
+            if file_count >= MAX_FONT_FILES:
+                return
+            try:
+                candidate_size = candidate.stat().st_size
+            except OSError:
+                continue
+            if byte_total + candidate_size > MAX_FONT_BYTES:
+                return
             destination.mkdir(parents=True, exist_ok=True)
             target = destination / candidate.name
             if target.exists():
@@ -404,6 +537,8 @@ def collect_fonts(source, subtitle_path, scratch_dir) -> str | None:
                 shutil.copy2(candidate, target)
             except OSError:
                 continue
+            file_count += 1
+            byte_total += candidate_size
 
     if subtitle_path:
         copy_from(Path(subtitle_path).parent)
