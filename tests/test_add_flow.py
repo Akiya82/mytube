@@ -630,6 +630,55 @@ async def test_failure_after_poster_upload_deletes_the_poster_key_too(
     assert len(poster_keys) == 1
 
 
+async def test_a_superseded_terminal_write_leaves_the_title_untouched(
+    client, raw_conn, clips, storage_spy, monkeypatch
+):
+    """WR-02, the add consumer's own half: when the terminal write reports
+    the attempt was superseded (a late report against a job the reaper
+    has already requeued or finished under a different attempt), the
+    consumer must not flip the title active, write the edition's
+    technical detail or its poster -- against a title another attempt may
+    now own.
+    """
+    active_calls = []
+    real_mark_active = queue_module.queries.mark_title_active
+
+    async def spy_mark_active(*args, **kwargs):
+        active_calls.append((args, kwargs))
+        return await real_mark_active(*args, **kwargs)
+
+    async def superseded_finish_job(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(queue_module.queries, "mark_title_active", spy_mark_active)
+    monkeypatch.setattr(queue_module.queries, "finish_job", superseded_finish_job)
+
+    done_event = asyncio.Event()
+    real_process_add = queue_module.process_add
+
+    async def gated_process_add(pool, job):
+        await real_process_add(pool, job)
+        done_event.set()
+
+    monkeypatch.setattr(queue_module, "process_add", gated_process_add)
+
+    clip = clips["already_correct"]
+    resp = await client.post(
+        f"/add/{clip['path'].name}",
+        data=_post_data(clip, name="Superseded Done", slug="superseded-done"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+    await asyncio.wait_for(done_event.wait(), timeout=30.0)
+
+    assert active_calls == [], "a superseded write must never flip the title active"
+    row = await raw_conn.fetchrow(
+        "SELECT status FROM titles WHERE name = $1", "Superseded Done"
+    )
+    assert row["status"] == "preparing"
+
+
 async def test_insufficient_free_space_fails_before_any_ffmpeg_starts(
     client, raw_conn, clips, monkeypatch
 ):

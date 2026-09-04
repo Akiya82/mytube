@@ -191,21 +191,50 @@ async def run_playlist_consumer(pool: asyncpg.Pool, *, poll_interval: float) -> 
             logger.exception("playlist build %s failed", job.playlist_id)
 
 
-async def _record_failure(pool, playlist_id, reason_key: str, reason_params: dict) -> None:
-    async with pool.acquire() as conn:
-        await queries.set_playlist_build_failed(conn, playlist_id, reason_key, reason_params)
+async def _finish(
+    pool,
+    job: PlaylistBuildJob,
+    *,
+    outcome: str,
+    reason_key: str | None = None,
+    reason_params: dict | None = None,
+) -> bool:
+    """This consumer's only call to `finish_job` -- every outcome (done,
+    cancelled, failed) reports through here. For a `failed` outcome, the
+    one catalog write it implies (the playlist's own build-failure row)
+    runs in the same transaction, gated on the terminal write's own
+    answer: a late or duplicate report from a superseded attempt must not
+    flip a playlist another attempt now owns (WR-02). `done`/`cancelled`
+    carry no catalog write of their own here -- `set_playlist_built`'s own
+    `swapped` check already handles the "deleted while building" case
+    atomically, and a plain cancel leaves the playlist row untouched by
+    design.
 
-
-async def _finish(pool, job: PlaylistBuildJob, *, outcome: str, reason_key: str | None = None) -> None:
+    Returns whether the terminal write wrote, so a caller whose own work
+    (an object discard, a log line) does not depend on the catalog row
+    can still run it either way.
+    """
     async with pool.acquire() as conn:
-        await queries.finish_job(
-            conn,
-            job.job_id,
-            worker_name=PLAYLIST_CONSUMER_WORKER_NAME,
-            attempt=job.attempt,
-            outcome=outcome,
-            reason_key=reason_key,
+        async with conn.transaction():
+            wrote = await queries.finish_job(
+                conn,
+                job.job_id,
+                worker_name=PLAYLIST_CONSUMER_WORKER_NAME,
+                attempt=job.attempt,
+                outcome=outcome,
+                reason_key=reason_key,
+            )
+            if wrote and outcome == "failed":
+                await queries.set_playlist_build_failed(
+                    conn, job.playlist_id, reason_key, reason_params or {}
+                )
+    if not wrote:
+        logger.warning(
+            "playlist %s: attempt %s was superseded, not touching the playlist",
+            job.playlist_id,
+            job.attempt,
         )
+    return wrote
 
 
 async def _discard(keys) -> None:
@@ -327,8 +356,9 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
 
         live = [m for m in members if not m["dropped"] and m["object_key"]]
         if not live:
-            await _record_failure(pool, job.playlist_id, REASON_KEY_EMPTY, {})
-            await _finish(pool, job, outcome="failed", reason_key=REASON_KEY_EMPTY)
+            await _finish(
+                pool, job, outcome="failed", reason_key=REASON_KEY_EMPTY, reason_params={}
+            )
             return
 
         parity = playlist_build.parity_verdict(live)
@@ -443,14 +473,7 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
             await _finish(pool, job, outcome="cancelled")
             return
 
-        async with pool.acquire() as conn:
-            await queries.finish_job(
-                conn,
-                job.job_id,
-                worker_name=PLAYLIST_CONSUMER_WORKER_NAME,
-                attempt=job.attempt,
-                outcome="done",
-            )
+        await _finish(pool, job, outcome="done")
 
         logger.info(
             "playlist %s built: %d segment(s)", job.playlist_id, len(artifacts)
@@ -463,8 +486,13 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
         logger.exception("playlist build %s failed", job.playlist_id)
         await _discard(uploaded)
         reason_key = _reason_key_for(exc)
-        await _record_failure(pool, job.playlist_id, reason_key, _reason_params_for(exc))
-        await _finish(pool, job, outcome="failed", reason_key=reason_key)
+        await _finish(
+            pool,
+            job,
+            outcome="failed",
+            reason_key=reason_key,
+            reason_params=_reason_params_for(exc),
+        )
     finally:
         for path in scratch:
             try:

@@ -1879,7 +1879,11 @@ async def heartbeat_job(
     that lost contact with the orchestrator and kept encoding must not be
     able to overwrite the progress of the attempt that superseded it once
     the reaper has already requeued the job and a second worker claimed
-    it.
+    it. The added `status = 'running'` closes the same gap one column
+    over: a job the terminal write already finished (or a stale sweep
+    already failed) still matches on worker name and attempt alone, and
+    without this a late progress report would silently resurrect the
+    stage/progress of a job that is no longer anyone's to report on.
     """
     return await conn.fetchrow(
         """
@@ -1889,7 +1893,7 @@ async def heartbeat_job(
             eta_seconds = COALESCE($6, eta_seconds),
             realtime_factor = COALESCE($7, realtime_factor),
             heartbeat_at = now()
-        WHERE id = $1 AND worker_name = $2 AND attempts = $3
+        WHERE id = $1 AND worker_name = $2 AND attempts = $3 AND status = 'running'
         RETURNING *
         """,
         job_id,
@@ -1923,6 +1927,19 @@ async def finish_job(
     against a dotted catalog-key shape before it is stored (T-04-07), so
     tool output cannot reach the column the library row renders even if a
     caller passes it.
+
+    The added `status = 'running'` is what makes this a *terminal* write
+    in fact, not merely in name: without it, a report that arrives after
+    the job has already finished (a duplicate `done`, a late `failed`
+    from an attempt the reaper already requeued and a second attempt
+    already completed) still matches on worker name and attempt and
+    rewrites a job -- and, through the caller's own follow-up write --
+    an active title, back to whatever this stale report says. Every
+    other writer of the `status` column (`claim_job`, `requeue_job`,
+    `fail_job_exhausted`, `request_job_cancel`) only ever transitions a
+    job *out of* `running`, never back into it, so this condition can
+    never make a legitimate write unreachable -- confirmed by reading
+    each of them, not assumed.
     """
     if outcome == "failed":
         if not reason_key:
@@ -1933,7 +1950,7 @@ async def finish_job(
         UPDATE jobs
         SET status = $4, finished_at = now(), failure_reason = $5,
             realtime_factor = COALESCE($6, realtime_factor)
-        WHERE id = $1 AND worker_name = $2 AND attempts = $3
+        WHERE id = $1 AND worker_name = $2 AND attempts = $3 AND status = 'running'
         RETURNING id
         """,
         job_id,

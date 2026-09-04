@@ -161,6 +161,49 @@ async def _upload(path, key: str, content_type: str = "video/mp4", *, heartbeat)
         raise _UploadError(f"{key}: {exc}") from exc
 
 
+async def _finish_add(
+    pool: asyncpg.Pool,
+    job: "AddJob",
+    *,
+    outcome: str,
+    reason_key: str | None = None,
+    on_success=None,
+) -> bool:
+    """This consumer's only call to `finish_job` -- every outcome (done,
+    cancelled, failed) reports through here, and the one catalog write
+    that outcome implies (flipping the title active, hard-deleting a
+    never-active title, flipping it failed) runs in the same transaction,
+    gated on the terminal write's own answer: a late or duplicate report
+    from a superseded attempt must not touch a title another attempt now
+    owns (WR-02). `on_success`, when given, is an async callable taking
+    the transaction's own connection, run only when the terminal write
+    actually wrote -- never on a superseded answer.
+
+    Returns whether the terminal write wrote, so a caller whose own work
+    (an object cleanup, a log line) does not depend on the catalog row
+    can still run it either way.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            wrote = await queries.finish_job(
+                conn,
+                job.job_id,
+                worker_name=ADD_CONSUMER_WORKER_NAME,
+                attempt=job.attempt,
+                outcome=outcome,
+                reason_key=reason_key,
+            )
+            if wrote and on_success is not None:
+                await on_success(conn)
+    if not wrote:
+        logger.warning(
+            "add %s: attempt %s was superseded, not touching the title",
+            job.title_id,
+            job.attempt,
+        )
+    return wrote
+
+
 def _reason_key_for(exc: Exception) -> str:
     """Map a failure to a translation catalog key, never an English
     sentence (D-66).
@@ -466,7 +509,8 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         selected_track = next(
             (t for t in verdict.tracks if t.index == job.audio_stream_index), None
         )
-        async with pool.acquire() as conn:
+
+        async def _mark_active(conn) -> None:
             await queries.set_edition_technical(
                 conn,
                 job.edition_id,
@@ -503,24 +547,24 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
             if poster_key is not None:
                 await queries.set_edition_poster(conn, job.edition_id, poster_key)
             await queries.mark_title_active(conn, job.title_id)
-            await queries.finish_job(
-                conn,
-                job.job_id,
-                worker_name=ADD_CONSUMER_WORKER_NAME,
-                attempt=job.attempt,
-                outcome="done",
-            )
+
+        # The terminal write runs first, inside the same transaction as
+        # the catalog writes it gates (CR-03(a)'s in-process shape): all
+        # or nothing, and a superseded attempt never flips a title another
+        # attempt now owns.
+        if not await _finish_add(pool, job, outcome="done", on_success=_mark_active):
+            return
 
         elapsed = time.monotonic() - started_at
         logger.info("add %s finished in %.1fs", job.title_id, elapsed)
     except _JobCancelled:
         logger.info("add %s cancelled", job.title_id)
         await _cleanup_orphans(job.object_key, poster_key)
-        async with pool.acquire() as conn:
+
+        async def _drop_never_active(conn) -> None:
             # A cancelled title's address never went live (T-04-32) -- it
             # is hard-deleted here rather than marked 'failed', with no
-            # tombstone, the same guard and the same ordering (objects
-            # already cleaned up above, rows dropped only now)
+            # tombstone, the same guard and the same ordering
             # routes_titles.cancel_route uses for a queued cancellation.
             # Best-effort: a title that has somehow moved on since (or
             # was already removed by a concurrent purge) is not this
@@ -529,13 +573,8 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 await queries.delete_never_active_title(conn, job.title_id)
             except (LookupError, ValueError):
                 pass
-            await queries.finish_job(
-                conn,
-                job.job_id,
-                worker_name=ADD_CONSUMER_WORKER_NAME,
-                attempt=job.attempt,
-                outcome="cancelled",
-            )
+
+        await _finish_add(pool, job, outcome="cancelled", on_success=_drop_never_active)
     except Exception as exc:
         logger.exception("add %s failed", job.title_id)
 
@@ -547,13 +586,10 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         await _cleanup_orphans(job.object_key, poster_key)
 
         reason_key = _reason_key_for(exc)
-        async with pool.acquire() as conn:
+
+        async def _mark_failed(conn) -> None:
             await queries.mark_title_failed(conn, job.title_id, reason_key)
-            await queries.finish_job(
-                conn,
-                job.job_id,
-                worker_name=ADD_CONSUMER_WORKER_NAME,
-                attempt=job.attempt,
-                outcome="failed",
-                reason_key=reason_key,
-            )
+
+        await _finish_add(
+            pool, job, outcome="failed", reason_key=reason_key, on_success=_mark_failed
+        )

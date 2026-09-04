@@ -497,6 +497,105 @@ async def test_a_report_from_a_superseded_attempt_is_refused(db_conn):
     assert after["status"] == before["status"]
 
 
+async def test_a_late_report_against_an_already_finished_job_changes_nothing(db_conn):
+    """The guard the superseded-attempt test above pins (a wrong attempt)
+    is not the only way a stale report can reach this function: the same
+    worker and the same attempt, reporting a second time after the job
+    has already finished, must be refused too -- a duplicate `done`, or a
+    `failed` that arrives after a `done` already committed. Only the
+    added `status = 'running'` condition catches this one; the worker/
+    attempt guard alone would let it through.
+    """
+    title = await _title_and_edition(db_conn, "finish-already-done")
+    job_id = await queries.enqueue_job(
+        db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
+    )
+    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+
+    first = await queries.finish_job(
+        db_conn, job_id, worker_name="ml-server", attempt=claimed["attempts"], outcome="done"
+    )
+    assert first is True
+
+    before = await db_conn.fetchrow(
+        "SELECT status, failure_reason FROM jobs WHERE id = $1", job_id
+    )
+
+    replay = await queries.finish_job(
+        db_conn,
+        job_id,
+        worker_name="ml-server",
+        attempt=claimed["attempts"],
+        outcome="failed",
+        reason_key="failed.reason.unknown",
+    )
+
+    assert replay is False
+    after = await db_conn.fetchrow(
+        "SELECT status, failure_reason FROM jobs WHERE id = $1", job_id
+    )
+    assert after["status"] == before["status"] == "done"
+    assert after["failure_reason"] == before["failure_reason"] is None
+
+
+async def test_a_progress_write_against_a_job_that_is_no_longer_running_returns_nothing(
+    db_conn,
+):
+    title = await _title_and_edition(db_conn, "heartbeat-already-done")
+    job_id = await queries.enqueue_job(
+        db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
+    )
+    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    await queries.finish_job(
+        db_conn, job_id, worker_name="ml-server", attempt=claimed["attempts"], outcome="done"
+    )
+
+    result = await queries.heartbeat_job(
+        db_conn,
+        job_id,
+        worker_name="ml-server",
+        attempt=claimed["attempts"],
+        stage="working",
+        progress_pct=50.0,
+    )
+
+    assert result is None
+
+
+async def test_a_raise_after_the_terminal_write_inside_one_transaction_leaves_the_job_running(
+    db_conn,
+):
+    """The primitive every atomic-write caller in this plan (the success
+    route, the add consumer, the playlist consumer) relies on: a failure
+    anywhere else inside the same `conn.transaction()` rolls the terminal
+    write back along with it, so a job never ends up `done` with its own
+    catalog row left behind by a write that failed a moment later.
+    """
+    title = await _title_and_edition(db_conn, "atomic-rollback")
+    job_id = await queries.enqueue_job(
+        db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
+    )
+    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+
+    with pytest.raises(RuntimeError):
+        async with db_conn.transaction():
+            wrote = await queries.finish_job(
+                db_conn,
+                job_id,
+                worker_name="ml-server",
+                attempt=claimed["attempts"],
+                outcome="done",
+            )
+            assert wrote is True
+            raise RuntimeError("the catalog write that follows exploded")
+
+    row = await db_conn.fetchrow(
+        "SELECT status, finished_at FROM jobs WHERE id = $1", job_id
+    )
+    assert row["status"] == "running"
+    assert row["finished_at"] is None
+
+
 async def test_a_failure_reason_is_stored_as_a_catalog_key(db_conn):
     title = await _title_and_edition(db_conn, "finish-catalog-key")
     job_id = await queries.enqueue_job(

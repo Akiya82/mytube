@@ -56,9 +56,28 @@ MEGABYTE = 1024 * 1024
 _DiskUsage = namedtuple("_DiskUsage", "total used free")
 
 
+class _FakeTransactionCtx:
+    """A no-op stand-in for asyncpg's own transaction context manager --
+    every query below is monkeypatched at the module boundary and never
+    reads `conn` for anything real, so this only needs to enter and exit
+    without swallowing whatever the `async with` block raises.
+    """
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _FakeConn:
+    def transaction(self):
+        return _FakeTransactionCtx()
+
+
 class _AcquireCtx:
     async def __aenter__(self):
-        return object()
+        return _FakeConn()
 
     async def __aexit__(self, *exc_info):
         return False
