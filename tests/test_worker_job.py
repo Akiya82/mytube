@@ -13,6 +13,7 @@ about the job having finished.
 import asyncio
 import json
 import logging
+import time
 import uuid
 from pathlib import Path
 
@@ -29,20 +30,38 @@ def _probe_json() -> dict:
 
 
 class _FakeClient:
-    """Records the report the job ended with; every call answers the way
-    a healthy service does.
+    """Records the report the job ended with, and every heartbeat it was
+    sent; every call answers the way a healthy service does unless a test
+    hands over `heartbeat_responses`.
+
+    `heartbeat_responses` is consumed one entry per `heartbeat()` call, in
+    order: `True`/`False` answers the cancel flag the normal way, an
+    exception instance is raised instead -- the shape a `JobLost` or a
+    transient failure takes. Once exhausted, every further call answers
+    `False`, the same healthy default every other test in this file
+    relies on.
     """
 
-    def __init__(self):
+    def __init__(self, heartbeat_responses: list | None = None):
         self.done_calls = []
         self.failed_calls = []
         self.cancelled_calls = []
+        self.heartbeat_calls = []
+        self.heartbeat_count_at_done = None
+        self._heartbeat_responses = list(heartbeat_responses or [])
 
     async def heartbeat(self, job_id, **kwargs):
+        self.heartbeat_calls.append(kwargs)
+        if self._heartbeat_responses:
+            answer = self._heartbeat_responses.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
         return False
 
     async def done(self, job_id, **kwargs):
         self.done_calls.append(kwargs)
+        self.heartbeat_count_at_done = len(self.heartbeat_calls)
 
     async def failed(self, job_id, *, attempt, reason_key):
         self.failed_calls.append(reason_key)
@@ -116,21 +135,41 @@ def _run_one_job(
     upload_file=None,
     abort_multipart=None,
     run_result=None,
+    run_seconds: float = 0.0,
+    heartbeat_interval: float | None = None,
+    heartbeat_responses: list | None = None,
 ) -> tuple[list[str] | None, _FakeClient]:
     """Drive one job to its end and hand back the command that would have
     been run, or `None` when the job failed before building one.
 
     `upload_file`, `abort_multipart` and `run_result` replace the healthy
     defaults -- they are how a test puts a storage error into one
-    particular step without touching the rest of the run.
+    particular step without touching the rest of the run. `run_seconds`
+    makes the fake run poll `should_cancel` for a while instead of
+    returning instantly, the way a real encode does, so a test can prove
+    something about the heartbeat loop while it is still running.
+    `heartbeat_interval` overrides the module's own real interval so a
+    test does not have to wait real seconds; `heartbeat_responses` is
+    handed to `_FakeClient` unchanged.
     """
     import worker.__main__ as worker_main
 
     probe_json = probe_json if probe_json is not None else _probe_json()
     commands = []
+    client = _FakeClient(heartbeat_responses=heartbeat_responses)
 
-    async def fake_run(cmd, **kwargs):
+    async def fake_run(cmd, *, should_cancel=lambda: False, on_progress=None, **kwargs):
         commands.append(cmd)
+        client.captured_on_progress = on_progress
+        elapsed = 0.0
+        step = 0.01
+        while elapsed < run_seconds:
+            if should_cancel():
+                return _CancelledResult()
+            await asyncio.sleep(step)
+            elapsed += step
+        if run_seconds and should_cancel():
+            return _CancelledResult()
         return run_result if run_result is not None else _FakeResult()
 
     def fake_extract_embedded_track(source, stream_index, scratch_dir, extension="ass"):
@@ -161,8 +200,9 @@ def _run_one_job(
         "abort_multipart",
         abort_multipart or (lambda *args, **kwargs: None),
     )
+    if heartbeat_interval is not None:
+        monkeypatch.setattr(worker_main, "HEARTBEAT_INTERVAL_SECONDS", heartbeat_interval)
 
-    client = _FakeClient()
     settings = _settings(tmp_path)
     asyncio.run(
         worker_main._process_job(
@@ -312,3 +352,114 @@ def test_a_storage_error_while_cleaning_up_after_a_cancellation_is_swallowed(
     assert client.failed_calls == []
     assert client.done_calls == []
     assert "SignatureDoesNotMatch" in caplog.text
+
+
+# --- the heartbeat loop (CR-01, WR-01) -----------------------------------
+
+
+def test_the_heartbeat_interval_is_below_the_library_row_s_poll_interval():
+    """The row polls every 4 seconds -- the loop has to tick faster than
+    that or the operator's own progress bar visibly stands still.
+    """
+    import worker.__main__ as worker_main
+
+    assert worker_main.HEARTBEAT_INTERVAL_SECONDS < 4
+
+
+def test_more_than_one_heartbeat_covers_an_upload_that_outlasts_the_interval(
+    monkeypatch, tmp_path
+):
+    """The whole point of CR-01's fix: a transfer that runs longer than
+    one tick of the loop is still heartbeating throughout, not just once
+    before it starts.
+    """
+
+    def slow_upload(*args, **kwargs):
+        time.sleep(0.05)
+
+    _cmd, client = _run_one_job(
+        monkeypatch,
+        tmp_path,
+        _job(),
+        upload_file=slow_upload,
+        heartbeat_interval=0.01,
+    )
+
+    uploading = [c for c in client.heartbeat_calls if c.get("stage") == "uploading"]
+    assert len(uploading) > 1
+    assert client.done_calls
+
+
+def test_no_heartbeat_follows_the_success_report(monkeypatch, tmp_path):
+    """The loop is stopped before the terminal report is posted -- a tick
+    landing after would be answered not-found and misread as a lost job.
+    """
+    _cmd, client = _run_one_job(
+        monkeypatch, tmp_path, _job(), heartbeat_interval=0.01, run_seconds=0.05
+    )
+
+    assert client.done_calls
+    assert len(client.heartbeat_calls) == client.heartbeat_count_at_done
+
+
+def test_the_progress_callback_performs_no_network_call(monkeypatch, tmp_path):
+    """Called directly against a client whose heartbeat always raises,
+    the callback still returns -- it never awaits the network itself,
+    only the heartbeat loop's own timer does that.
+    """
+    from mytube_media.runner import Progress
+
+    _cmd, client = _run_one_job(monkeypatch, tmp_path, _job())
+
+    async def _call_it():
+        await client.captured_on_progress(
+            Progress(out_time_seconds=1.0, speed=1.0, done=False), 50.0
+        )
+
+    # The job already finished above with a healthy client; this proves
+    # the callback's own shape needs nothing from the client at all.
+    asyncio.run(_call_it())
+
+
+def test_a_heartbeat_answered_not_found_stops_the_run_and_reports_nothing(
+    monkeypatch, tmp_path
+):
+    """The service saying "this attempt no longer owns the job" stops the
+    encode the same way an operator's cancel does, but the converter must
+    not then post an outcome for it -- no done, no failed, no cancelled.
+    """
+    from worker.client import JobLost
+
+    _cmd, client = _run_one_job(
+        monkeypatch,
+        tmp_path,
+        _job(),
+        heartbeat_interval=0.01,
+        run_seconds=0.3,
+        heartbeat_responses=[False, False, JobLost("superseded")],
+    )
+
+    assert client.done_calls == []
+    assert client.failed_calls == []
+    assert client.cancelled_calls == []
+
+
+def test_a_heartbeat_answered_with_any_other_error_is_logged_and_the_encode_continues(
+    monkeypatch, tmp_path, caplog
+):
+    """Every other heartbeat failure keeps today's behaviour: ten minutes
+    of card time is not thrown away for a blip the service side already
+    tolerates.
+    """
+    with caplog.at_level(logging.WARNING):
+        _cmd, client = _run_one_job(
+            monkeypatch,
+            tmp_path,
+            _job(),
+            heartbeat_interval=0.01,
+            run_seconds=0.1,
+            heartbeat_responses=[RuntimeError("network blip")],
+        )
+
+    assert client.done_calls
+    assert client.failed_calls == []

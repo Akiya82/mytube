@@ -6,10 +6,13 @@ protocol version and the converter's own name (D-111, D-117). The claim
 returns nothing on an empty-queue answer rather than raising. Every call
 retries a genuine network failure with a backoff that grows and is
 capped, giving up at a bounded window and raising then (D-116) -- but a
-refusal of the credential (401) and a conflict answer (409) are each
-raised immediately and never retried: a wrong credential is not a
-transient condition, and a conflict means the job has already moved on,
-so the correct response is cleanup, not persistence.
+refusal of the credential (401), a conflict answer (409) and a not-found
+answer (404) are each raised immediately and never retried: a wrong
+credential is not a transient condition, a conflict means the job has
+already moved on so the correct response is cleanup, and a not-found on a
+heartbeat means this attempt no longer owns the job at all -- retrying
+that would just ask the same question of a job that will never answer
+yes again.
 
 Nothing here ever logs the credential or the authorization header.
 """
@@ -43,6 +46,17 @@ class AuthenticationRejected(Exception):
     """A 401: the presented credential was refused. Never retried -- a
     wrong credential is not a transient condition, and retrying it only
     delays the operator learning about it.
+    """
+
+
+class JobLost(Exception):
+    """A 404: the service says this attempt no longer owns the job it
+    thinks it is still working -- the reaper requeued it, or another
+    attempt already claimed and finished it. Raised only by the heartbeat
+    call in practice, since that is the one conversation the service can
+    answer this way mid-run; the caller's response is the same as an
+    operator's own cancel: stop the encode, and report nothing further for
+    this attempt.
     """
 
 
@@ -112,6 +126,8 @@ class WorkerClient:
             raise AuthenticationRejected("the presented worker credential was refused")
         if response.status_code == 409:
             raise ReportRejected(f"{path}: the job has moved on to a different attempt")
+        if response.status_code == 404:
+            raise JobLost(f"{path}: this attempt no longer owns the job")
         response.raise_for_status()
         return response
 

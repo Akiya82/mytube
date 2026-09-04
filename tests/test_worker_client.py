@@ -175,6 +175,26 @@ async def test_a_refused_report_is_raised_as_a_rejection_the_caller_can_act_on()
     assert calls["n"] == 1
 
 
+async def test_a_not_found_answer_is_raised_as_a_lost_job_never_retried():
+    """The heartbeat route answers not-found once this attempt no longer
+    owns the job -- the converter's only correct response is to stop, not
+    to keep asking the same question.
+    """
+    from worker.client import JobLost
+
+    calls = {"n": 0}
+
+    async def handler(request):
+        calls["n"] += 1
+        return httpx.Response(404)
+
+    client = _client(handler)
+    with pytest.raises(JobLost):
+        await client.heartbeat(STUB_JOB_ID, attempt=1, stage="working")
+
+    assert calls["n"] == 1
+
+
 async def test_a_refusal_of_the_token_is_not_retried_forever():
     """A wrong credential is not a transient condition."""
     calls = {"n": 0}

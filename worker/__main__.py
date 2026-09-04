@@ -12,6 +12,7 @@ audio track, which subtitle, which layout) cross the network; everything
 else is rebuilt from the file as it is right now.
 """
 import asyncio
+import contextlib
 import logging
 import shutil
 import signal
@@ -44,7 +45,7 @@ from mytube_media.transcode import (
 
 from worker import gpu
 from worker import storage as worker_storage
-from worker.client import AuthenticationRejected, ReportRejected, WorkerClient
+from worker.client import AuthenticationRejected, JobLost, ReportRejected, WorkerClient
 from worker.settings import WorkerSettings
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,16 @@ _BYTES_PER_MIB = 1024 * 1024
 # cannot occupy the card forever -- the same "bounded, not unbounded"
 # discipline mytube_media.runner's own timeout argument already carries.
 TRANSCODE_TIMEOUT_SECONDS = 10800
+
+# Deliberately below the library row's own 4-second poll interval, not a
+# round "every 30 seconds" figure: the phase measured a cancel reaching
+# the card in 4.6 seconds end to end, and the row's own progress must
+# never visibly stand still for longer than one poll. A request every
+# three seconds from one converter costs the service nothing -- what it
+# buys is a heartbeat that covers the upload too, closing the gap where a
+# transfer running longer than the reaper's stale threshold used to get
+# its own job requeued out from under it.
+HEARTBEAT_INTERVAL_SECONDS = 3.0
 
 # The dotted catalog keys this program is allowed to report on a
 # failure -- the service's own allow-list
@@ -185,31 +196,69 @@ async def _process_job(
     object_key = job["object_key"]
     job_scratch = scratch_root / str(job_id)
 
-    cancel_state = {"requested": False}
+    # "requested" is what `_should_stop` polls -- set by an operator's own
+    # cancel (through a heartbeat's answer) or by a not-found answer.
+    # "job_lost" distinguishes the second case from the first once the
+    # run has actually stopped: an operator's cancel still reports
+    # `cancelled`, a not-found reports nothing at all, because the
+    # service has already told this attempt it does not own the job.
+    cancel_state = {"requested": False, "job_lost": False}
+
+    # Written by the progress callback, read by the heartbeat loop --
+    # nothing else passes progress between the two. The callback never
+    # awaits the network itself; the loop is the only thing that ever
+    # calls `client.heartbeat` for this job.
+    progress_state: dict = {"stage": "working", "progress_pct": None, "realtime_factor": None}
 
     def _should_stop() -> bool:
         return cancel_state["requested"] or shutdown_event.is_set()
 
-    async def _heartbeat(
-        *, stage: str, progress_pct: float | None = None, realtime_factor: float | None = None
-    ) -> None:
-        # A heartbeat that cannot reach the service does not stop the
-        # encode -- ten minutes of card time is not thrown away for a
-        # blip the service side is already built to tolerate for a
-        # bounded while (the reaper's own stale-job threshold).
-        try:
-            cancel_requested = await client.heartbeat(
-                job_id,
-                attempt=attempt,
-                stage=stage,
-                progress_pct=progress_pct,
-                realtime_factor=realtime_factor,
-            )
-        except Exception:
-            logger.warning("job %s: heartbeat did not reach the service", job_id, exc_info=True)
-            return
-        if cancel_requested:
-            cancel_state["requested"] = True
+    async def _heartbeat_loop() -> None:
+        """One heartbeat every `HEARTBEAT_INTERVAL_SECONDS`, reporting
+        whatever `progress_state` currently holds -- covering every stage
+        this job passes through, the upload included, since this loop
+        does not care what the main path is doing. Cancelled deliberately
+        by `_process_job` before its own terminal report is posted: a
+        tick landing after that report has already committed would be
+        answered not-found and misread as a lost job.
+        """
+        while True:
+            try:
+                cancel_requested = await client.heartbeat(
+                    job_id,
+                    attempt=attempt,
+                    stage=progress_state["stage"],
+                    progress_pct=progress_state["progress_pct"],
+                    realtime_factor=progress_state["realtime_factor"],
+                )
+            except JobLost:
+                # The service says this attempt no longer owns the job --
+                # stop the run the same way an operator's cancel stops
+                # it, but distinctly, so the caller reports nothing for
+                # it afterward.
+                cancel_state["requested"] = True
+                cancel_state["job_lost"] = True
+                return
+            except Exception:
+                # Every other heartbeat failure keeps today's behaviour:
+                # logged, encode continues. Ten minutes of card time is
+                # not thrown away for a blip the service side is already
+                # built to tolerate for a bounded while (the reaper's own
+                # stale-job threshold).
+                logger.warning(
+                    "job %s: heartbeat did not reach the service", job_id, exc_info=True
+                )
+            else:
+                if cancel_requested:
+                    cancel_state["requested"] = True
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
+    heartbeat_task = asyncio.ensure_future(_heartbeat_loop())
+
+    async def _stop_heartbeat_loop() -> None:
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
 
     try:
         job_scratch.mkdir(parents=True, exist_ok=True)
@@ -352,7 +401,12 @@ async def _process_job(
             )
 
         async def on_progress(progress, percent) -> None:
-            await _heartbeat(stage="working", progress_pct=percent, realtime_factor=progress.speed)
+            # No network call here on purpose -- a service that never
+            # answers must not delay the encode. The heartbeat loop reads
+            # this same dictionary on its own timer and is the only thing
+            # that ever posts a heartbeat for this job.
+            progress_state["progress_pct"] = percent
+            progress_state["realtime_factor"] = progress.speed
 
         result = await run_ffmpeg_with_progress(
             cmd,
@@ -376,7 +430,11 @@ async def _process_job(
         if not moov_first:
             raise _OutputVerificationError(f"{destination}: the moov atom is not first")
 
-        await _heartbeat(stage="uploading")
+        # Writing the dictionary is the whole of setting this stage --
+        # the loop picks it up on its next tick and keeps reporting
+        # throughout the transfer, which is the whole point (CR-01):
+        # a multi-gigabyte upload is now covered the same as the encode.
+        progress_state["stage"] = "uploading"
         try:
             await asyncio.to_thread(
                 worker_storage.upload_file, s3_client, settings, str(destination), object_key
@@ -384,24 +442,51 @@ async def _process_job(
         except Exception as exc:
             raise _UploadError(str(exc)) from exc
 
-        try:
-            await client.done(job_id, attempt=attempt, object_key=object_key)
-        except ReportRejected:
-            # The job moved on to a different attempt. This converter has
-            # no delete beyond its own keys (D-115): only abort a dangling
-            # multipart upload of its own -- the service removes the
-            # completed object itself, on this same refusal, since only it
-            # holds the credential wide enough to do that.
-            await _abort_upload_quietly(s3_client, settings, object_key, job_id)
+        # Stopped deliberately here, before the terminal report: a tick
+        # landing after this report has already committed would be
+        # answered not-found and misread as a lost job.
+        await _stop_heartbeat_loop()
+        if cancel_state["job_lost"]:
+            # The service told us during the upload that this attempt no
+            # longer owns the job -- a converter that has been told that
+            # must not then post an outcome for it.
             logger.info(
-                "job %s: the done report was refused (superseded) -- our own dangling "
-                "upload was aborted; the service removes the completed object",
+                "job %s: the service said this attempt no longer owns the job -- "
+                "the done report was not sent",
                 job_id,
             )
+            await _abort_upload_quietly(s3_client, settings, object_key, job_id)
+        else:
+            try:
+                await client.done(job_id, attempt=attempt, object_key=object_key)
+            except ReportRejected:
+                # The job moved on to a different attempt. This converter
+                # has no delete beyond its own keys (D-115): only abort a
+                # dangling multipart upload of its own -- the service
+                # removes the completed object itself, on this same
+                # refusal, since only it holds the credential wide enough
+                # to do that.
+                await _abort_upload_quietly(s3_client, settings, object_key, job_id)
+                logger.info(
+                    "job %s: the done report was refused (superseded) -- our own "
+                    "dangling upload was aborted; the service removes the completed "
+                    "object",
+                    job_id,
+                )
 
     except _JobCancelled:
+        await _stop_heartbeat_loop()
         await _abort_upload_quietly(s3_client, settings, object_key, job_id)
-        if shutdown_event.is_set():
+        if cancel_state["job_lost"]:
+            # A converter that has been told the job is not its own must
+            # not then post an outcome for it -- no done, no failed, no
+            # cancelled.
+            logger.info(
+                "job %s: the service said this attempt no longer owns the job -- "
+                "stopped, nothing reported",
+                job_id,
+            )
+        elif shutdown_event.is_set():
             # Shutting down: the heartbeat going stale is what the
             # service is already built to handle, and attempting a report
             # here only delays the exit.
@@ -416,17 +501,32 @@ async def _process_job(
                 logger.exception("job %s: could not report the cancellation", job_id)
     except Exception as exc:
         logger.exception("job %s: failed", job_id)
+        await _stop_heartbeat_loop()
         # Unconditional, whether or not an upload was ever attempted --
         # abort_multipart on a key with nothing dangling is a safe no-op.
         await _abort_upload_quietly(s3_client, settings, object_key, job_id)
-        reason_key = _reason_key_for(exc)
-        try:
-            await client.failed(job_id, attempt=attempt, reason_key=reason_key)
-        except ReportRejected:
-            logger.info("job %s: failure report refused (already superseded)", job_id)
-        except Exception:
-            logger.exception("job %s: could not report the failure (reason=%s)", job_id, reason_key)
+        if cancel_state["job_lost"]:
+            logger.info(
+                "job %s: the service said this attempt no longer owns the job -- "
+                "the failure was not reported",
+                job_id,
+            )
+        else:
+            reason_key = _reason_key_for(exc)
+            try:
+                await client.failed(job_id, attempt=attempt, reason_key=reason_key)
+            except ReportRejected:
+                logger.info("job %s: failure report refused (already superseded)", job_id)
+            except Exception:
+                logger.exception(
+                    "job %s: could not report the failure (reason=%s)", job_id, reason_key
+                )
     finally:
+        # A backstop only -- every path above already stops the loop
+        # before its own report, this just guards against a path that
+        # never reached one. Cancelling an already-stopped task is a
+        # no-op.
+        await _stop_heartbeat_loop()
         await asyncio.to_thread(shutil.rmtree, job_scratch, ignore_errors=True)
 
 
