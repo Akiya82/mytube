@@ -83,6 +83,46 @@ def client():
     return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
 
+def _valid_done_body(**overrides) -> dict:
+    """A `DoneBody` with every field this plan added filled in with a
+    plausible value -- the baseline every route test below posts, then
+    mutates one field at a time to prove the field's own bound or its own
+    required-but-nullable shape. `source_profile`, `subtitle_burned_*`,
+    `video_level`, `audio_language`, `audio_title` and `poster_key` are
+    exactly the seven fields `DoneBody`'s own docstring declares as
+    accepting absence -- carried here as real values so a test that wants
+    the absent case sets one to `None` explicitly rather than omitting it.
+    """
+    body = {
+        "protocol": 1,
+        "worker": "ml-server",
+        "attempt": 1,
+        "object_key": "x.mp4",
+        "source_codec": "hevc",
+        "source_profile": "Main 10",
+        "subtitle_burned_language": "eng",
+        "subtitle_burned_title": "English",
+        "size_bytes": 123_456_789,
+        "duration_seconds": 1423.5,
+        "width": 1920,
+        "height": 1080,
+        "fps": 23.976,
+        "video_profile": "High",
+        "video_level": 41,
+        "pix_fmt": "yuv420p",
+        "audio_codec": "aac",
+        "audio_sample_rate": 48000,
+        "audio_channel_layout": "stereo",
+        "audio_language": "eng",
+        "audio_title": "English",
+        "audio_reencoded": False,
+        "poster_key": "edition-1.jpg",
+        "realtime_factor": 1.4,
+    }
+    body.update(overrides)
+    return body
+
+
 def _worker_requests():
     """(path, body) for each of the five worker-facing routes, in the
     frozen shape this plan fixes.
@@ -101,10 +141,7 @@ def _worker_requests():
                 "realtime_factor": 1.1,
             },
         ),
-        (
-            f"/worker/jobs/{STUB_JOB_ID}/done",
-            {"protocol": 1, "worker": "ml-server", "attempt": 1, "object_key": "x.mp4"},
-        ),
+        (f"/worker/jobs/{STUB_JOB_ID}/done", _valid_done_body()),
         (
             f"/worker/jobs/{STUB_JOB_ID}/failed",
             {
@@ -406,11 +443,12 @@ async def test_a_claim_records_the_check_in_even_when_it_finds_nothing(monkeypat
 @pytest.mark.parametrize("outcome", ["done", "failed", "cancelled"])
 async def test_a_superseded_report_refuses_with_a_status_the_worker_can_act_on(client, outcome):
     """The signal to delete what it uploaded."""
-    body = {"protocol": 1, "worker": "ml-server", "attempt": 1}
     if outcome == "done":
-        body["object_key"] = "x.mp4"
-    if outcome == "failed":
-        body["reason_key"] = "failed.reason.upload"
+        body = _valid_done_body()
+    else:
+        body = {"protocol": 1, "worker": "ml-server", "attempt": 1}
+        if outcome == "failed":
+            body["reason_key"] = "failed.reason.upload"
 
     async with client:
         resp = await client.post(
@@ -484,3 +522,161 @@ async def test_an_unknown_job_identifier_answers_a_refusal_rather_than_an_error(
         )
     assert resp.status_code == 404
     assert "traceback" not in resp.text.lower()
+
+
+# --- Bounds and enumerations (WR-05/IN-13/T-04-57) -----------------------
+
+
+async def test_a_heartbeat_whose_progress_value_is_not_a_number_is_refused(
+    monkeypatch, client
+):
+    """The exact reproduction WR-05 recorded (a JSON string carrying
+    `"NaN"`, not a bare float) -- `allow_inf_nan=False` is what refuses
+    it, never a value that would otherwise reach `heartbeat_job` and then
+    raise while the library page renders it.
+    """
+    from orchestrator.db import queries
+
+    written = []
+
+    async def spy_heartbeat_job(conn, job_id, **kwargs):
+        written.append(kwargs)
+        return {"cancel_requested": False}
+
+    monkeypatch.setattr(queries, "heartbeat_job", spy_heartbeat_job, raising=False)
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
+            json={
+                "protocol": 1,
+                "worker": "ml-server",
+                "attempt": 1,
+                "stage": "working",
+                "progress_pct": "NaN",
+            },
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 422
+    assert written == [], "a value that fails validation must never reach the database"
+
+
+async def test_a_progress_value_outside_the_percentage_range_is_refused(client):
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
+            json={
+                "protocol": 1,
+                "worker": "ml-server",
+                "attempt": 1,
+                "stage": "working",
+                "progress_pct": 142.0,
+            },
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("eta_seconds", -1), ("realtime_factor", 0), ("attempt", 0)],
+)
+async def test_a_negative_estimate_a_non_positive_speed_and_an_attempt_below_one_are_refused(
+    client, field, value
+):
+    body = {
+        "protocol": 1,
+        "worker": "ml-server",
+        "attempt": 1,
+        "stage": "working",
+    }
+    body[field] = value
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/heartbeat", json=body,
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 422
+
+
+async def test_a_heartbeat_with_an_unknown_stage_word_is_refused_naming_the_field(client):
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
+            json={
+                "protocol": 1,
+                "worker": "ml-server",
+                "attempt": 1,
+                "stage": "not-a-real-stage",
+            },
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 422
+    assert "stage" in str(resp.json()).lower()
+
+
+async def test_a_claim_with_an_unknown_check_in_status_is_refused(client):
+    async with client:
+        resp = await client.post(
+            "/worker/claim",
+            json={"protocol": 1, "worker": "ml-server", "status": "not-a-real-status"},
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 422
+    assert "status" in str(resp.json()).lower()
+
+
+async def test_a_success_body_missing_the_stored_objects_size_is_refused(client):
+    body = _valid_done_body()
+    del body["size_bytes"]
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/done",
+            json=body,
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 422
+
+
+async def test_a_success_body_with_no_subtitle_burned_is_accepted(client):
+    """A conversion with no subtitle chosen has nothing to name there --
+    the two fields are still required keys, but `null` is a legitimate
+    value for both, never a reason to refuse the whole report.
+    """
+    body = _valid_done_body(subtitle_burned_language=None, subtitle_burned_title=None)
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/done",
+            json=body,
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code != 422
+
+
+def test_done_body_carries_room_for_every_technical_field_the_row_needs():
+    from orchestrator.web.routes_worker import DoneBody
+
+    fields = set(DoneBody.model_fields)
+    needed = {
+        "source_codec",
+        "source_profile",
+        "subtitle_burned_language",
+        "subtitle_burned_title",
+        "size_bytes",
+        "duration_seconds",
+        "width",
+        "height",
+        "fps",
+        "video_profile",
+        "video_level",
+        "pix_fmt",
+        "audio_codec",
+        "audio_sample_rate",
+        "audio_channel_layout",
+        "audio_language",
+        "audio_title",
+        "audio_reencoded",
+        "poster_key",
+        "realtime_factor",
+    }
+    assert needed <= fields, needed - fields

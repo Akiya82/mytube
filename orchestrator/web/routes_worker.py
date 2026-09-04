@@ -21,10 +21,11 @@ import asyncio
 import logging
 import secrets
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from orchestrator.config import get_settings
 from orchestrator.db import queries
@@ -93,30 +94,99 @@ class _WorkerRequest(BaseModel):
 class ClaimBody(_WorkerRequest):
     # 'idle' (ready for work) or 'waiting_for_gpu' (the shared card is
     # below the free-memory floor, D-113) -- what worker_checkins.status
-    # records on every claim, whether or not it finds work.
-    status: str = "idle"
+    # records on every claim, whether or not it finds work. Enumerated
+    # (WR-05/IN-13) rather than a free string: any other value would
+    # otherwise reach the column's own CHECK constraint and come back as
+    # an unrelated database error instead of a 422 naming the field.
+    status: Literal["idle", "waiting_for_gpu"] = "idle"
 
 
 class HeartbeatBody(_WorkerRequest):
-    attempt: int
-    stage: str
-    progress_pct: float | None = None
-    eta_seconds: int | None = None
-    realtime_factor: float | None = None
+    # Bounded rather than a bare int (WR-05): the second and third
+    # attempts at the same job are real, but nothing legitimate ever
+    # claims a job for the zeroth or a negative time.
+    attempt: int = Field(ge=1)
+    # Enumerated against `jobs.stage`'s own CHECK constraint (WR-05/
+    # IN-13): 'queued' and 'cancelling' are never valid heartbeat stages
+    # (a heartbeat only ever reports the two states a worker itself
+    # observes itself in), so a converter that sends either -- or a typo
+    # -- is refused by name here rather than reaching the constraint and
+    # coming back as a 404 with a stack trace logged on every request.
+    stage: Literal["working", "uploading"]
+    # A credential holder can reach this route with numbers alone
+    # (T-04-57): every bound below exists because the value is stored
+    # unguarded and then rendered unguarded, on the library page every
+    # operator watches. `allow_inf_nan=False` refuses NaN/inf, which
+    # `derive_job_ui`'s own `int(round(progress))` cannot survive.
+    progress_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    eta_seconds: int | None = Field(default=None, ge=0, le=7 * 24 * 3600)
+    realtime_factor: float | None = Field(default=None, gt=0, le=1000, allow_inf_nan=False)
 
 
 class DoneBody(_WorkerRequest):
-    attempt: int
+    """The success report. Every field from `source_codec` onward is
+    explicit and carries no default -- a converter that omits a key is
+    refused rather than answered as if it had sent a plausible value
+    (T-04-58's own prohibition against a fabricated fact).
+
+    Which fields may still carry an explicit `null` is a decision, stated
+    here rather than left to be inferred from the type alone (recorded
+    for the next plan's own converter-side model in this plan's own
+    Summary): `size_bytes`, `duration_seconds`, `width`, `height` and
+    `audio_reencoded` are facts every conversion always knows, so they
+    have no `| None` at all -- a report missing one of them is refused,
+    never silently written as absent. `source_codec`, `fps`,
+    `video_profile`, `pix_fmt`, `audio_codec`, `audio_sample_rate`,
+    `audio_channel_layout` and `realtime_factor` describe the stored
+    object this same conversion just produced and measured, so they are
+    equally always known and equally carry no `| None`. The remaining
+    seven -- `source_profile` (a codec that carries no profile),
+    `video_level` (a container that carries no level tag),
+    `audio_language`/`audio_title` (a source track with no language or
+    title tag), `subtitle_burned_language`/`subtitle_burned_title` (a
+    conversion with no subtitle burned) and `poster_key` (a poster whose
+    extraction failed) -- are genuinely sometimes absent, so each is
+    typed `| None` with no default: still a required key, but the value
+    itself may be sent as `null`.
+    """
+
+    attempt: int = Field(ge=1)
     object_key: str
+
+    # --- what the source was, and what was done to it (D-146) ---------
+    source_codec: str
+    source_profile: str | None
+    subtitle_burned_language: str | None
+    subtitle_burned_title: str | None
+
+    # --- what the stored object is (D-60, WR-08) -----------------------
+    size_bytes: int = Field(gt=0, le=10_000_000_000_000)
+    duration_seconds: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
+    width: int = Field(gt=0, le=100_000)
+    height: int = Field(gt=0, le=100_000)
+    fps: float = Field(gt=0, le=1_000, allow_inf_nan=False)
+    video_profile: str
+    video_level: int | None = Field(ge=0, le=1_000)
+    pix_fmt: str
+    audio_codec: str
+    audio_sample_rate: int = Field(gt=0, le=1_000_000)
+    audio_channel_layout: str
+    audio_language: str | None
+    audio_title: str | None
+    audio_reencoded: bool
+
+    # --- the rest of what `done_route` needs to finish the row ---------
+    poster_key: str | None
+    realtime_factor: float = Field(gt=0, le=1_000, allow_inf_nan=False)
 
 
 class FailedBody(_WorkerRequest):
-    attempt: int
+    attempt: int = Field(ge=1)
     reason_key: str
 
 
 class CancelledBody(_WorkerRequest):
-    attempt: int
+    attempt: int = Field(ge=1)
 
 
 def _protocol_mismatch(protocol: int) -> JSONResponse | None:
@@ -300,10 +370,10 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
                 await queries.set_edition_conversion_detail(
                     conn,
                     job_row["edition_id"],
-                    source_codec=None,
-                    source_profile=None,
-                    subtitle_burned_language=None,
-                    subtitle_burned_title=None,
+                    source_codec=body.source_codec,
+                    source_profile=body.source_profile,
+                    subtitle_burned_language=body.subtitle_burned_language,
+                    subtitle_burned_title=body.subtitle_burned_title,
                     stereo_layout=job_row["stereo_layout"],
                 )
     except Exception:
