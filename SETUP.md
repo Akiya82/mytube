@@ -275,7 +275,12 @@ Bring it up with the second compose file, on the machine that has the card:
 docker compose -f docker-compose.worker.yml up -d --build
 ```
 
-It reads its own variables from the same `.env`:
+It reads its variables from its own `.env.worker`, a separate file on the
+GPU host — **not** a copy of this service's own `.env`. Copying that file
+instead would hand the GPU host the service's own storage key, database
+password, signing secret and share password, all readable from the
+container's environment; only the eleven variables below belong on that
+machine.
 
 | Variable | Purpose | Requirement |
 |---|---|---|
@@ -283,6 +288,10 @@ It reads its own variables from the same `.env`:
 | `MYTUBE_WORKER_TOKEN` | The shared credential. **Must be the exact same value** given to this service's own `MYTUBE_WORKER_TOKEN` (see the variable table above) | Required, no default |
 | `MYTUBE_S3_ENDPOINT` / `MYTUBE_S3_BUCKET` / `MYTUBE_S3_REGION` | The same storage endpoint, bucket and region this service uses. The region is part of what the storage signs a request with, so a value that differs from this service's own fails every upload with `SignatureDoesNotMatch` | Required |
 | `MYTUBE_WORKER_S3_KEY` / `MYTUBE_WORKER_S3_SECRET` | The worker's **own** storage credential — under these names, not `MYTUBE_S3_KEY`/`MYTUBE_S3_SECRET` | Required, no default, **no fallback to the service's own key pair** |
+| `MYTUBE_WORKER_NAME` | The converter's own name, defaulting to the machine's hostname when unset | Optional |
+| `MYTUBE_WORKER_VRAM_MIN_MIB` | The free-VRAM floor below which the converter reports "waiting for GPU" instead of claiming | Optional |
+| `MYTUBE_WORKER_POLL_SECONDS` | How often the converter polls when idle or waiting for the card | Optional |
+| `MYTUBE_WORKER_MAX_OUTPUT_WIDTH` | The encoder's output width ceiling | Optional |
 | `MYTUBE_SHARE_HOST_PATH` | Where the source share is mounted on this host, bind-mounted read-only into the container | Required |
 | `MYTUBE_WORKER_SCRATCH_PATH` | A scratch directory with room for a large file plus its own rewrite pass | Required |
 

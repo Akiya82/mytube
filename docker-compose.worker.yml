@@ -15,21 +15,36 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
-    # Carries MYTUBE_ORCHESTRATOR_URL, MYTUBE_WORKER_TOKEN (the same
-    # value the service's own MYTUBE_WORKER_TOKEN carries -- one shared
-    # credential), MYTUBE_S3_ENDPOINT / MYTUBE_S3_BUCKET / MYTUBE_S3_REGION
-    # (the same storage, bucket and region the service signs with -- a
-    # region that differs from the one the storage was set up with is
-    # refused as a bad signature at upload time, after the card has
-    # already done the work), and the converter's own storage credential
-    # MYTUBE_WORKER_S3_KEY / MYTUBE_WORKER_S3_SECRET -- under their own
-    # names, never the service's MYTUBE_S3_KEY/MYTUBE_S3_SECRET pair, so
-    # a leak from this host cannot hand out the service's own key
-    # (D-115). No explicit environment: entry is needed for any of these
-    # -- env_file already carries them, the same way docker-compose.yml's
-    # own api service documents this pattern.
-    env_file: .env
+    # This service is given names, one at a time -- no inherited service
+    # environment. It gets MYTUBE_ORCHESTRATOR_URL, MYTUBE_WORKER_TOKEN
+    # (the same value the service's own MYTUBE_WORKER_TOKEN carries -- one
+    # shared credential), MYTUBE_S3_ENDPOINT / MYTUBE_S3_BUCKET /
+    # MYTUBE_S3_REGION (the same storage, bucket and region the service
+    # signs with -- a region that differs from the one the storage was
+    # set up with is refused as a bad signature at upload time, after the
+    # card has already done the work), and the converter's own storage
+    # credential MYTUBE_WORKER_S3_KEY / MYTUBE_WORKER_S3_SECRET -- its own
+    # variable names, never the service's own S3 key/secret pair (see
+    # `.env.example` for that pair's own names). Deliberately not among
+    # these names: the service's own storage key, its database URL, its
+    # signing secret and its share password -- a leak from this host
+    # hands out none of them (D-115). This list has
+    # to stay equal to what worker/settings.py's WorkerSettings declares
+    # (that module's own docstring is the source of truth); a field added
+    # there without a matching entry here fails
+    # tests/test_worker_deployment.py.
     environment:
+      MYTUBE_ORCHESTRATOR_URL: ${MYTUBE_ORCHESTRATOR_URL:?}
+      MYTUBE_WORKER_TOKEN: ${MYTUBE_WORKER_TOKEN:?}
+      MYTUBE_S3_ENDPOINT: ${MYTUBE_S3_ENDPOINT:?}
+      MYTUBE_S3_BUCKET: ${MYTUBE_S3_BUCKET:-mytube}
+      MYTUBE_S3_REGION: ${MYTUBE_S3_REGION:-mytube}
+      MYTUBE_WORKER_S3_KEY: ${MYTUBE_WORKER_S3_KEY:?}
+      MYTUBE_WORKER_S3_SECRET: ${MYTUBE_WORKER_S3_SECRET:?}
+      MYTUBE_WORKER_NAME: ${MYTUBE_WORKER_NAME:-}
+      MYTUBE_WORKER_VRAM_MIN_MIB: ${MYTUBE_WORKER_VRAM_MIN_MIB:-1536}
+      MYTUBE_WORKER_POLL_SECONDS: ${MYTUBE_WORKER_POLL_SECONDS:-5.0}
+      MYTUBE_WORKER_MAX_OUTPUT_WIDTH: ${MYTUBE_WORKER_MAX_OUTPUT_WIDTH:-1920}
       # D-144: exactly what the image itself also sets -- repeated here
       # because the host's container runtime reads this from the
       # container's own environment at run time, not from the image's
