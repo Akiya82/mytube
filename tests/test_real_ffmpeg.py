@@ -33,6 +33,45 @@ def _run(argv, cwd=None):
     )
 
 
+# --- CR-04: the burn-in actually opens a filename with an apostrophe -----
+
+
+def test_a_real_burn_in_opens_a_subtitle_filename_with_an_apostrophe(tmp_path):
+    """Runs with `cwd` at the temporary directory and names the subtitle
+    by a bare relative path -- an absolute `tmp_path` on this platform
+    puts a drive letter and its own backslashes through the escaper,
+    which is not the character this test exists to prove.
+    """
+    from mytube_media.transcode import SubtitleChoice, TranscodePlan, build_filter_chain
+
+    srt_name = "it's a test.srt"
+    (tmp_path / srt_name).write_text(
+        "1\n00:00:00,000 --> 00:00:02,000\nHello\n", encoding="utf-8"
+    )
+
+    plan = TranscodePlan(
+        width=320, height=240, sample_aspect_ratio="1:1",
+        video_bitrate_bps=500_000, maxrate_bps=650_000, bufsize_bps=1_000_000,
+        gop=50, hwaccel=None, audio_stream_index=0, audio_channels=2,
+        reencode_audio=False, stereo_layout="2d",
+    )
+    subtitle = SubtitleChoice(kind="external", path=srt_name)
+    graph = build_filter_chain(plan, subtitle)
+
+    argv = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=1",
+        graph.flag, graph.value,
+        "-frames:v", "1", "-update", "1",
+        "out.jpg",
+    ]
+    result = _run(argv, cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    output = tmp_path / "out.jpg"
+    assert output.is_file() and output.stat().st_size > 0
+
+
 # --- CR-05: a SubRip track extracts to a container the muxer accepts ----
 
 

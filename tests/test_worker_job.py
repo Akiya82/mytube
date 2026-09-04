@@ -172,9 +172,9 @@ def test_an_embedded_choice_is_resolved_and_actually_burned_in(monkeypatch, tmp_
     assert cmd is not None
     graph = cmd[cmd.index("-vf") + 1]
     assert "subtitles=" in graph
-    # The filter counts subtitle streams, not file streams: stream 2 is
-    # the first subtitle in this file.
-    assert "si=0" in graph
+    # The burn-in no longer carries a stream ordinal at all -- it reads a
+    # single-track file, not the source container by a stream selector.
+    assert "si=" not in graph
     assert client.failed_calls == []
     assert client.done_calls
 

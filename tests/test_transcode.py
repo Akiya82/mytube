@@ -334,16 +334,18 @@ def test_an_external_subtitle_file_is_passed_by_path_and_its_path_is_escaped():
     term = graph.value.split("subtitles=", 1)[1]
     # strip every already-escaped two-character sequence (\X); whatever
     # colon remains unescaped after that must be a structural separator
-    # this builder itself introduced, never one from the raw path.
+    # this builder itself introduced, never one from the raw path. An
+    # `.srt` path also carries a `force_style=` part, so there are two:
+    # the join between `filename=...` and `force_style=...`, plus the
+    # path's own colon leaking through this approximate strip.
     stripped = re.sub(r"\\.", "", term)
-    assert stripped.count(":") <= 1
+    assert stripped.count(":") <= 2
 
 
-def test_an_embedded_text_track_is_selected_by_its_subtitle_relative_ordinal():
-    """The filter's own si option counts subtitle streams alone, measured
-    on both pinned builds: a track that is stream 6 of the file and the
-    second subtitle in it renders at si=1, while si=6 answers "Unable to
-    locate subtitle stream" and takes the whole conversion down with it.
+def test_an_embedded_text_track_no_longer_carries_a_stream_ordinal():
+    """The burn-in now reads a single-track file this project extracted,
+    so there is nothing left to count -- the `si=` term is gone for good,
+    whatever `subtitle_ordinal` the caller still passes in.
     """
     from mytube_media.transcode import build_filter_chain
 
@@ -353,28 +355,27 @@ def test_an_embedded_text_track_is_selected_by_its_subtitle_relative_ordinal():
             kind="embedded_text",
             stream_index=6,
             subtitle_ordinal=1,
-            path="/share/movie.mkv",
+            path="/share/movie.ass",
         ),
     )
 
-    assert "si=1" in graph.value
-    assert "si=6" not in graph.value
+    assert "si=" not in graph.value
 
 
-def test_an_embedded_text_track_without_its_ordinal_is_refused_not_guessed():
-    """Falling back to the file's stream index here is exactly the failure
-    this pair of indices exists to prevent, so an absent ordinal raises
-    rather than substituting the one value that is known to be wrong.
+def test_an_embedded_text_track_without_its_ordinal_is_no_longer_refused():
+    """`subtitle_ordinal` is unused by the term now, so its absence is no
+    longer a reason to refuse -- the two callers that still populate it
+    keep working, and a caller that omits it (once neither needs it any
+    more) is not penalised for leaving out a value nothing reads.
     """
     from mytube_media.transcode import build_filter_chain
 
-    with pytest.raises(ValueError):
-        build_filter_chain(
-            plan=_plan(),
-            subtitle=_subtitle(
-                kind="embedded_text", stream_index=6, path="/share/movie.mkv"
-            ),
-        )
+    graph = build_filter_chain(
+        plan=_plan(),
+        subtitle=_subtitle(kind="embedded_text", stream_index=6, path="/share/movie.ass"),
+    )
+
+    assert "si=" not in graph.value
 
 
 def test_a_bracketed_release_filename_is_escaped_at_the_graph_level():
@@ -428,7 +429,7 @@ def test_the_font_directory_is_a_filter_parameter_and_never_a_command_flag():
     command-line flag and exits before encoding anything, while
     `ffmpeg -h filter=subtitles` lists the same name as a filter option --
     so the burn-in only ever sees fonts when the value rides inside the
-    filter term. <!-- planner-discipline-allow: fontsdir -->
+    filter term.
     """
     from mytube_media.transcode import build_filter_chain, build_preview_command, build_transcode_command
 
@@ -738,3 +739,87 @@ def test_the_free_space_estimate_is_double_the_encoded_output():
 
     encoded_bytes = 6_000_000 * 1440.0 / 8
     assert required_free_bytes_for_transcode(6_000_000, 1440.0) == pytest.approx(encoded_bytes * 2)
+
+
+# --- the two-pass filter escaper (CR-04) ---------------------------------
+
+
+def test_escaping_an_apostrophe_emits_three_backslashes():
+    """The one form a real ffmpeg opens (CR-04): the filtergraph's own
+    tokenizer has to recognise a quoted run in order to know a comma or
+    semicolon inside it is not a structural separator, so `'` is read by
+    both grammars and needs two rounds of escaping where `:` and the
+    bracket family need only one.
+    """
+    from mytube_media.transcode import _escape_filter_value
+
+    assert _escape_filter_value("'") == "\\" * 3 + "'"
+
+
+def test_escaping_a_colon_emits_two_backslashes():
+    from mytube_media.transcode import _escape_filter_value
+
+    assert _escape_filter_value(":") == "\\" * 2 + ":"
+
+
+def test_escaping_a_bracket_emits_one_backslash():
+    from mytube_media.transcode import _escape_filter_value
+
+    assert _escape_filter_value("[") == "\\" + "["
+
+
+def test_escaping_a_literal_backslash_emits_four():
+    from mytube_media.transcode import _escape_filter_value
+
+    result = _escape_filter_value("a" + "\\" + "b")
+    assert result == "a" + "\\" * 4 + "b"
+
+
+# --- the house style for plain text (D-124) ------------------------------
+
+
+def test_a_srt_choice_carries_force_style_with_the_bundled_family():
+    from mytube_media.transcode import BUNDLED_FONT_FAMILY, build_filter_chain
+
+    graph = build_filter_chain(
+        plan=_plan(),
+        subtitle=_subtitle(kind="external", path="/share/movie.srt"),
+    )
+
+    assert "force_style=" in graph.value
+    assert BUNDLED_FONT_FAMILY.replace(" ", "") in graph.value.replace("\\", "").replace(" ", "")
+
+
+def test_a_vtt_choice_also_carries_force_style():
+    from mytube_media.transcode import build_filter_chain
+
+    graph = build_filter_chain(
+        plan=_plan(),
+        subtitle=_subtitle(kind="external", path="/share/movie.vtt"),
+    )
+
+    assert "force_style=" in graph.value
+
+
+def test_an_ass_choice_carries_no_force_style():
+    from mytube_media.transcode import build_filter_chain
+
+    graph = build_filter_chain(
+        plan=_plan(),
+        subtitle=_subtitle(kind="external", path="/share/movie.ass"),
+    )
+
+    assert "force_style" not in graph.value
+
+
+def test_a_ssa_choice_carries_no_force_style():
+    from mytube_media.transcode import build_filter_chain
+
+    graph = build_filter_chain(
+        plan=_plan(),
+        subtitle=_subtitle(kind="external", path="/share/movie.ssa"),
+    )
+
+    assert "force_style" not in graph.value
+
+

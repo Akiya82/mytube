@@ -23,8 +23,10 @@ frame). Every earlier ffmpeg branch in this project only copied streams or
 pulled a single frame, so neither trap could bite until now.
 """
 from dataclasses import dataclass
+from pathlib import Path
 
 from mytube_media.remux import aac_bitrate_for
+from mytube_media.subtitles import BUNDLED_FONT_FAMILY, SRT_FORCE_STYLE
 
 # --- rate control (D-136, D-137) --------------------------------------
 
@@ -107,22 +109,24 @@ class TranscodePlan:
 class SubtitleChoice:
     """One subtitle choice for a burn-in, or none at all (`kind="none"`).
 
-    `path` is overloaded by kind: the source video's own path for
-    `embedded_text` (the `subtitles=` filter always needs a filename to
-    read from, even for a track embedded in the file being decoded), the
-    sidecar file's path for `external`, and unused for `embedded_bitmap`
+    `path` is overloaded by kind: for `embedded_text`, a path to the
+    single-track file `subtitles.extract_embedded_track` already pulled
+    the chosen stream out to -- never the source container -- so the
+    burn-in filter reads a file this project wrote, not an operator's
+    path into the file being decoded. The sidecar file's path for
+    `external` (also a scratch-local copy, from
+    `subtitles.copy_external_track`), and unused for `embedded_bitmap`
     (the overlay branch reads the stream directly via its own input
     specifier). `font_dir`/`charenc` are the collected font directory and
     the encoding `subtitles.read_text` reported, both optional.
 
-    Two indices, not one, and they are not interchangeable. `stream_index`
-    is the file's own absolute stream index, which is what the bitmap
-    branch's `-map 0:{index}` needs. `subtitle_ordinal` counts subtitle
-    streams only (the first subtitle track is 0 whatever its file index),
-    which is what the `subtitles=` filter's `si` option needs -- see
-    `_subtitle_term`. Required for `embedded_text`, unused otherwise;
-    `subtitles.subtitle_ordinal` derives it from the same probe the caller
-    already holds.
+    `stream_index` is the file's own absolute stream index, which is what
+    the bitmap branch's `-map 0:{index}` needs. `subtitle_ordinal` counts
+    subtitle streams only (the first subtitle track is 0 whatever its
+    file index); `_subtitle_term` no longer reads it -- a single-track
+    extracted file has nothing to count -- but the field stays here and
+    `subtitles.subtitle_ordinal` keeps deriving it, since the two callers
+    that build this choice still pass it.
     """
 
     kind: str  # "none" | "embedded_text" | "embedded_bitmap" | "external"
@@ -231,59 +235,67 @@ def required_free_bytes_for_transcode(
 # --- the filter chain (CONV-07, D-122, D-124, D-140) -----------------------
 
 
-# Backslash first, so escaping everything after it does not double-escape
-# the backslashes those additions introduce. Then the three characters the
-# filter's own argument grammar reads (`:` separates key=value pairs, `'`
-# quotes a value) and the four the *graph* grammar reads before the filter
-# ever sees the term: `[`/`]` delimit a link label, `,` chains one filter
-# to the next and `;` ends a chain. A real library filename carrying
-# brackets -- `Show - 01 [BDRip 1080p HEVC].mkv`, the shape a release group
-# actually ships -- is rejected unescaped by both pinned builds ("Trailing
-# garbage after a filter"), which is a failure to even start, not a
-# rendering flaw. Spaces need no escaping at any level.
-_FILTER_ESCAPED_CHARACTERS = ("\\", ":", "'", "[", "]", ",", ";")
+# Two grammars read this value in sequence, and both have to be satisfied
+# in the order they run. First the filter's own argument grammar (`:`
+# separates key=value pairs, `'` quotes a value), which is what the value
+# looks like once it reaches the `subtitles` filter itself. Then the
+# *filtergraph* grammar wrapped around it, which reads the whole `-vf`
+# string before the filter ever sees its own arguments: `[`/`]` delimit a
+# link label, `,` chains one filter to the next, `;` ends a chain -- and
+# `'` again, because the graph-level tokenizer also has to recognise a
+# quoted run in order to know that a comma or semicolon inside it is not a
+# structural separator. That double duty is why measuring against a real
+# ffmpeg (CR-04) turned up three backslashes as the only form that opens a
+# file named with an apostrophe: `:` and `[`/`]`/`,`/`;` are read by one
+# grammar each and need one round of escaping, but `'` is read by both and
+# needs two. A real library filename carrying brackets --
+# `Show - 01 [BDRip 1080p HEVC].mkv`, the shape a release group actually
+# ships -- is rejected unescaped by both pinned builds ("Trailing garbage
+# after a filter"), which is a failure to even start, not a rendering
+# flaw. Spaces need no escaping at any level.
+_FILTER_OPTION_ESCAPED_CHARACTERS = ("\\", ":", "'")
+_FILTERGRAPH_ESCAPED_CHARACTERS = ("\\", "'", "[", "]", ",", ";")
 
 
 def _escape_filter_value(value: str) -> str:
     """Escape a value that will ride inside an ffmpeg filter term, at both
-    levels that parse it: the filter's own argument grammar and the
-    filtergraph grammar around it. No surrounding quoting is added -- this
-    project's pinned ffmpeg accepts backslash-escaped values with no
-    quotes, and the injection test (T-04-02) exercises this path with
-    several of these characters at once.
+    levels that parse it: the filter's own argument grammar first, then
+    the filtergraph grammar wrapped around it -- see the comment above
+    `_FILTER_OPTION_ESCAPED_CHARACTERS` for why `'` runs through both. No
+    surrounding quoting is added -- this project's pinned ffmpeg accepts
+    backslash-escaped values with no quotes, and the injection test
+    (T-04-02) exercises this path with several of these characters at
+    once.
     """
-    for character in _FILTER_ESCAPED_CHARACTERS:
+    for character in _FILTER_OPTION_ESCAPED_CHARACTERS:
+        value = value.replace(character, "\\" + character)
+    for character in _FILTERGRAPH_ESCAPED_CHARACTERS:
         value = value.replace(character, "\\" + character)
     return value
 
 
 def _subtitle_term(subtitle: SubtitleChoice) -> str:
     """The `subtitles=...` filter term for a text-kind burn-in (an
-    embedded ASS/SSA/SRT track or an external file). All three values that
-    ride inside this term go through `_escape_filter_value` and are never
+    embedded ASS/SSA/SRT track or an external file). All values that ride
+    inside this term go through `_escape_filter_value` and are never
     concatenated at a call site.
+
+    Carries no stream ordinal any more: the burn-in reads a single-track
+    file this project extracted or copied into the job's scratch
+    directory (`subtitles.extract_embedded_track`/
+    `subtitles.copy_external_track`), never the source container with a
+    stream selector, so there is no longer a subtitle stream to count.
+    `subtitle.subtitle_ordinal` is accepted and ignored here -- it stays
+    on `SubtitleChoice` and on `subtitles.subtitle_ordinal` for the two
+    callers that still pass it today.
     """
     parts = [f"filename={_escape_filter_value(subtitle.path)}"]
-    if subtitle.kind == "embedded_text":
-        # Not the file's stream index, unlike every other index this
-        # project carries: measured on both pinned builds that the
-        # subtitles filter's si option counts subtitle streams alone. A
-        # file whose four subtitle tracks are streams 5..8 renders its
-        # second one at si=1 and answers "Unable to locate subtitle
-        # stream" at si=6. Passing the absolute index therefore does not
-        # burn in the wrong track, it fails the conversion outright.
-        if subtitle.subtitle_ordinal is None:
-            raise ValueError(
-                "an embedded text subtitle needs its subtitle-relative ordinal, "
-                "not only the file's stream index"
-            )
-        parts.append(f"si={subtitle.subtitle_ordinal}")
     if subtitle.font_dir:
         # ffmpeg has no `-fontsdir` command-line flag -- a real build
         # answers "Unrecognized option" for that spelling and exits before
         # encoding anything. `ffmpeg -h filter=subtitles` lists `fontsdir`
         # among the *filter's own* options, which is the only place this
-        # value can go. <!-- planner-discipline-allow: fontsdir -->
+        # value can go.
         parts.append(f"fontsdir={_escape_filter_value(subtitle.font_dir)}")
     if subtitle.charenc and subtitle.charenc.lower() not in ("utf-8", "utf8"):
         # Omitted for the Unicode default -- emitted for anything else
@@ -292,6 +304,19 @@ def _subtitle_term(subtitle: SubtitleChoice) -> str:
         # mojibake: the conversion still succeeds, uploads and plays, and
         # is wrong.
         parts.append(f"charenc={_escape_filter_value(subtitle.charenc)}")
+
+    # D-124's house style for plain text: SubRip/WebVTT carry no styling
+    # information of their own, so without this every SRT/VTT burn rendered
+    # in the renderer's bare defaults. An ASS/SSA track already carries its
+    # own design end-to-end and never gets this style forced onto it.
+    # Taking the family from a sidecar font's own name table instead of the
+    # bundled fallback needs that font's name table read, which is not one
+    # line and stays open for a later plan.
+    suffix = Path(subtitle.path).suffix.lstrip(".").lower() if subtitle.path else ""
+    if suffix in ("srt", "vtt"):
+        style = SRT_FORCE_STYLE.format(family=BUNDLED_FONT_FAMILY)
+        parts.append(f"force_style={_escape_filter_value(style)}")
+
     return "subtitles=" + ":".join(parts)
 
 
