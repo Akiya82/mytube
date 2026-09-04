@@ -309,6 +309,12 @@ async def _process_job(
                 extension=extension,
             )
             font_dir = await asyncio.to_thread(collect_fonts, source, None, job_scratch)
+            # Read from the same file the burn-in reads, the same as the
+            # preview route already does for this kind -- without this the
+            # conversion of an older Cyrillic-encoded embedded track would
+            # burn in without a charenc term while its own preview showed
+            # it correctly.
+            _, charenc = await asyncio.to_thread(read_text, subtitle_burn_path)
         elif subtitle_kind == "external":
             subtitle_burn_path = await asyncio.to_thread(
                 copy_external_track, subtitle_share_path, job_scratch

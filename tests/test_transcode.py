@@ -688,6 +688,45 @@ def test_the_preview_and_the_conversion_share_one_filter_chain(kind):
             assert value == shared_value
 
 
+def test_the_subtitle_term_alone_is_identical_between_preview_and_conversion():
+    """Narrower than the test above: this isolates only the
+    `subtitles=...` portion of the filter value -- the one piece CONV-04's
+    whole promise rests on. The scale and frame-selection portions are
+    allowed to differ (a future preview-only downscale for speed would be
+    a legitimate reason to touch only one builder), but the subtitle term
+    the operator approved has to be the exact term the conversion burns
+    in, whatever else about the two commands changes.
+
+    Mutation this pins: if `build_transcode_command` ever grew its own
+    `force_style=` default applied after `build_filter_chain` returns
+    (rather than inside `_subtitle_term`, which both builders already
+    share), the two subtitle terms would diverge while the rest of the
+    filter value stayed equal -- the whole-value test above would still
+    pass on any subtitle-less case, and this is the assertion built to
+    catch exactly that divergence.
+    """
+    from mytube_media.transcode import build_preview_command, build_transcode_command
+
+    plan = _plan()
+    subtitle = _subtitle(kind="embedded_text", stream_index=2, path="/share/movie.mkv")
+
+    convert_cmd = build_transcode_command(
+        "/share/movie.mkv", "/work/out.mp4", plan=plan, subtitle=subtitle
+    )
+    preview_cmd = build_preview_command(
+        "/share/movie.mkv", "/work/preview.jpg", plan=plan, subtitle=subtitle, at_seconds=90.0
+    )
+
+    def _subtitle_portion(cmd):
+        value = cmd[cmd.index("-vf") + 1]
+        return "subtitles=" + value.split("subtitles=", 1)[1]
+
+    convert_term = _subtitle_portion(convert_cmd)
+    preview_term = _subtitle_portion(preview_cmd)
+    assert convert_term.startswith("subtitles=")
+    assert convert_term == preview_term
+
+
 def test_the_bitmap_preview_maps_the_graph_output():
     """A preview that mapped the raw video stream would render the frame
     without the subtitle that is the entire reason the operator asked

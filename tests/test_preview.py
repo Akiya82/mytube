@@ -10,6 +10,7 @@ are exercised for real (pure functions, no I/O) against hand-built
 subtitle text, since the timestamp logic is exactly what this file is
 here to prove.
 """
+import asyncio
 import json
 import subprocess
 from pathlib import Path
@@ -563,3 +564,128 @@ def test_app_js_encodes_each_path_segment_before_building_the_preview_request():
     )
     assert "encodeURIComponent" in text
     assert "/preview/${encodedPath}" in text
+
+
+# --- preview/conversion resolution parity (CONV-04) -------------------------
+
+
+async def test_the_preview_and_the_converter_resolve_the_same_choice_for_the_same_job(
+    web_client, render_stubs, monkeypatch, tmp_path
+):
+    """Not a picture-level comparison (see tests/test_transcode.py for
+    that) and no converter stood up -- `worker.__main__._process_job` is
+    driven the same light way tests/test_worker_job.py already drives it,
+    with a faked client, a faked S3 client and a faked runner, never a
+    real process or socket. What is captured on each side is the one
+    `SubtitleChoice` its own call builds, by wrapping the real
+    `build_preview_command`/`build_transcode_command` each route already
+    calls through -- the same object every caller downstream would burn
+    in from.
+
+    This is the standing, cheap version of a divergence a picture
+    comparison would not have caught: this plan's own Summary records the
+    converter having stopped reading an embedded track's encoding while
+    its own preview kept reading it correctly -- a missing `charenc` term
+    still burns something in, so a rendered-frame comparison would not
+    have failed, only a mojibake one would have, on exactly the older
+    Cyrillic library this project's own `force_style`/`charenc` handling
+    exists for.
+    """
+    import uuid
+
+    import worker.__main__ as worker_main
+    from worker.settings import WorkerSettings
+
+    render_stubs.probe_json = _mixed_subtitle_probe()
+
+    captured_preview = {}
+    real_build_preview_command = routes_preview.build_preview_command
+
+    def _spy_build_preview_command(*args, **kwargs):
+        captured_preview["subtitle"] = kwargs["subtitle"]
+        return real_build_preview_command(*args, **kwargs)
+
+    monkeypatch.setattr(routes_preview, "build_preview_command", _spy_build_preview_command)
+
+    async with web_client:
+        resp = await web_client.post(
+            "/preview/a-video.mp4",
+            data={"subtitle_choice": "embedded:2", "stereo_layout": "2d"},
+        )
+    assert resp.status_code == 200
+    preview_choice = captured_preview["subtitle"]
+
+    captured_worker = {}
+    real_build_transcode_command = worker_main.build_transcode_command
+
+    def _spy_build_transcode_command(*args, **kwargs):
+        captured_worker["subtitle"] = kwargs["subtitle"]
+        return real_build_transcode_command(*args, **kwargs)
+
+    def _fake_extract_embedded_track(source, stream_index, scratch_dir, extension="ass"):
+        dest = scratch_dir / f"track_{stream_index}.{extension}"
+        dest.write_text(render_stubs.extracted_text, encoding="utf-8")
+        return dest
+
+    class _FakeCompletedRun:
+        cancelled = False
+
+    async def _fake_run_ffmpeg(cmd, **kwargs):
+        return _FakeCompletedRun()
+
+    class _FakeWorkerClient:
+        async def heartbeat(self, *args, **kwargs):
+            return False
+
+        async def done(self, *args, **kwargs):
+            pass
+
+        async def failed(self, *args, **kwargs):
+            pass
+
+        async def cancelled(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(worker_main, "build_transcode_command", _spy_build_transcode_command)
+    monkeypatch.setattr(worker_main, "extract_embedded_track", _fake_extract_embedded_track)
+    monkeypatch.setattr(worker_main, "collect_fonts", lambda *a, **k: None)
+    monkeypatch.setattr(worker_main, "run_ffmpeg_with_progress", _fake_run_ffmpeg)
+    monkeypatch.setattr(worker_main.compat, "probe", lambda path: render_stubs.probe_json)
+    monkeypatch.setattr(worker_main.compat, "moov_before_mdat", lambda path: True)
+    monkeypatch.setattr(worker_main.worker_storage, "upload_file", lambda *a, **k: None)
+    monkeypatch.setattr(worker_main.worker_storage, "abort_multipart", lambda *a, **k: None)
+
+    worker_share = tmp_path / "worker_share"
+    worker_scratch = tmp_path / "worker_scratch"
+    worker_share.mkdir()
+    worker_scratch.mkdir()
+    (worker_share / "a-video.mp4").write_bytes(b"stub video bytes")
+    worker_settings = WorkerSettings(
+        orchestrator_url="http://orchestrator.local",
+        worker_token="test-worker-token-do-not-use-in-prod",
+        s3_endpoint="http://storage:8333",
+        s3_bucket="mytube",
+        worker_s3_key="worker-key",
+        worker_s3_secret="worker-secret",
+        share_root=str(worker_share),
+        work_dir=str(worker_scratch),
+    )
+    job = {
+        "job_id": str(uuid.uuid4()),
+        "attempt": 1,
+        "object_key": "abc.mp4",
+        "source_path": "a-video.mp4",
+        "audio_stream_index": 1,
+        "subtitle_kind": "embedded",
+        "subtitle_stream_index": 2,
+        "subtitle_path": None,
+        "stereo_layout": "2d",
+    }
+    await worker_main._process_job(
+        _FakeWorkerClient(), object(), worker_settings, job, worker_scratch, asyncio.Event()
+    )
+    worker_choice = captured_worker["subtitle"]
+
+    assert preview_choice.kind == worker_choice.kind
+    assert (preview_choice.font_dir is not None) == (worker_choice.font_dir is not None)
+    assert preview_choice.charenc == worker_choice.charenc
