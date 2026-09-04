@@ -10,7 +10,9 @@ are exercised for real (pure functions, no I/O) against hand-built
 subtitle text, since the timestamp logic is exactly what this file is
 here to prove.
 """
+import json
 import subprocess
+from pathlib import Path
 
 import httpx
 import pytest
@@ -28,6 +30,16 @@ from orchestrator.main import app
 from orchestrator.web import routes_preview
 
 from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "probe"
+
+
+def _mixed_subtitle_probe() -> dict:
+    """The real subtitles_mixed.json fixture: stream 2 is a SubRip track,
+    stream 3 is an ASS track -- the shape CR-05's own fix (extraction_extension)
+    exists to tell apart.
+    """
+    return json.loads((FIXTURES_DIR / "subtitles_mixed.json").read_text(encoding="utf-8"))
 
 
 @pytest.fixture
@@ -93,6 +105,8 @@ def render_stubs(monkeypatch, _web_env):
         extracted_text = "1\n00:00:05,000 --> 00:00:07,000\nHello\n"
         returncode = 0
         stderr = b""
+        extract_calls = []
+        collect_fonts_calls = []
 
     stub = _Stub()
 
@@ -100,7 +114,10 @@ def render_stubs(monkeypatch, _web_env):
         return stub.probe_json
 
     def _extract_embedded_track(source, stream_index, scratch_dir, extension="ass"):
-        dest = scratch_dir / f"track_{stream_index}.srt"
+        stub.extract_calls.append(
+            {"source": source, "stream_index": stream_index, "scratch_dir": scratch_dir, "extension": extension}
+        )
+        dest = scratch_dir / f"track_{stream_index}.{extension}"
         dest.write_text(stub.extracted_text, encoding="utf-8")
         return dest
 
@@ -110,6 +127,9 @@ def render_stubs(monkeypatch, _web_env):
         return Path(path).read_text(encoding="utf-8"), "utf-8"
 
     def _collect_fonts(source, subtitle_path, scratch_dir):
+        stub.collect_fonts_calls.append(
+            {"source": source, "subtitle_path": subtitle_path, "scratch_dir": scratch_dir}
+        )
         return None
 
     def _run(cmd, capture_output, timeout, check):
@@ -377,9 +397,7 @@ def test_the_preview_and_the_conversion_command_share_the_same_filter_value():
         reencode_audio=False,
         stereo_layout="2d",
     )
-    subtitle = SubtitleChoice(
-        kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/a-video.mp4"
-    )
+    subtitle = SubtitleChoice(kind="embedded_text", stream_index=2, path="/share/a-video.mp4")
 
     preview_cmd = build_preview_command(
         "/share/a-video.mp4", "/work/frame.jpg", plan=plan, subtitle=subtitle, at_seconds=5.0
@@ -393,3 +411,155 @@ def test_the_preview_and_the_conversion_command_share_the_same_filter_value():
         return cmd[flag_index + 1]
 
     assert _filter_value(preview_cmd) == _filter_value(transcode_cmd)
+
+
+# --- per-request scratch isolation (WR-04, IN-08, CR-05) -------------------
+
+
+async def test_a_subrip_track_reaches_the_render_step_instead_of_the_error_panel(
+    web_client, render_stubs
+):
+    """The most common embedded text format (CR-05): before the
+    extraction extension was derived from the probe, this always fell
+    through the ASS muxer and answered the error panel instead.
+    """
+    render_stubs.probe_json = _mixed_subtitle_probe()
+    async with web_client:
+        resp = await web_client.post(
+            "/preview/a-video.mp4",
+            data={"subtitle_choice": "embedded:2", "stereo_layout": "2d"},
+        )
+    assert resp.status_code == 200
+    assert "<img" in resp.text
+    assert "Could not render a preview" not in resp.text
+
+
+@pytest.mark.parametrize("stream_index, expected_extension", [(2, "srt"), (3, "ass")])
+async def test_the_extraction_destination_extension_matches_the_probed_codec(
+    web_client, render_stubs, stream_index, expected_extension
+):
+    render_stubs.probe_json = _mixed_subtitle_probe()
+    async with web_client:
+        resp = await web_client.post(
+            "/preview/a-video.mp4",
+            data={"subtitle_choice": f"embedded:{stream_index}", "stereo_layout": "2d"},
+        )
+    assert resp.status_code == 200
+    assert len(render_stubs.extract_calls) == 1
+    assert render_stubs.extract_calls[0]["extension"] == expected_extension
+
+
+async def test_two_concurrent_previews_write_into_different_directories(
+    web_client, render_stubs
+):
+    async with web_client:
+        await web_client.post(
+            "/preview/a-video.mp4",
+            data={"subtitle_choice": "embedded:2", "stereo_layout": "2d"},
+        )
+        await web_client.post(
+            "/preview/a-video.mp4",
+            data={"subtitle_choice": "embedded:2", "stereo_layout": "2d"},
+        )
+    assert len(render_stubs.extract_calls) == 2
+    first_dir = render_stubs.extract_calls[0]["scratch_dir"]
+    second_dir = render_stubs.extract_calls[1]["scratch_dir"]
+    assert first_dir != second_dir
+    # Neither request's directory was ever removed by the other's --
+    # both still hold their own extracted file at the same relative name.
+    assert (first_dir / "track_2.srt").is_file()
+    assert (second_dir / "track_2.srt").is_file()
+
+
+async def test_the_scratch_directory_is_gone_after_a_refusal_that_created_one(
+    web_client, render_stubs, monkeypatch, _web_env
+):
+    def _raise(source, stream_index, scratch_dir, extension="ass"):
+        raise SubtitleExtractError("simulated extraction failure")
+
+    monkeypatch.setattr(routes_preview, "extract_embedded_track", _raise)
+    async with web_client:
+        resp = await web_client.post(
+            "/preview/a-video.mp4",
+            data={"subtitle_choice": "embedded:2", "stereo_layout": "2d"},
+        )
+    assert resp.status_code == 200
+    assert "Could not render a preview" in resp.text
+    previews_dir = _web_env / "previews"
+    assert list(previews_dir.iterdir()) == []
+
+
+async def test_the_scratch_directory_is_gone_once_the_frame_has_been_fetched(
+    web_client, render_stubs, _web_env
+):
+    async with web_client:
+        render_resp = await web_client.post(
+            "/preview/a-video.mp4",
+            data={"subtitle_choice": "embedded:2", "stereo_layout": "2d"},
+        )
+        image_url = render_resp.text.split('src="')[1].split('"')[0]
+        token = image_url.rsplit("/", 1)[-1].removesuffix(".jpg")
+        frame_resp = await web_client.get(image_url)
+
+    assert frame_resp.status_code == 200
+    assert not (_web_env / "previews" / token).exists()
+
+
+async def test_the_filter_chain_names_the_extracted_file_not_the_source_container(
+    web_client, render_stubs, monkeypatch
+):
+    captured = {}
+
+    def _run(cmd, capture_output, timeout, check):
+        captured["cmd"] = cmd
+        Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
+        return _fake_completed()
+
+    monkeypatch.setattr(routes_preview.subprocess, "run", _run)
+    async with web_client:
+        resp = await web_client.post(
+            "/preview/a-video.mp4",
+            data={"subtitle_choice": "embedded:2", "stereo_layout": "2d"},
+        )
+
+    assert resp.status_code == 200
+    graph = captured["cmd"][captured["cmd"].index("-vf") + 1]
+    assert "a-video.mp4" not in graph
+    assert "track_2.srt" in graph
+
+
+async def test_an_external_subtitle_is_copied_into_the_request_scratch_directory(
+    web_client, render_stubs, share_root, _web_env
+):
+    (share_root / "a-video.srt").write_text(
+        "1\n00:00:03,000 --> 00:00:04,000\nExternal cue\n", encoding="utf-8"
+    )
+    async with web_client:
+        resp = await web_client.post(
+            "/preview/a-video.mp4",
+            data={"subtitle_choice": "external:a-video.srt", "stereo_layout": "2d"},
+        )
+
+    assert resp.status_code == 200
+    assert "<img" in resp.text
+    image_url = resp.text.split('src="')[1].split('"')[0]
+    token = image_url.rsplit("/", 1)[-1].removesuffix(".jpg")
+    copied = _web_env / "previews" / token / "external.srt"
+    assert copied.is_file()
+    assert copied.read_text(encoding="utf-8").startswith("1\n00:00:03")
+
+
+# --- an awkward filename still reaches the route (WR-07) -------------------
+
+
+def test_app_js_encodes_each_path_segment_before_building_the_preview_request():
+    """`Movies/Show #1/ep01.mkv` used to post to `/preview/Movies/Show`,
+    the hash cutting the request path short client-side -- encoding each
+    segment (never the whole path, which would also encode the "/"
+    separators the route matches on) keeps the request whole.
+    """
+    text = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    assert "encodeURIComponent" in text
+    assert "/preview/${encodedPath}" in text

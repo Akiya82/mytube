@@ -243,7 +243,12 @@ async function _requestPreview(button, form, after) {
   button.disabled = true;
   button.textContent = button.getAttribute("data-preview-loading-label") || originalLabel;
 
-  const res = await fetch(`/preview/${path}`, {
+  // Encoded segment by segment, never the whole path at once -- encoding
+  // the "/" separators too would stop the route from matching at all. A
+  // name containing "#", "?" or "%" would otherwise cut the request path
+  // short or be misread as a query string.
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  const res = await fetch(`/preview/${encodedPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
