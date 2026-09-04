@@ -116,3 +116,21 @@ def test_worker_compose_environment_block_actually_has_entries():
     text = COMPOSE_WORKER.read_text(encoding="utf-8")
     block = _worker_service_environment_block(text)
     assert len(_environment_keys(block)) > 5
+
+
+def _user_directives(path: Path) -> list[str]:
+    return [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("USER ")
+    ]
+
+
+def test_dockerfile_runs_as_a_non_root_user():
+    directives = _user_directives(DOCKERFILE)
+    assert directives == ["USER mytube"]
+
+
+def test_dockerfile_worker_runs_as_a_non_root_user():
+    directives = _user_directives(DOCKERFILE_WORKER)
+    assert directives == ["USER mytube"]

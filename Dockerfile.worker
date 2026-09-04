@@ -98,6 +98,13 @@ RUN mkdir -p /work
 # comment exists to prevent.
 ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
 
+# A fixed, non-root uid so an ffmpeg invocation over untrusted media (probe,
+# attachment dump, burn-in) never runs as root (IN-11) -- /work is this
+# user's own scratch space, the only local path anything here writes to.
+# tini stays PID 1 unchanged: it needs no elevated right to run.
+RUN useradd -r -u 10001 mytube && chown mytube /work
+USER mytube
+
 # No credential, no address and no name baked in -- all of that arrives
 # through docker-compose.worker.yml's own environment at run time.
 

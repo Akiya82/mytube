@@ -43,5 +43,11 @@ RUN mkdir -p /work
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
+# A fixed, non-root uid so an ffmpeg invocation over untrusted media (probe,
+# attachment dump, burn-in) never runs as root (IN-11) -- /work is this
+# user's own scratch space, the only local path anything here writes to.
+RUN useradd -r -u 10001 mytube && chown mytube /work
+USER mytube
+
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["uvicorn", "orchestrator.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
