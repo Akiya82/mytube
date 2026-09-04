@@ -652,6 +652,141 @@ async def test_a_stale_job_that_was_already_cancelled_finishes_as_cancelled_not_
     assert final["failure_reason"] is None
 
 
+# --- The exhausted branch also fails the catalog row (CR-02) ------------
+
+
+class _SingleAcquireCtx:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _SingleConnPool:
+    """The one `.acquire()` shape `reaper.sweep_stale_jobs` asks an
+    `asyncpg.Pool` for, wrapping this file's own single, rollback-at-
+    teardown `db_conn` -- so the reaper's real sweep runs against exactly
+    the same row every other test in this file reads and writes.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        return _SingleAcquireCtx(self._conn)
+
+
+async def test_three_stale_sweeps_leave_a_transcode_job_s_title_failed_with_a_working_retry(
+    db_conn,
+):
+    from orchestrator import reaper
+
+    title = await _title_and_edition(db_conn, "exhausted-title")
+    job_id = await queries.enqueue_job(
+        db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
+    )
+    pool = _SingleConnPool(db_conn)
+
+    for attempt in range(1, queries.JOB_MAX_ATTEMPTS + 1):
+        claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+        assert claimed["attempts"] == attempt
+        await db_conn.execute(
+            "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1", job_id
+        )
+        await reaper.sweep_stale_jobs(pool)
+
+        job_row = await db_conn.fetchrow(
+            "SELECT status, attempts FROM jobs WHERE id = $1", job_id
+        )
+        if attempt < queries.JOB_MAX_ATTEMPTS:
+            assert job_row["status"] == "queued"
+            assert job_row["attempts"] == attempt
+        else:
+            assert job_row["status"] == "failed"
+
+    title_row = await db_conn.fetchrow(
+        "SELECT status, failure_reason FROM titles WHERE id = $1", title[0]
+    )
+    assert title_row["status"] == "failed"
+    assert title_row["failure_reason"] == "failed.reason.crashed_converter"
+
+    # The same two checks `routes_titles.retry_route` itself performs
+    # before accepting a retry request -- a failed status, and a last job
+    # to copy the payload from. Both holding is what "accepted, not
+    # answered not-found" means at this layer, without standing up the
+    # whole app to make the HTTP call.
+    library_row = await queries.library_row(db_conn, title[0])
+    assert library_row["title_status"] == "failed"
+    last_job = await queries.last_job_for_title(db_conn, title[0])
+    assert last_job is not None
+
+
+async def test_three_stale_sweeps_leave_a_playlist_build_carrying_a_failure(db_conn):
+    from orchestrator import reaper
+
+    playlist_id = await _playlist(db_conn, "exhausted-playlist")
+    job_id = await queries.enqueue_job(db_conn, kind="playlist", playlist_id=playlist_id)
+    pool = _SingleConnPool(db_conn)
+
+    for _attempt in range(1, queries.JOB_MAX_ATTEMPTS + 1):
+        await queries.claim_job(db_conn, kind="playlist", worker_name="ml-server")
+        await db_conn.execute(
+            "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1", job_id
+        )
+        await reaper.sweep_stale_jobs(pool)
+
+    job_row = await db_conn.fetchrow("SELECT status FROM jobs WHERE id = $1", job_id)
+    assert job_row["status"] == "failed"
+
+    playlist_row = await db_conn.fetchrow(
+        "SELECT build_failure_reason FROM playlists WHERE id = $1", playlist_id
+    )
+    assert playlist_row["build_failure_reason"] == "playlist.refused.assembly"
+
+
+async def test_a_cancelled_job_past_the_attempt_cap_still_ends_cancelled_not_failed(
+    db_conn,
+):
+    """The cancelled check must keep winning even for a row past the cap
+    -- an operator who pressed cancel and then lost the converter must
+    not see the job start over, and must not see it reported as a crash
+    it never had either.
+    """
+    from orchestrator import reaper
+
+    title = await _title_and_edition(db_conn, "cancelled-past-cap")
+    job_id = await queries.enqueue_job(
+        db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
+    )
+    pool = _SingleConnPool(db_conn)
+
+    for attempt in range(1, queries.JOB_MAX_ATTEMPTS):
+        await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+        await db_conn.execute(
+            "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1", job_id
+        )
+        await reaper.sweep_stale_jobs(pool)
+
+    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    assert claimed["attempts"] == queries.JOB_MAX_ATTEMPTS
+    await queries.request_job_cancel(db_conn, job_id)
+    await db_conn.execute(
+        "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1", job_id
+    )
+
+    await reaper.sweep_stale_jobs(pool)
+
+    job_row = await db_conn.fetchrow(
+        "SELECT status, failure_reason FROM jobs WHERE id = $1", job_id
+    )
+    assert job_row["status"] == "cancelled"
+    assert job_row["failure_reason"] is None
+
+
 # --- Worker visibility (D-113, D-117, D-131) -----------------------------
 
 

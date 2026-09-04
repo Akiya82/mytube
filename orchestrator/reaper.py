@@ -19,7 +19,10 @@ a link that quietly starts playing something else is not.
 
 Also sweeps stale job heartbeats (D-118, D-130): a running job whose
 converter went silent comes back to the queue on its own, up to a named
-attempt cap, after which it fails with a reason a person can read.
+attempt cap, after which it fails with a reason a person can read -- and,
+since exhausting that cap is the one outcome an operator otherwise has no
+way to see or act on, the catalog row (a title or a playlist) is marked
+failed alongside the job itself (CR-02).
 
 The four sweeps run inside their own `try/except` in `run_reaper`'s loop
 body, each isolated from the other three: a failure in the session sweep
@@ -216,9 +219,28 @@ async def sweep_stale_jobs(pool: asyncpg.Pool) -> None:
                         except (LookupError, ValueError):
                             pass
                 elif row["attempts"] >= queries.JOB_MAX_ATTEMPTS:
-                    await queries.fail_job_exhausted(
-                        conn, job_id, reason_key="failed.reason.crashed_converter"
-                    )
+                    reason = "failed.reason.crashed_converter"
+                    await queries.fail_job_exhausted(conn, job_id, reason_key=reason)
+                    # The job row alone is not what an operator sees --
+                    # without also writing the catalog row's own failure,
+                    # a title stays 'preparing' forever with no live job,
+                    # which the library query's join reads as "waiting",
+                    # not "failed": no Retry, no Dismiss, just a Cancel
+                    # button that answers not-found (CR-02). A playlist
+                    # build in the same state says "Building..." forever
+                    # with no way to build it again.
+                    if row["title_id"] is not None:
+                        await queries.mark_title_failed(conn, row["title_id"], reason)
+                    elif row["playlist_id"] is not None:
+                        # The playlist refusal vocabulary already has a
+                        # key for exactly this: a build that did not
+                        # finish, previous version still playing. A
+                        # converter-specific key would say the same thing
+                        # a second way for a build that runs in this same
+                        # process.
+                        await queries.set_playlist_build_failed(
+                            conn, row["playlist_id"], "playlist.refused.assembly", {}
+                        )
                 else:
                     await queries.requeue_job(conn, job_id)
             except Exception:
