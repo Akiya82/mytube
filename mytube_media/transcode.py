@@ -121,17 +121,14 @@ class SubtitleChoice:
     the encoding `subtitles.read_text` reported, both optional.
 
     `stream_index` is the file's own absolute stream index, which is what
-    the bitmap branch's `-map 0:{index}` needs. `subtitle_ordinal` counts
-    subtitle streams only (the first subtitle track is 0 whatever its
-    file index); `_subtitle_term` no longer reads it -- a single-track
-    extracted file has nothing to count -- but the field stays here and
-    `subtitles.subtitle_ordinal` keeps deriving it, since the two callers
-    that build this choice still pass it.
+    the bitmap branch's `-map 0:{index}` needs. Both text kinds burn from a
+    single-track file this project already extracted or copied, so there
+    is no longer a stream ordinal to carry alongside it -- a file with one
+    track has nothing to count.
     """
 
     kind: str  # "none" | "embedded_text" | "embedded_bitmap" | "external"
     stream_index: int | None = None
-    subtitle_ordinal: int | None = None
     path: str | None = None
     language: str | None = None
     title: str | None = None
@@ -280,14 +277,11 @@ def _subtitle_term(subtitle: SubtitleChoice) -> str:
     inside this term go through `_escape_filter_value` and are never
     concatenated at a call site.
 
-    Carries no stream ordinal any more: the burn-in reads a single-track
-    file this project extracted or copied into the job's scratch
-    directory (`subtitles.extract_embedded_track`/
-    `subtitles.copy_external_track`), never the source container with a
-    stream selector, so there is no longer a subtitle stream to count.
-    `subtitle.subtitle_ordinal` is accepted and ignored here -- it stays
-    on `SubtitleChoice` and on `subtitles.subtitle_ordinal` for the two
-    callers that still pass it today.
+    Carries no stream ordinal: the burn-in reads a single-track file this
+    project extracted or copied into the job's scratch directory
+    (`subtitles.extract_embedded_track`/`subtitles.copy_external_track`),
+    never the source container with a stream selector, so there is no
+    longer a subtitle stream to count.
     """
     parts = [f"filename={_escape_filter_value(subtitle.path)}"]
     if subtitle.font_dir:

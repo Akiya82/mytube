@@ -48,7 +48,6 @@ def _subtitle(**overrides):
     defaults = dict(
         kind="none",
         stream_index=None,
-        subtitle_ordinal=None,
         path=None,
         language=None,
         title=None,
@@ -276,7 +275,7 @@ def test_scale_comes_before_subtitles_in_the_chain():
 
     graph = build_filter_chain(
         plan=_plan(),
-        subtitle=_subtitle(kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv"),
+        subtitle=_subtitle(kind="embedded_text", stream_index=2, path="/share/movie.mkv"),
     )
     assert graph.value.index("scale") < graph.value.index("subtitles")
 
@@ -287,7 +286,7 @@ def test_the_three_simple_branches_are_a_one_input_graph(kind):
 
     subtitle_kwargs = {"kind": kind}
     if kind == "embedded_text":
-        subtitle_kwargs.update(stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv")
+        subtitle_kwargs.update(stream_index=2, path="/share/movie.mkv")
     elif kind == "external":
         subtitle_kwargs.update(path="/share/movie.srt")
 
@@ -343,30 +342,9 @@ def test_an_external_subtitle_file_is_passed_by_path_and_its_path_is_escaped():
 
 
 def test_an_embedded_text_track_no_longer_carries_a_stream_ordinal():
-    """The burn-in now reads a single-track file this project extracted,
-    so there is nothing left to count -- the `si=` term is gone for good,
-    whatever `subtitle_ordinal` the caller still passes in.
-    """
-    from mytube_media.transcode import build_filter_chain
-
-    graph = build_filter_chain(
-        plan=_plan(),
-        subtitle=_subtitle(
-            kind="embedded_text",
-            stream_index=6,
-            subtitle_ordinal=1,
-            path="/share/movie.ass",
-        ),
-    )
-
-    assert "si=" not in graph.value
-
-
-def test_an_embedded_text_track_without_its_ordinal_is_no_longer_refused():
-    """`subtitle_ordinal` is unused by the term now, so its absence is no
-    longer a reason to refuse -- the two callers that still populate it
-    keep working, and a caller that omits it (once neither needs it any
-    more) is not penalised for leaving out a value nothing reads.
+    """The burn-in reads a single-track file this project extracted, so
+    there is nothing left to count -- the `si=` term is gone for good,
+    and `SubtitleChoice` itself no longer carries a field for it.
     """
     from mytube_media.transcode import build_filter_chain
 
@@ -436,14 +414,14 @@ def test_the_font_directory_is_a_filter_parameter_and_never_a_command_flag():
     with_dir = build_filter_chain(
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", font_dir="/fonts"
+            kind="embedded_text", stream_index=2, path="/share/movie.mkv", font_dir="/fonts"
         ),
     )
     assert "fontsdir=/fonts" in with_dir.value
 
     without_dir = build_filter_chain(
         plan=_plan(),
-        subtitle=_subtitle(kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv"),
+        subtitle=_subtitle(kind="embedded_text", stream_index=2, path="/share/movie.mkv"),
     )
     assert "fontsdir" not in without_dir.value
 
@@ -452,7 +430,7 @@ def test_the_font_directory_is_a_filter_parameter_and_never_a_command_flag():
         "/work/out.mp4",
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", font_dir="/fonts"
+            kind="embedded_text", stream_index=2, path="/share/movie.mkv", font_dir="/fonts"
         ),
     )
     preview_cmd = build_preview_command(
@@ -460,7 +438,7 @@ def test_the_font_directory_is_a_filter_parameter_and_never_a_command_flag():
         "/work/preview.jpg",
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", font_dir="/fonts"
+            kind="embedded_text", stream_index=2, path="/share/movie.mkv", font_dir="/fonts"
         ),
         at_seconds=90.0,
     )
@@ -480,21 +458,21 @@ def test_a_non_utf8_subtitle_file_is_burned_with_its_own_encoding():
     cyrillic = build_filter_chain(
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", charenc="windows-1251"
+            kind="embedded_text", stream_index=2, path="/share/movie.mkv", charenc="windows-1251"
         ),
     )
     assert "charenc=windows-1251" in cyrillic.value
 
     default_unicode = build_filter_chain(
         plan=_plan(),
-        subtitle=_subtitle(kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", charenc=None),
+        subtitle=_subtitle(kind="embedded_text", stream_index=2, path="/share/movie.mkv", charenc=None),
     )
     assert "charenc" not in default_unicode.value
 
     explicit_utf8 = build_filter_chain(
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv", charenc="UTF-8"
+            kind="embedded_text", stream_index=2, path="/share/movie.mkv", charenc="UTF-8"
         ),
     )
     assert "charenc" not in explicit_utf8.value
@@ -575,7 +553,7 @@ def test_only_the_chosen_audio_track_is_mapped(kind):
 
     subtitle_kwargs = {"kind": kind}
     if kind == "embedded_text":
-        subtitle_kwargs.update(stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv")
+        subtitle_kwargs.update(stream_index=2, path="/share/movie.mkv")
     elif kind == "external":
         subtitle_kwargs.update(path="/share/movie.srt")
     elif kind == "embedded_bitmap":
@@ -610,7 +588,7 @@ def test_burning_subtitles_into_a_stereo_source_is_refused_with_a_catalog_key(la
 
     subtitle_kwargs = {"kind": kind}
     if kind == "embedded_text":
-        subtitle_kwargs.update(stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv")
+        subtitle_kwargs.update(stream_index=2, path="/share/movie.mkv")
     elif kind == "external":
         subtitle_kwargs.update(path="/share/movie.srt")
     elif kind == "embedded_bitmap":
@@ -685,7 +663,7 @@ def test_the_preview_and_the_conversion_share_one_filter_chain(kind):
 
     subtitle_kwargs = {"kind": kind}
     if kind == "embedded_text":
-        subtitle_kwargs.update(stream_index=2, subtitle_ordinal=0, path="/share/movie.mkv")
+        subtitle_kwargs.update(stream_index=2, path="/share/movie.mkv")
     elif kind == "external":
         subtitle_kwargs.update(path="/share/movie.srt")
     elif kind == "embedded_bitmap":

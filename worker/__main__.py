@@ -22,10 +22,14 @@ from mytube_media.compat import ProbeError
 from mytube_media.runner import FfmpegFailed, run_ffmpeg_with_progress
 from mytube_media.share import ShareEscape, safe_join
 from mytube_media.subtitles import (
+    SubtitleExtractError,
+    SubtitleReadError,
     collect_fonts,
+    copy_external_track,
     embedded_subtitle_kind,
+    extract_embedded_track,
+    extraction_extension,
     read_text,
-    subtitle_ordinal,
 )
 from mytube_media.transcode import (
     SubtitleChoice,
@@ -114,7 +118,12 @@ def _reason_key_for(exc: Exception) -> str:
     """
     if isinstance(exc, _InsufficientSpaceError):
         return "failed.reason.disk_full"
-    if isinstance(exc, (ShareEscape, ProbeError, OSError)):
+    if isinstance(
+        exc, (ShareEscape, ProbeError, OSError, SubtitleExtractError, SubtitleReadError)
+    ):
+        # A subtitle that could not be extracted or copied is, in effect,
+        # a source this converter could not read for what it needed --
+        # the same reason an unreachable or unreadable video file gets.
         return "failed.reason.unreadable_source"
     if isinstance(exc, (_ProbeMismatchError, TranscodeRefused)):
         return "failed.reason.probe_mismatch"
@@ -125,11 +134,10 @@ def _reason_key_for(exc: Exception) -> str:
         # failed" tells an operator nothing about whether waiting would
         # help. Matched against ffmpeg's own NVENC error strings
         # ("out of memory", "encoder busy") rather than a captured real
-        # log line from this project's own card -- no GPU is reachable
-        # from where this module is written, so this pairing is a
-        # documented best effort, not a measurement. See this plan's own
-        # Summary for the note to revisit once a real failure of this
-        # kind has actually been seen and logged.
+        # log line from this project's own card: no GPU is reachable from
+        # where this module is written, so this pairing is a best effort
+        # to be revisited once a real out-of-memory failure has actually
+        # been seen and logged.
         text = exc.stderr_tail.lower()
         if "out of memory" in text or "encoder busy" in text:
             return "failed.reason.gpu_out_of_memory"
@@ -212,13 +220,13 @@ async def _process_job(
         subtitle_kind = job.get("subtitle_kind") or "none"
         subtitle_stream_index = job.get("subtitle_stream_index")
         subtitle_rel_path = job.get("subtitle_path")
-        subtitle_abs_path = None
+        subtitle_share_path = None
         if subtitle_kind == "external":
             if not subtitle_rel_path:
                 raise _ProbeMismatchError(
                     "an external subtitle was chosen but no path was recorded"
                 )
-            subtitle_abs_path = safe_join(root, subtitle_rel_path)
+            subtitle_share_path = safe_join(root, subtitle_rel_path)
 
         probe_json = await asyncio.to_thread(compat.probe, source)
 
@@ -236,20 +244,6 @@ async def _process_job(
                 )
             subtitle_kind = resolved_kind
 
-        subtitle_si = None
-        if subtitle_kind == "embedded_text":
-            # The subtitles= filter always needs a filename to read from,
-            # even for a track embedded in the file being decoded --
-            # mytube_media.transcode.SubtitleChoice's own docstring. The
-            # ordinal beside it comes from this fresh probe, never from the
-            # job: it is what the filter's si option counts, and it is only
-            # knowable from the file's current stream list.
-            subtitle_si = subtitle_ordinal(probe_json, subtitle_stream_index)
-            if subtitle_si is None:
-                raise _ProbeMismatchError(
-                    f"subtitle stream {subtitle_stream_index} is no longer present"
-                )
-            subtitle_abs_path = source
         verdict = compat.analyze(
             probe_json,
             selected_audio_index=job["audio_stream_index"],
@@ -298,23 +292,39 @@ async def _process_job(
             stereo_layout=stereo_layout,
         )
 
+        # Resolved to a scratch-local file for both text kinds -- the
+        # burn-in filter reads a file this converter just wrote, never the
+        # source container by a stream selector and never the operator's
+        # own path on the share (CR-04/CR-05).
+        subtitle_burn_path = None
         font_dir = None
         charenc = None
-        if subtitle_kind in ("embedded_text", "external"):
-            font_dir = await asyncio.to_thread(
-                collect_fonts,
+        if subtitle_kind == "embedded_text":
+            extension = extraction_extension(probe_json, subtitle_stream_index)
+            subtitle_burn_path = await asyncio.to_thread(
+                extract_embedded_track,
                 source,
-                subtitle_abs_path if subtitle_kind == "external" else None,
+                subtitle_stream_index,
                 job_scratch,
+                extension=extension,
             )
-            if subtitle_kind == "external":
-                _, charenc = await asyncio.to_thread(read_text, subtitle_abs_path)
+            font_dir = await asyncio.to_thread(collect_fonts, source, None, job_scratch)
+        elif subtitle_kind == "external":
+            subtitle_burn_path = await asyncio.to_thread(
+                copy_external_track, subtitle_share_path, job_scratch
+            )
+            font_dir = await asyncio.to_thread(
+                collect_fonts, source, subtitle_share_path, job_scratch
+            )
+            # The encoding is read from the copy, not the share original --
+            # both carry the same bytes, but the copy is what actually gets
+            # burned, and that is the file whose encoding matters here.
+            _, charenc = await asyncio.to_thread(read_text, subtitle_burn_path)
 
         subtitle = SubtitleChoice(
             kind=subtitle_kind,
             stream_index=subtitle_stream_index,
-            subtitle_ordinal=subtitle_si,
-            path=str(subtitle_abs_path) if subtitle_abs_path else None,
+            path=str(subtitle_burn_path) if subtitle_burn_path else None,
             font_dir=font_dir,
             charenc=charenc,
         )

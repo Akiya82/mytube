@@ -133,9 +133,24 @@ def _run_one_job(
         commands.append(cmd)
         return run_result if run_result is not None else _FakeResult()
 
+    def fake_extract_embedded_track(source, stream_index, scratch_dir, extension="ass"):
+        # No real ffmpeg subprocess in this file (module docstring) -- a
+        # stub file stands in for the track this call would have pulled
+        # out of a real container.
+        dest = Path(scratch_dir) / f"track_{stream_index}.{extension}"
+        dest.write_text("1\n00:00:01,000 --> 00:00:02,000\nStub cue\n", encoding="utf-8")
+        return dest
+
+    def fake_copy_external_track(path, scratch_dir):
+        dest = Path(scratch_dir) / f"external{Path(path).suffix.lower()}"
+        dest.write_text("1\n00:00:01,000 --> 00:00:02,000\nStub cue\n", encoding="utf-8")
+        return dest
+
     monkeypatch.setattr(worker_main.compat, "probe", lambda path: probe_json)
     monkeypatch.setattr(worker_main.compat, "moov_before_mdat", lambda path: True)
     monkeypatch.setattr(worker_main, "run_ffmpeg_with_progress", fake_run)
+    monkeypatch.setattr(worker_main, "extract_embedded_track", fake_extract_embedded_track)
+    monkeypatch.setattr(worker_main, "copy_external_track", fake_copy_external_track)
     monkeypatch.setattr(
         worker_main.worker_storage,
         "upload_file",
@@ -167,7 +182,8 @@ def test_an_embedded_choice_is_resolved_and_actually_burned_in(monkeypatch, tmp_
     neither of the two kinds the filter chain understands, and the run it
     produced has to carry a burn-in anyway.
     """
-    cmd, client = _run_one_job(monkeypatch, tmp_path, _job())
+    job = _job()
+    cmd, client = _run_one_job(monkeypatch, tmp_path, job)
 
     assert cmd is not None
     graph = cmd[cmd.index("-vf") + 1]
@@ -175,6 +191,38 @@ def test_an_embedded_choice_is_resolved_and_actually_burned_in(monkeypatch, tmp_
     # The burn-in no longer carries a stream ordinal at all -- it reads a
     # single-track file, not the source container by a stream selector.
     assert "si=" not in graph
+    # The path inside the filter term names a file this converter wrote
+    # into the job's own scratch directory (CR-05), never the source --
+    # the job id (plain hex and hyphens, untouched by filter escaping)
+    # is the scratch directory's own name and stands in for the whole
+    # path here, since the path itself is escaped inside the term.
+    assert job["job_id"] in graph
+    assert "movie.mkv" not in graph
+    assert client.failed_calls == []
+    assert client.done_calls
+
+
+def test_an_external_subtitle_named_with_an_apostrophe_never_reaches_the_argv(
+    monkeypatch, tmp_path
+):
+    """The share file's own name is never what the burn-in filter reads --
+    the converter copies it into scratch under a generated name first, so
+    an apostrophe in the operator's own filename (which would otherwise
+    need the two-pass escaper's exact backslash count to survive) never
+    has to travel through the filter term at all.
+    """
+    job = _job(
+        subtitle_kind="external",
+        subtitle_stream_index=None,
+        subtitle_path="It's a subtitle.srt",
+    )
+    cmd, client = _run_one_job(monkeypatch, tmp_path, job)
+
+    assert cmd is not None
+    graph = cmd[cmd.index("-vf") + 1]
+    assert "subtitles=" in graph
+    assert "It's a subtitle" not in graph
+    assert "external" in graph
     assert client.failed_calls == []
     assert client.done_calls
 

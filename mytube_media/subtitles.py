@@ -199,27 +199,6 @@ def embedded_subtitle_kind(probe_json: dict, stream_index: int) -> str | None:
     return None
 
 
-def subtitle_ordinal(probe_json: dict, stream_index: int) -> int | None:
-    """How many subtitle streams come before `stream_index` in the file,
-    or `None` when that index is not a subtitle stream at all.
-
-    This is the number the `subtitles=` filter's `si` option is matched
-    against -- it counts subtitle streams alone, so the first subtitle
-    track is 0 whatever its file index is. The absolute index stays the
-    right answer everywhere else (the bitmap track's own `-map 0:{index}`,
-    `extract_embedded_track`), which is why both travel together on
-    `transcode.SubtitleChoice` instead of one standing in for the other.
-    """
-    ordinal = 0
-    for stream in probe_json.get("streams", []):
-        if stream.get("codec_type") != "subtitle":
-            continue
-        if stream.get("index") == stream_index:
-            return ordinal
-        ordinal += 1
-    return None
-
-
 def _match_sidecar(path: Path, stem: str):
     """`None` when the file has no language suffix, a two-letter/three-
     letter code when it does, or the `_NO_MATCH` sentinel when the name
