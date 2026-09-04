@@ -33,11 +33,11 @@ COPY migrations ./migrations
 
 RUN pip install --no-cache-dir ".[api]"
 
-# Ephemeral scratch space for ffmpeg output (D-52's free-space preflight,
-# D-53's "leaves nothing behind"). Deliberately a plain directory in the
-# container layer, never a named volume or bind mount — a container
-# recreate wipes it, which is half of how an interrupted add leaves
-# nothing behind.
+# Ephemeral scratch space for ffmpeg output. Deliberately a plain
+# directory in the container layer, never a named volume or bind mount —
+# a container recreate wipes it, which is half of how an interrupted add
+# leaves nothing behind (the free-space preflight is D-52; the "leaves
+# nothing behind" promise is D-53).
 RUN mkdir -p /work
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

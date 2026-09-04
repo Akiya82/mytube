@@ -38,9 +38,9 @@ services:
     # read inside the network comes from the "anonymous" identity baked into
     # s3.json.template; the boundary is unreachability from outside, not ACL.
 
-  # D-15: dumps go to a host bind mount under ./data/ (already covered by
+  # Dumps go to a host bind mount under ./data/ (already covered by
   # the top-level /data/ rule in .gitignore, same pattern as storage's own
-  # data — nothing new to ignore). No scheduler daemon and no extra image:
+  # data — nothing new to ignore) (D-15). No scheduler daemon and no extra image:
   # this is the same postgres:16-alpine that already ships pg_dump, entry
   # point overridden to run backup/backup.sh's loop instead of a server.
   db-backup:

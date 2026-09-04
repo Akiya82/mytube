@@ -27,8 +27,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mytube_media.transcode import MAX_OUTPUT_WIDTH as _SHARED_MAX_OUTPUT_WIDTH
 
-# D-113: the free-memory floor below which the converter reports
-# "waiting for GPU" on every poll instead of claiming. No measured VRAM
+# The free-memory floor below which the converter reports "waiting for
+# GPU" on every poll instead of claiming (D-113). No measured VRAM
 # figure exists for this project yet -- experiment 10's end-to-end
 # 1080p NVENC+NVDEC run on the real card recorded encoder/decoder
 # *utilisation* (74%/48% peak) but not a VRAM figure -- so this default
@@ -48,7 +48,10 @@ class WorkerSettings(BaseSettings):
     read once by `worker.__main__` at start.
     """
 
-    model_config = SettingsConfigDict(env_prefix="MYTUBE_")
+    # env_ignore_empty=True: an empty MYTUBE_WORKER_NAME must be read as
+    # unset, not as the empty string, or worker_name's own hostname default
+    # below never runs and every check-in is recorded under "".
+    model_config = SettingsConfigDict(env_prefix="MYTUBE_", env_ignore_empty=True)
 
     # --- required, no default -------------------------------------------
     # The service's address, the shared credential, the storage endpoint
@@ -128,8 +131,8 @@ class WorkerSettings(BaseSettings):
         if not value.strip():
             raise ValueError(
                 "MYTUBE_WORKER_S3_KEY must not be empty -- there is no fallback "
-                "to MYTUBE_S3_KEY (D-115: the converter's storage credential is "
-                "its own, narrower one)."
+                "to MYTUBE_S3_KEY; the converter's storage credential is "
+                "deliberately its own, narrower one."
             )
         return value
 
@@ -139,7 +142,7 @@ class WorkerSettings(BaseSettings):
         if not value.strip():
             raise ValueError(
                 "MYTUBE_WORKER_S3_SECRET must not be empty -- there is no "
-                "fallback to MYTUBE_S3_SECRET (D-115: the converter's storage "
-                "credential is its own, narrower one)."
+                "fallback to MYTUBE_S3_SECRET; the converter's storage "
+                "credential is deliberately its own, narrower one."
             )
         return value

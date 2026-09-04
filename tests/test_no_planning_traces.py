@@ -40,6 +40,24 @@ never interpolated into any string this module itself passes to
 `typer.echo`/`print`/`help=` -- this file is not under `orchestrator/` and
 is not walked by the guard, but the constant is kept isolated on principle
 so a future move of this file could not make it fail on its own source.
+
+**The sample environment file, both compose files and both Dockerfiles are
+their own surface, checked by a narrower pattern.** `.env.example`,
+`docker-compose.yml`, `docker-compose.worker.yml`, `Dockerfile` and
+`Dockerfile.worker` are the first files an outside operator opens, and
+every comment line in them explains a value the operator has to set or
+understand. `_LEADING_ID` flags only a comment whose *first* token is a
+bare identifier followed by a colon -- the shape of a line where the
+identifier stands in for the explanation instead of following it. An
+identifier trailing the same comment, once the reason has been given in
+words, is the maintainer's pointer the project rule allows.
+
+**`worker/` and `mytube_media/` get the same treatment as the CLI's own
+output strings.** Neither package is under `orchestrator/`, so the walk
+above never reaches them, and both run unattended on a machine an operator
+does not watch line-by-line -- a logging call or a raised exception's
+message is what they see instead of a terminal, the same kind of surface
+`collect_user_facing_strings` already covers for `typer.echo`/`print`.
 """
 import ast
 import json
@@ -52,6 +70,26 @@ ORCHESTRATOR_DIR = REPO_ROOT / "orchestrator"
 TEMPLATES_DIR = ORCHESTRATOR_DIR / "web" / "templates"
 LOCALES_DIR = ORCHESTRATOR_DIR / "locales"
 TOOLS_DIR = REPO_ROOT / "tools"
+WORKER_DIR = REPO_ROOT / "worker"
+MYTUBE_MEDIA_DIR = REPO_ROOT / "mytube_media"
+
+# The sample environment file, both compose files and both Dockerfiles --
+# the shipped configuration surfaces a leading identifier reaches an
+# operator through, none of them under `orchestrator/`.
+CONFIG_FILES_FOR_COMMENT_SCAN = (
+    REPO_ROOT / ".env.example",
+    REPO_ROOT / "docker-compose.yml",
+    REPO_ROOT / "docker-compose.worker.yml",
+    REPO_ROOT / "Dockerfile",
+    REPO_ROOT / "Dockerfile.worker",
+)
+
+# The standard logging methods -- collected off any attribute access with
+# one of these names, not off a specific logger variable, so a second
+# module-level logger (or a differently-named one) is caught the same way.
+_LOG_METHOD_NAMES = frozenset(
+    {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+)
 
 # A double-quoted string on a line that is not wholly a comment. The shell
 # tools print through several helpers of their own (`pass`, `fail`, `note`)
@@ -84,6 +122,22 @@ _ID_PATTERN = re.compile(
     r"|[Pp]hase [0-9]|[Pp]lan [0-9]|[Tt]ask [0-9]|[Cc]riterion [0-9]"
     r"|фаз[аеы]|верди[кс]т"
     r")"
+)
+
+# A comment line whose *first* token is a bare identifier immediately
+# followed by a colon -- deliberately its own, narrower pattern rather
+# than a reuse of `_ID_PATTERN`: that pattern matches an identifier
+# anywhere in the text, which would also flag every legitimate trailing
+# pointer these same files carry (the project rule allows those).
+_LEADING_ID = re.compile(
+    r"^("
+    r"D-[0-9]{2,3}"
+    r"|ASIS-[0-9]{2}|ADDR-[0-9]{2}|DELIV-[0-9]{2}|DIST-[0-9]{2}"
+    r"|AUTH-[0-9]{2}"
+    r"|CAT-[0-9]{2}|UI-[0-9]{2}|CONV-[0-9]{2}|PLST-[0-9]{2}|WORK-[0-9]{2}"
+    r"|T-[0-9]{2}-[A-Za-z]+"
+    r"|[Mm][0-9]{1,2}|B[0-9]{1,2}"
+    r"):"
 )
 
 
@@ -223,6 +277,132 @@ def test_a_shell_comment_is_skipped_but_an_output_string_is_not(tmp_path):
         if _ID_PATTERN.search(text)
     ]
     assert offenders == ["step 13 (DELIV-08): expected 206"]
+
+
+def collect_config_comment_lines(paths) -> list[tuple[Path, int, str]]:
+    """Every full-line comment's text (the part after `#`, whitespace
+    stripped) from the given files -- `(path, line, text)`.
+
+    A line that is a comment for only part of its length (real content
+    followed by a trailing `# ...`) is not collected: this pass is about
+    lines that *open* with a comment, which is the only place a leading
+    identifier can stand in for the reason.
+    """
+    found: list[tuple[Path, int, str]] = []
+    for path in paths:
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                found.append((path, lineno, stripped[1:].strip()))
+    return found
+
+
+def collect_message_strings(root: Path) -> list[tuple[Path, int, str]]:
+    """Every string this guard cares about from every `.py` file under
+    `root`: `(path, line, text)` for the first positional argument of a
+    logging call (any `x.info(...)`/`x.warning(...)`/... in
+    `_LOG_METHOD_NAMES`, matched on the attribute name rather than a
+    specific logger variable) and of a `raise` of any exception class.
+
+    These reach an operator's log and the service's own error paths --
+    the same kind of surface `collect_user_facing_strings` already covers
+    for `typer.echo`/`print` in `orchestrator/`, which this walk never
+    reaches.
+    """
+    found: list[tuple[Path, int, str]] = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr in _LOG_METHOD_NAMES
+                    and node.args
+                ):
+                    text = _literal_text(node.args[0])
+                    if text is not None:
+                        found.append((path, node.lineno, text))
+            elif (
+                isinstance(node, ast.Raise)
+                and isinstance(node.exc, ast.Call)
+                and node.exc.args
+            ):
+                text = _literal_text(node.exc.args[0])
+                if text is not None:
+                    found.append((path, node.lineno, text))
+    return found
+
+
+def test_no_shipped_config_comment_opens_with_a_leading_identifier():
+    offenders = [
+        (str(path.relative_to(REPO_ROOT)), lineno, text)
+        for path, lineno, text in collect_config_comment_lines(CONFIG_FILES_FOR_COMMENT_SCAN)
+        if _LEADING_ID.match(text)
+    ]
+    assert not offenders, offenders
+
+
+def test_the_config_comment_walk_actually_reaches_the_files():
+    # Same reason as every other walk here: one that silently collects
+    # nothing would report "no offenders" forever.
+    assert len(collect_config_comment_lines(CONFIG_FILES_FOR_COMMENT_SCAN)) > 50
+
+
+def test_a_leading_config_comment_identifier_is_flagged_but_a_trailing_one_is_not(
+    tmp_path,
+):
+    sample = tmp_path / "sample.env"
+    sample.write_text(
+        "# D-99: leads, so this stands in for the reason instead of following it\n"
+        "# the actual reason, with the same identifier trailing instead (D-99)\n",
+        encoding="utf-8",
+    )
+    offenders = [
+        text for _, _, text in collect_config_comment_lines([sample]) if _LEADING_ID.match(text)
+    ]
+    assert offenders == [
+        "D-99: leads, so this stands in for the reason instead of following it"
+    ]
+
+
+def test_no_worker_or_media_message_string_carries_a_planning_identifier():
+    offenders = [
+        (str(path.relative_to(REPO_ROOT)), lineno, text)
+        for path, lineno, text in (
+            collect_message_strings(WORKER_DIR) + collect_message_strings(MYTUBE_MEDIA_DIR)
+        )
+        if _ID_PATTERN.search(text)
+    ]
+    assert not offenders, offenders
+
+
+def test_the_message_string_walk_actually_reaches_worker_and_media():
+    found = collect_message_strings(WORKER_DIR) + collect_message_strings(MYTUBE_MEDIA_DIR)
+    assert len(found) > 15
+
+
+def test_a_logging_message_identifier_is_flagged_but_a_docstring_one_is_not(tmp_path):
+    (tmp_path / "mod.py").write_text(
+        textwrap.dedent(
+            '''
+            """Module docstring naming D-10, safe to keep as a pointer."""
+            import logging
+
+            logger = logging.getLogger(__name__)
+
+            def f():
+                logger.warning("refuses the fallback (D-10)")
+            '''
+        ),
+        encoding="utf-8",
+    )
+    offenders = [
+        text for _, _, text in collect_message_strings(tmp_path) if _ID_PATTERN.search(text)
+    ]
+    assert offenders == ["refuses the fallback (D-10)"]
 
 
 def test_no_orchestrator_output_or_help_string_carries_a_planning_identifier():

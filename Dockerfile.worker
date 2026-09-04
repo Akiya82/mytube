@@ -86,8 +86,8 @@ RUN pip install --no-cache-dir ".[worker]"
 # scratch mount for where a real deployment gives this room to work in).
 RUN mkdir -p /work
 
-# D-144: the value the host's container runtime reads to decide which of
-# the card's capabilities to expose to this container. All three,
+# The value the host's container runtime reads to decide which of
+# the card's capabilities to expose to this container (D-144). All three,
 # spelled exactly this way -- `utility` is what injects the vendor's own
 # query tool (nvidia-smi); worker/gpu.py reads the card through that tool
 # on every single poll, and without `utility` that check fails

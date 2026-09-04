@@ -45,7 +45,7 @@ services:
       MYTUBE_WORKER_VRAM_MIN_MIB: ${MYTUBE_WORKER_VRAM_MIN_MIB:-1536}
       MYTUBE_WORKER_POLL_SECONDS: ${MYTUBE_WORKER_POLL_SECONDS:-5.0}
       MYTUBE_WORKER_MAX_OUTPUT_WIDTH: ${MYTUBE_WORKER_MAX_OUTPUT_WIDTH:-1920}
-      # D-144: exactly what the image itself also sets -- repeated here
+      # Exactly what the image itself also sets -- repeated here (D-144)
       # because the host's container runtime reads this from the
       # container's own environment at run time, not from the image's
       # baked-in default alone, on every compose stack that sets its own
