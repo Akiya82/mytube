@@ -78,6 +78,25 @@ def test_list_dir_skips_a_symlink_pointing_outside_the_root(share_root, tmp_path
     assert "Movies" in [e.name for e in entries]
 
 
+def test_list_dir_skips_a_dangling_symlink(share_root, tmp_path):
+    """A symlink whose target no longer exists (the storage server's own
+    `incomplete -> /incomplete` at the root of a real share) must cost one
+    row, not the folder. Over NFS such links arrive as-is, and following
+    one with stat() is an OSError that the outer handler used to read as
+    "the share is unreachable" -- a 503 for a folder that lists fine.
+    """
+    link = share_root / "incomplete"
+    try:
+        link.symlink_to(tmp_path / "gone")
+    except OSError:
+        pytest.skip("host has no permission to create symlinks")
+
+    entries = list_dir(share_root, share_root)
+
+    assert "incomplete" not in [e.name for e in entries]
+    assert "Movies" in [e.name for e in entries]
+
+
 def test_list_dir_links_an_inside_symlink_by_its_own_name(share_root):
     """A symlink to another location inside the root is listable, but its
     rel_path has to be where it appears, not where it points -- otherwise

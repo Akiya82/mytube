@@ -109,16 +109,19 @@ def list_dir(path: Path, root: Path) -> list[ShareEntry]:
         base_rel = Path(path).resolve().relative_to(root_resolved)
         with os.scandir(path) as it:
             for entry in it:
-                st = entry.stat()
                 try:
                     Path(entry.path).resolve().relative_to(root_resolved)
-                except ValueError:
-                    # A symlink whose target sits outside the mount. It is
-                    # not reachable through safe_join anyway, so listing it
-                    # could only produce a row that refuses to open --
-                    # and relative_to raises ValueError, not OSError, so
-                    # without this it escapes the handler below and fails
-                    # the entire folder instead of the one entry.
+                    st = entry.stat()
+                except (ValueError, OSError):
+                    # One entry the listing cannot show, never the folder.
+                    # ValueError: a symlink whose target sits outside the
+                    # mount -- not reachable through safe_join anyway, so a
+                    # row for it could only refuse to open. OSError: an
+                    # entry that cannot be stat'ed, which over NFS is most
+                    # often a dangling symlink the storage server left at
+                    # the root (`incomplete -> /incomplete`); stat() follows
+                    # the link, and the handler below would otherwise read
+                    # that one missing target as the whole share being gone.
                     continue
                 # Built from the entry name, never from the resolved
                 # target: a symlink pointing elsewhere inside the root has
