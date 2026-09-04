@@ -29,7 +29,12 @@ probe, each upload, each cleanup call -- goes through `asyncio.to_thread`.
 Each segment's own packet copy runs through
 `mytube_media.runner.run_ffmpeg_with_progress` instead of a blocking
 call, so its progress reaches the operator without blocking this loop
-while it runs.
+while it runs. Each member's own download and each segment's own upload
+run through `orchestrator.media.queue.heartbeat_while` instead of a bare
+`asyncio.to_thread` -- a member can be an eight-gigabyte rip, and a
+transfer that outlasts the reaper's own stale threshold must not get its
+job requeued out from under it while it is still healthily in flight
+(CR-01).
 
 **What a build produces.** One segment object per member, MPEG-TS bytes
 under a key shaped `{a fresh identifier}.mp4`, plus one artifact row each
@@ -76,6 +81,7 @@ from mytube_media.runner import run_ffmpeg_with_progress
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media import playlist_build
+from orchestrator.media.queue import heartbeat_while
 from orchestrator.storage import (
     abort_dangling_multipart,
     delete_object,
@@ -356,8 +362,14 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
             segment = work_dir / f"{job.playlist_id}-{index}-segment"
             scratch.extend((source, segment))
 
-            await asyncio.to_thread(
-                download_object_to_file, member["object_key"], str(source)
+            # Heartbeating while it runs (CR-01): a member can be an
+            # eight-gigabyte rip, and a download that outlasts the reaper's
+            # own stale threshold must not get its job requeued out from
+            # under it while the transfer is still healthily in flight.
+            await heartbeat_while(
+                lambda: download_object_to_file(member["object_key"], str(source)),
+                heartbeat=_heartbeat,
+                stage="working",
             )
 
             cmd = playlist_build.build_segment_command(source, segment)
@@ -386,9 +398,10 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
             duration = await _check_segment(segment)
 
             key = f"{uuid.uuid4()}.mp4"
-            await _heartbeat(stage="uploading")
-            await asyncio.to_thread(
-                put_object_from_file, str(segment), key, SEGMENT_CONTENT_TYPE
+            await heartbeat_while(
+                lambda: put_object_from_file(str(segment), key, SEGMENT_CONTENT_TYPE),
+                heartbeat=_heartbeat,
+                stage="uploading",
             )
             uploaded.append(key)
 

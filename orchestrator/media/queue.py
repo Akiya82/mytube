@@ -102,12 +102,61 @@ class _JobCancelled(Exception):
     """
 
 
-async def _upload(path, key: str, content_type: str = "video/mp4") -> None:
-    """One upload, with its failures labelled. The only place
-    `put_object_from_file` is called from `process_add`.
+# Deliberately short, the same reasoning `worker.__main__`'s own
+# heartbeat interval already carries: a transfer that outlasts the
+# reaper's stale threshold must not go unheartbeated for any real
+# stretch of it, and a heartbeat every few seconds costs this database
+# nothing. Not imported from `worker` -- this process shares nothing
+# with the converter's own package (orchestrator never imports worker).
+HEARTBEAT_WHILE_INTERVAL_SECONDS = 3.0
+
+
+async def heartbeat_while(work, *, heartbeat, stage: str, interval: float | None = None):
+    """Run the blocking, zero-argument callable `work` in a thread while
+    sending `heartbeat(stage=stage)` on `interval`'s own timer until it
+    finishes -- closes CR-01 for every blocking transfer in this project:
+    without this, a transfer that outlasts the reaper's own stale
+    threshold gets its job requeued out from under it, the object it just
+    finished writing gets deleted, and the same work runs again from
+    scratch.
+
+    `interval` defaults to the module constant, read at call time rather
+    than bound as a parameter default, so a test can lower it with a
+    plain `monkeypatch.setattr` the same way it patches everything else
+    this module reads off itself.
+
+    One heartbeat is always sent before the first wait, whether or not
+    `work` is already finished by then -- a transfer that finishes inside
+    one interval still produces exactly the heartbeat it always did. Not
+    a reporter object and not a context manager: a function that awaits a
+    thread and sends a heartbeat on a timer is the whole mechanism: a
+    second one to keep in step with the converter's own would be more
+    than this needs.
+
+    `work`'s own exception, if any, propagates unchanged once the task is
+    done -- this adds reporting, never error handling.
+    """
+    if interval is None:
+        interval = HEARTBEAT_WHILE_INTERVAL_SECONDS
+    task = asyncio.ensure_future(asyncio.to_thread(work))
+    while True:
+        await heartbeat(stage=stage)
+        done, _pending = await asyncio.wait({task}, timeout=interval)
+        if task in done:
+            return task.result()
+
+
+async def _upload(path, key: str, content_type: str = "video/mp4", *, heartbeat) -> None:
+    """One upload, heartbeating on its own timer while it runs, with its
+    failures labelled. The only place `put_object_from_file` is called
+    from `process_add`.
     """
     try:
-        await asyncio.to_thread(put_object_from_file, str(path), key, content_type)
+        await heartbeat_while(
+            lambda: put_object_from_file(str(path), key, content_type),
+            heartbeat=heartbeat,
+            stage="uploading",
+        )
     except Exception as exc:
         raise _UploadError(f"{key}: {exc}") from exc
 
@@ -266,7 +315,11 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
        which in the remux branch is not the source. Every heartbeat
        written while ffmpeg runs carries the running job's cancellation
        answer; a `True` answer stops the tool through the runner's own
-       cancellation predicate rather than waiting for it to finish.
+       cancellation predicate rather than waiting for it to finish. Both
+       upload paths -- the as-is path and the remux path -- run through
+       `heartbeat_while`, so an upload that outlasts a heartbeat interval
+       is still reporting throughout the transfer and cannot be requeued
+       out from under itself (CR-01).
     6. Extract the poster in its own try/except: a poster that will not
        extract must not fail an add that otherwise worked.
     7. Record the technical detail on the edition, flip the title to
@@ -342,9 +395,8 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         started_at = time.monotonic()
         try:
             if verdict.already_correct:
-                await _heartbeat(stage="uploading")
                 uploaded_path = source
-                await _upload(source, job.object_key)
+                await _upload(source, job.object_key, heartbeat=_heartbeat)
             else:
                 cmd = remux.build_remux_command(
                     source,
@@ -373,9 +425,8 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 if result.cancelled:
                     raise _JobCancelled()
 
-                await _heartbeat(stage="uploading")
                 uploaded_path = scratch_video
-                await _upload(scratch_video, job.object_key)
+                await _upload(scratch_video, job.object_key, heartbeat=_heartbeat)
 
             # `editions.size_bytes` is a fact about the stored object, and
             # in the remux branch that is ffmpeg's output, not the source:
@@ -398,7 +449,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 remux.run_ffmpeg, poster_cmd, timeout=POSTER_TIMEOUT_SECONDS
             )
             candidate_poster_key = f"{job.edition_id}.jpg"
-            await _upload(scratch_poster, candidate_poster_key, "image/jpeg")
+            await _upload(scratch_poster, candidate_poster_key, "image/jpeg", heartbeat=_heartbeat)
             poster_key = candidate_poster_key
         except Exception:
             # A poster that will not extract must not fail an add that

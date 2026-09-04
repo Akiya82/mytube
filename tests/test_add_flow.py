@@ -472,6 +472,50 @@ async def test_healthz_stays_responsive_while_upload_is_slow(
     assert elapsed < 0.5
 
 
+async def test_more_than_one_heartbeat_covers_an_upload_that_outlasts_the_interval(
+    client, clips, storage_spy, monkeypatch, raw_conn
+):
+    """CR-01: a transfer that runs longer than one heartbeat interval is
+    still heartbeating throughout it, not just once before it starts --
+    without this, the reaper's own stale sweep can requeue the job out
+    from under an upload that is still healthily in flight.
+    """
+    heartbeat_stages = []
+    real_heartbeat_job = queue_module.queries.heartbeat_job
+
+    async def spy_heartbeat_job(conn, job_id, **kwargs):
+        heartbeat_stages.append(kwargs.get("stage"))
+        return await real_heartbeat_job(conn, job_id, **kwargs)
+
+    monkeypatch.setattr(queue_module.queries, "heartbeat_job", spy_heartbeat_job)
+    monkeypatch.setattr(queue_module, "HEARTBEAT_WHILE_INTERVAL_SECONDS", 0.05)
+
+    def slow_put(path, key, content_type="video/mp4"):
+        time.sleep(0.3)
+        storage_spy["put"].append((path, key, content_type))
+
+    monkeypatch.setattr(queue_module, "put_object_from_file", slow_put)
+
+    clip = clips["already_correct"]
+    resp = await client.post(
+        f"/add/{clip['path'].name}",
+        data=_post_data(clip, name="Heartbeating Upload", slug="heartbeating-upload"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+    async def is_active():
+        row = await raw_conn.fetchrow(
+            "SELECT status FROM titles WHERE name = $1", "Heartbeating Upload"
+        )
+        return row is not None and row["status"] == "active"
+
+    await _wait_until(is_active)
+
+    uploading = [stage for stage in heartbeat_stages if stage == "uploading"]
+    assert len(uploading) > 1
+
+
 # --- failure paths (task 3) ------------------------------------------
 
 

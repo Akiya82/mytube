@@ -134,15 +134,31 @@ async def sweep_sessions_once(pool: asyncpg.Pool) -> None:
             logger.info("reaper: swept %d expired session(s)", removed)
 
 
-# Chosen against the larger of two lower bounds (see the migration's own
-# constraint statement in queries.due_for_requeue's caller here): it has
-# to be comfortably longer than the interval between a worker's
-# heartbeats (a report piggybacked on every progress tick, on the order
-# of a few seconds), and comfortably longer than the time this process
-# takes to restart. The pod-restart bound is the binding one -- a restart
-# that outlasts this threshold would requeue every job that was, in
-# fact, still legitimately running, not merely stuck.
-JOB_STALE_SECONDS = 180
+# Chosen against the largest of three lower bounds (see the migration's
+# own constraint statement in queries.due_for_requeue's caller here): it
+# has to be comfortably longer than the interval between a heartbeat and
+# the next (every consumer now heartbeats on the order of a few seconds,
+# through every stage including a blocking transfer -- CR-01), and
+# comfortably longer than the time this process takes to restart. The
+# third bound is now the binding one: strictly longer than the
+# converter's own report retry window (`worker.client.
+# REPORT_RETRY_WINDOW_SECONDS`, 300 seconds -- not imported here, since
+# `orchestrator` never imports `worker`; a test asserts this module's own
+# figure against that constant directly). Without this bound, a converter
+# genuinely still retrying the final report of a finished encode -- the
+# one case that retry window exists to survive -- could be requeued
+# underneath itself by this same sweep, discarding a completed encode for
+# a service outage its own retry was built to tolerate.
+#
+# The cost is real and is paid on the other failure mode: recovery from a
+# genuinely dead converter now takes correspondingly longer. The phase
+# measured that recovery once, at the previous 180-second threshold, at
+# roughly three and a half minutes end to end (threshold plus one reaper
+# poll cycle). At this threshold the same recovery is expected to take
+# roughly six and a half minutes -- a slower recovery from a rare failure
+# is the right trade against discarding a finished encode during an
+# ordinary upload.
+JOB_STALE_SECONDS = 360
 
 
 async def sweep_stale_jobs(pool: asyncpg.Pool) -> None:

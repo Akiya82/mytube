@@ -24,6 +24,7 @@ arguments, and which call it did not make at all.
 import asyncio
 import contextlib
 import shutil
+import time
 import uuid
 from collections import namedtuple
 from pathlib import Path
@@ -36,6 +37,7 @@ from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media import add as add_module
 from orchestrator.media import playlist_queue as worker
+from orchestrator.media import queue as queue_module
 from orchestrator.media.playlist_queue import (
     PLAYLIST_CONSUMER_WORKER_NAME,
     REASON_KEY_ASSEMBLY,
@@ -444,6 +446,49 @@ async def test_ffmpeg_failing_is_reported_as_an_assembly_failure_not_a_check_one
     assert _outcomes(calls) == ["failed"]
 
 
+async def test_more_than_one_heartbeat_covers_a_download_that_outlasts_the_interval(
+    build, monkeypatch
+):
+    """CR-01: a member download that runs longer than one heartbeat
+    interval is still heartbeating throughout it, the same guarantee the
+    addition consumer's own upload now has.
+    """
+    state, calls = build
+    state["members"] = [_member(1)]
+
+    def slow_download(key, destination):
+        time.sleep(0.05)
+        calls["downloaded"].append((key, destination))
+        Path(destination).write_bytes(b"stub member bytes")
+
+    monkeypatch.setattr(worker, "download_object_to_file", slow_download)
+    monkeypatch.setattr(queue_module, "HEARTBEAT_WHILE_INTERVAL_SECONDS", 0.01)
+
+    await _run()
+
+    working = [h for h in calls["heartbeats"] if h["stage"] == "working"]
+    assert len(working) > 1
+
+
+async def test_a_download_failure_still_reaches_the_assembly_failure_handler(build, monkeypatch):
+    """The download now runs wrapped in `heartbeat_while` (CR-01) -- its
+    own exception must still propagate unchanged and land on the same
+    reason key it did before the wrapper existed.
+    """
+    state, calls = build
+
+    def failing_download(key, destination):
+        raise OSError("the share is unreachable")
+
+    monkeypatch.setattr(worker, "download_object_to_file", failing_download)
+
+    await _run()
+
+    assert _reasons(calls) == [REASON_KEY_ASSEMBLY]
+    assert calls["uploaded"] == []
+    assert _outcomes(calls) == ["failed"]
+
+
 async def test_a_failed_build_leaves_nothing_in_scratch(build):
     """A build that failed half way still pulled members onto local disk.
     Leaving them there is how the next build finds no room.
@@ -523,13 +568,18 @@ async def test_the_combined_percentage_advances_across_segments(build):
     """The reported percentage combines how many segments are already
     done with the current one's own progress -- for two equal-size
     members, each fully finishing in a single reported block, that is
-    50% after the first and 100% after the second.
+    50% after the first and 100% after the second. Each member's own
+    download now writes its own `working`-stage heartbeat too (CR-01) --
+    carrying no percentage of its own, so it is excluded here rather than
+    read as a stalled segment.
     """
     state, calls = build
 
     await _run()
 
-    working = [h for h in calls["heartbeats"] if h["stage"] == "working"]
+    working = [
+        h for h in calls["heartbeats"] if h["stage"] == "working" and h["progress_pct"] is not None
+    ]
     assert [h["progress_pct"] for h in working] == [50.0, 100.0]
 
     uploading = [h for h in calls["heartbeats"] if h["stage"] == "uploading"]
@@ -540,14 +590,15 @@ async def test_a_cancel_mid_build_discards_the_segment_already_uploaded_and_fini
     build,
 ):
     """The operator's cancel button, answered through the first segment's
-    own `uploading`-stage heartbeat (index 1: the second heartbeat this
-    build writes, after the first segment's `working` heartbeat at index
-    0) -- honoured before the second segment's download ever starts. What
-    the first segment already uploaded is discarded, and the job finishes
-    `cancelled`, not `failed`: an operator's decision is not a fault.
+    own `uploading`-stage heartbeat (index 2: after the first segment's
+    own download heartbeat at index 0 and its `working` heartbeat at
+    index 1) -- honoured before the second segment's download ever
+    starts. What the first segment already uploaded is discarded, and the
+    job finishes `cancelled`, not `failed`: an operator's decision is not
+    a fault.
     """
     state, calls = build
-    state["cancel_after_heartbeat_index"] = 1
+    state["cancel_after_heartbeat_index"] = 2
 
     await _run()
 
