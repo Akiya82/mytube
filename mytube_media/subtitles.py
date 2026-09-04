@@ -121,11 +121,19 @@ _FONTSELECT_RE = re.compile(r"fontselect:\s*\(([^,]+),")
 # One arrow-separated timestamp line (SubRip/WebVTT) or one ASS/SSA
 # Dialogue line's own start time. Two fixed, simple formats -- a handful
 # of lines of parsing, no new dependency, matching how this project
-# already handles other small fixed formats (D-126).
+# already handles other small fixed formats (D-126). The hours group is
+# optional (IN-04): WebVTT allows a cue written as `mm:ss.mmm`, unlike
+# SubRip which always carries the hour.
 _SRT_CUE_RE = re.compile(
-    r"^(\d{1,2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*\d{1,2}:\d{2}:\d{2}[.,]\d{3}"
+    r"^((?:\d{1,2}:)?\d{2}:\d{2}[.,]\d{3})\s*-->\s*(?:\d{1,2}:)?\d{2}:\d{2}[.,]\d{3}"
 )
 _ASS_DIALOGUE_RE = re.compile(r"^Dialogue:\s*[^,]*,(\d{1,2}:\d{2}:\d{2}\.\d{2}),")
+
+# The read window `bitmap_cue_after` asks ffprobe to search from the
+# requested offset (IN-03): without it, ffprobe demuxes every packet of
+# the whole file looking for the first match, which on a 20-30 GB remux
+# outruns the function's own timeout before an answer ever comes back.
+_CUE_SEARCH_WINDOW_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -332,8 +340,25 @@ def read_text(path) -> tuple[str, str]:
     the caller needs both, since a subtitle burned in without its real
     encoding produces mojibake that nothing downstream reports as a
     failure.
+
+    Refuses before reading a single byte (T-04-41): every caller -- the
+    convert branch, the preview route, the converter -- routes through
+    this one function, so the guard placed here covers a manual path typed
+    into a form the same way it covers a sidecar this module found itself.
+    A path whose extension is not a subtitle format, or whose size is over
+    `MAX_SUBTITLE_BYTES`, is refused with no file handle ever opened.
     """
-    data = Path(path).read_bytes()
+    path = Path(path)
+    if path.suffix.lstrip(".").lower() not in SUBTITLE_EXTENSIONS:
+        raise SubtitleReadError(f"{path}: not a subtitle file by its extension")
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise SubtitleReadError(f"{path}: could not be read") from exc
+    if size > MAX_SUBTITLE_BYTES:
+        raise SubtitleReadError(f"{path}: larger than the subtitle size limit")
+
+    data = path.read_bytes()
     for codec, reported_name in _ENCODING_LADDER:
         try:
             return data.decode(codec), reported_name
@@ -559,6 +584,33 @@ def collect_fonts(source, subtitle_path, scratch_dir) -> str | None:
     return str(destination) if found_any else None
 
 
+# The container extension `-c:s copy` can actually write a probed subtitle
+# codec into (CR-05): ffmpeg's muxers are codec-specific for text
+# subtitles -- the ASS muxer refuses a SubRip stream outright ("ass muxer
+# supports only codec ass for type subtitle") and produces a zero-byte
+# file rather than an error the caller could act on. Falls back to `ass`
+# for a codec this map has never seen, so an unknown codec keeps today's
+# behaviour as its floor rather than becoming a new, sharper failure.
+_EXTRACT_EXTENSION = {
+    "subrip": "srt",
+    "srt": "srt",
+    "webvtt": "vtt",
+    "ass": "ass",
+    "ssa": "ass",
+}
+
+
+def extraction_extension(probe_json: dict, stream_index: int) -> str:
+    """The container extension `extract_embedded_track` should write
+    `stream_index` into, derived from the probe rather than assumed --
+    see `_EXTRACT_EXTENSION`'s own comment for why the choice matters.
+    """
+    for stream in probe_json.get("streams", []):
+        if stream.get("index") == stream_index:
+            return _EXTRACT_EXTENSION.get(stream.get("codec_name"), "ass")
+    return "ass"
+
+
 def extract_embedded_track(source, stream_index: int, scratch_dir, *, extension: str = "ass"):
     """Pull one embedded text subtitle stream out to its own file in
     `scratch_dir`, so the burn-in and `cue_times` both work against a real
@@ -598,7 +650,12 @@ def extract_embedded_track(source, stream_index: int, scratch_dir, *, extension:
 
 
 def _timestamp_to_seconds(value: str) -> float:
-    hours, minutes, rest = value.replace(",", ".").split(":")
+    parts = value.replace(",", ".").split(":")
+    if len(parts) == 3:
+        hours, minutes, rest = parts
+    else:
+        hours = "0"
+        minutes, rest = parts
     return int(hours) * 3600 + int(minutes) * 60 + float(rest)
 
 
@@ -640,12 +697,19 @@ def bitmap_cue_after(source, stream_index: int, offset_seconds: float) -> float 
     track by asking the probe tool for the first packet on that stream at
     or after the offset, rather than parsing anything -- a bitmap track
     has no text to parse.
+
+    Bounds the read to a `_CUE_SEARCH_WINDOW_SECONDS` window starting at
+    `offset_seconds` (IN-03) rather than demuxing the whole container --
+    on a 20-30 GB Blu-ray remux the unbounded read outruns this call's own
+    timeout and returns `None` regardless, so the window is what makes an
+    answer possible at all, not only faster.
     """
     try:
         result = subprocess.run(
             [
                 "ffprobe", "-v", "quiet",
                 "-select_streams", str(stream_index),
+                "-read_intervals", f"{offset_seconds}%+{_CUE_SEARCH_WINDOW_SECONDS}",
                 "-show_entries", "packet=pts_time",
                 "-of", "csv=p=0",
                 str(source),
