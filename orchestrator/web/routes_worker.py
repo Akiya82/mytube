@@ -232,6 +232,17 @@ async def claim_route(request: Request, body: ClaimBody):
     queue rather than as an error: a poller calling in every few seconds
     should never see a stack trace for a condition that resolves itself on
     the next poll.
+
+    The claim and the object-key lookup run inside one transaction
+    (IN-10): a failure between them used to leave the row `running` with
+    no worker, burning one of the job's three attempts for nothing until
+    the stale sweep resolved it 360 seconds later. Wrapping them means
+    that failure rolls the claim back too, and the tolerance above still
+    holds -- the broad `except` below still turns the rollback into the
+    same empty-queue answer, never a stack trace. The check-in write
+    itself stays outside the transaction and unconditional, per this
+    docstring's own opening paragraph: it must survive even when the
+    claim that follows it fails.
     """
     mismatch = _protocol_mismatch(body.protocol)
     if mismatch is not None:
@@ -244,13 +255,14 @@ async def claim_route(request: Request, body: ClaimBody):
         async with pool.acquire() as conn:
             await queries.record_worker_seen(conn, worker_name=body.worker, status=body.status)
             if body.status != "waiting_for_gpu":
-                claimed = await queries.claim_job(
-                    conn, kind="transcode", worker_name=body.worker
-                )
-                if claimed is not None:
-                    object_key = await queries.edition_object_key(
-                        conn, claimed["edition_id"]
+                async with conn.transaction():
+                    claimed = await queries.claim_job(
+                        conn, kind="transcode", worker_name=body.worker
                     )
+                    if claimed is not None:
+                        object_key = await queries.edition_object_key(
+                            conn, claimed["edition_id"]
+                        )
     except Exception:
         logger.exception("claim: could not reach the queue for worker %r", body.worker)
         claimed = None
@@ -324,19 +336,32 @@ async def _reject_superseded(pool, job_id: uuid.UUID, *, delete_key: bool) -> JS
     (D-115), so asking it to clean up would either fail against its own
     policy or force that policy open. The converter's only remaining duty
     is to abort any multipart upload of its own that is still dangling.
+
+    **Never deletes when the job is already `done` (CR-03(b)).** Both
+    attempts of a job write the same object key, so a late report from an
+    earlier attempt against a job a different attempt already finished
+    points at the object an active title is serving right now, not at an
+    orphan -- the delete is skipped and the skip is logged, so the
+    decision is visible without guessing from the object's mere absence.
     """
     if delete_key:
         try:
             async with pool.acquire() as conn:
                 job_row = await queries.job_by_id(conn, job_id)
+                already_done = job_row is not None and job_row["status"] == "done"
                 key = (
                     await queries.edition_object_key(conn, job_row["edition_id"])
-                    if job_row is not None
+                    if job_row is not None and not already_done
                     else None
                 )
             if key:
                 await asyncio.to_thread(delete_object, key)
                 logger.info("deleted orphaned object %r for superseded job %s", key, job_id)
+            elif already_done:
+                logger.info(
+                    "job %s is already done -- its object is live, not deleting it",
+                    job_id,
+                )
         except Exception:
             logger.exception(
                 "could not clean up the orphaned object for superseded job %s", job_id
@@ -349,9 +374,20 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
     """A finished transcode. Flips the title to playable and records what
     the conversion made it from, then answers no-content.
 
-    A superseded report is refused with the orphan already deleted (see
-    `_reject_superseded`) -- a late report from an attempt the reaper has
-    already requeued must never mark a different attempt's job done.
+    The read and every write below -- the job row, the terminal write,
+    and, only when it wrote and the job carries a title, the title's own
+    flip to active plus the conversion detail, the technical detail and
+    the poster key -- run inside one transaction on one connection
+    (CR-03(a)): all six commit together or none does. A superseded report
+    (the terminal write's own clean `False`, no exception) is refused with
+    the orphan already deleted (see `_reject_superseded`) -- a late report
+    from an attempt the reaper has already requeued must never mark a
+    different attempt's job done. A raised exception is a different
+    condition and gets a different answer: a server error, never a
+    conflict, and no delete -- a conflict is the converter's signal to
+    clean up and stop, and it must never be the answer to a transient
+    database error that would have resolved on a retry (the converter's
+    own retry of a 5xx is the next plan's own change).
     """
     mismatch = _protocol_mismatch(body.protocol)
     if mismatch is not None:
@@ -361,24 +397,52 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
     wrote = False
     try:
         async with pool.acquire() as conn:
-            job_row = await queries.job_by_id(conn, job_id)
-            wrote = await queries.finish_job(
-                conn, job_id, worker_name=body.worker, attempt=body.attempt, outcome="done"
-            )
-            if wrote and job_row is not None and job_row["title_id"] is not None:
-                await queries.mark_title_active(conn, job_row["title_id"])
-                await queries.set_edition_conversion_detail(
+            async with conn.transaction():
+                job_row = await queries.job_by_id(conn, job_id)
+                wrote = await queries.finish_job(
                     conn,
-                    job_row["edition_id"],
-                    source_codec=body.source_codec,
-                    source_profile=body.source_profile,
-                    subtitle_burned_language=body.subtitle_burned_language,
-                    subtitle_burned_title=body.subtitle_burned_title,
-                    stereo_layout=job_row["stereo_layout"],
+                    job_id,
+                    worker_name=body.worker,
+                    attempt=body.attempt,
+                    outcome="done",
+                    realtime_factor=body.realtime_factor,
                 )
+                if wrote and job_row is not None and job_row["title_id"] is not None:
+                    await queries.mark_title_active(conn, job_row["title_id"])
+                    await queries.set_edition_conversion_detail(
+                        conn,
+                        job_row["edition_id"],
+                        source_codec=body.source_codec,
+                        source_profile=body.source_profile,
+                        subtitle_burned_language=body.subtitle_burned_language,
+                        subtitle_burned_title=body.subtitle_burned_title,
+                        stereo_layout=job_row["stereo_layout"],
+                    )
+                    await queries.set_edition_technical(
+                        conn,
+                        job_row["edition_id"],
+                        size_bytes=body.size_bytes,
+                        duration_seconds=body.duration_seconds,
+                        width=body.width,
+                        height=body.height,
+                        audio_language=body.audio_language,
+                        audio_title=body.audio_title,
+                        audio_reencoded=body.audio_reencoded,
+                        fps=body.fps,
+                        video_profile=body.video_profile,
+                        video_level=body.video_level,
+                        pix_fmt=body.pix_fmt,
+                        audio_codec=body.audio_codec,
+                        audio_sample_rate=body.audio_sample_rate,
+                        audio_channel_layout=body.audio_channel_layout,
+                    )
+                    if body.poster_key is not None:
+                        await queries.set_edition_poster(
+                            conn, job_row["edition_id"], body.poster_key
+                        )
     except Exception:
         logger.exception("done: could not finish job %s", job_id)
-        wrote = False
+        return JSONResponse(status_code=503, content={"error": "try_again"})
 
     if not wrote:
         return await _reject_superseded(pool, job_id, delete_key=True)
@@ -391,6 +455,12 @@ async def failed_route(job_id: uuid.UUID, request: Request, body: FailedBody):
     `ALLOWED_FAILURE_REASONS` -- checked before the database is touched at
     all, so a converter's own text can never reach the sentence an
     operator reads (T-04-07).
+
+    Shares `done_route`'s own shape (CR-03): the terminal write and the
+    title's own flip to failed run inside one transaction, and a raised
+    exception answers a server error rather than a conflict -- the same
+    reasoning, since this route answered a conflict for a write that had
+    actually happened just as often as the success route did.
     """
     mismatch = _protocol_mismatch(body.protocol)
     if mismatch is not None:
@@ -405,20 +475,21 @@ async def failed_route(job_id: uuid.UUID, request: Request, body: FailedBody):
     wrote = False
     try:
         async with pool.acquire() as conn:
-            job_row = await queries.job_by_id(conn, job_id)
-            wrote = await queries.finish_job(
-                conn,
-                job_id,
-                worker_name=body.worker,
-                attempt=body.attempt,
-                outcome="failed",
-                reason_key=body.reason_key,
-            )
-            if wrote and job_row is not None and job_row["title_id"] is not None:
-                await queries.mark_title_failed(conn, job_row["title_id"], body.reason_key)
+            async with conn.transaction():
+                job_row = await queries.job_by_id(conn, job_id)
+                wrote = await queries.finish_job(
+                    conn,
+                    job_id,
+                    worker_name=body.worker,
+                    attempt=body.attempt,
+                    outcome="failed",
+                    reason_key=body.reason_key,
+                )
+                if wrote and job_row is not None and job_row["title_id"] is not None:
+                    await queries.mark_title_failed(conn, job_row["title_id"], body.reason_key)
     except Exception:
         logger.exception("failed: could not finish job %s", job_id)
-        wrote = False
+        return JSONResponse(status_code=503, content={"error": "try_again"})
 
     if not wrote:
         return await _reject_superseded(pool, job_id, delete_key=False)
@@ -448,18 +519,23 @@ async def cancelled_route(job_id: uuid.UUID, request: Request, body: CancelledBo
     wrote = False
     try:
         async with pool.acquire() as conn:
-            job_row = await queries.job_by_id(conn, job_id)
-            wrote = await queries.finish_job(
-                conn, job_id, worker_name=body.worker, attempt=body.attempt, outcome="cancelled"
-            )
-            if wrote and job_row is not None and job_row["title_id"] is not None:
-                try:
-                    await queries.delete_never_active_title(conn, job_row["title_id"])
-                except (LookupError, ValueError):
-                    pass
+            async with conn.transaction():
+                job_row = await queries.job_by_id(conn, job_id)
+                wrote = await queries.finish_job(
+                    conn,
+                    job_id,
+                    worker_name=body.worker,
+                    attempt=body.attempt,
+                    outcome="cancelled",
+                )
+                if wrote and job_row is not None and job_row["title_id"] is not None:
+                    try:
+                        await queries.delete_never_active_title(conn, job_row["title_id"])
+                    except (LookupError, ValueError):
+                        pass
     except Exception:
         logger.exception("cancelled: could not finish job %s", job_id)
-        wrote = False
+        return JSONResponse(status_code=503, content={"error": "try_again"})
 
     if not wrote:
         return await _reject_superseded(pool, job_id, delete_key=False)

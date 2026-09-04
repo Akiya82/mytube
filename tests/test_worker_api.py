@@ -43,8 +43,22 @@ NEW_FAILURE_REASON_KEYS = frozenset(
 )
 
 
+class _DummyTransactionCtx:
+    """A no-op stand-in for asyncpg's own transaction context manager --
+    enters and exits without touching `conn`, and never swallows whatever
+    the `async with` block raises (the real one does not either).
+    """
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
 class _DummyConn:
-    pass
+    def transaction(self):
+        return _DummyTransactionCtx()
 
 
 class _DummyAcquireCtx:
@@ -441,8 +455,44 @@ async def test_a_claim_records_the_check_in_even_when_it_finds_nothing(monkeypat
 
 
 @pytest.mark.parametrize("outcome", ["done", "failed", "cancelled"])
-async def test_a_superseded_report_refuses_with_a_status_the_worker_can_act_on(client, outcome):
-    """The signal to delete what it uploaded."""
+async def test_a_superseded_report_refuses_with_a_status_the_worker_can_act_on(
+    monkeypatch, client, outcome
+):
+    """The signal to delete what it uploaded -- driven here as a clean
+    superseded write (the terminal write's own honest `False`, no
+    exception raised), since task 3 gives a raised exception a different
+    answer entirely (503, see the dedicated tests below). `job_by_id`
+    reports a `running`, not-yet-done job, so this is the genuine-conflict
+    case: deletion is attempted for `done` (the only outcome whose
+    `_reject_superseded` call carries `delete_key=True`).
+    """
+    from orchestrator.db import queries
+    from orchestrator.web import routes_worker
+
+    fake_job_row = {
+        "id": STUB_JOB_ID,
+        "title_id": None,
+        "edition_id": uuid.uuid4(),
+        "stereo_layout": None,
+        "status": "running",
+    }
+
+    async def fake_job_by_id(conn, job_id):
+        return fake_job_row
+
+    async def fake_finish_job(conn, job_id, **kwargs):
+        return False
+
+    async def fake_edition_object_key(conn, edition_id):
+        return "x.mp4"
+
+    deleted = []
+
+    monkeypatch.setattr(queries, "job_by_id", fake_job_by_id, raising=False)
+    monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
+    monkeypatch.setattr(queries, "edition_object_key", fake_edition_object_key, raising=False)
+    monkeypatch.setattr(routes_worker, "delete_object", deleted.append, raising=False)
+
     if outcome == "done":
         body = _valid_done_body()
     else:
@@ -459,6 +509,57 @@ async def test_a_superseded_report_refuses_with_a_status_the_worker_can_act_on(c
     assert resp.status_code == 409
     payload = resp.json()
     assert payload
+    if outcome == "done":
+        assert deleted == ["x.mp4"], "a conflict on a job that is not done still deletes"
+    else:
+        assert deleted == []
+
+
+async def test_a_conflict_on_a_job_that_is_already_done_deletes_nothing(monkeypatch, client):
+    """CR-03(b): both attempts of a job write the same object key, so a
+    late report against a job a different attempt already finished points
+    at the object an active title is serving right now -- the delete must
+    be skipped, not just attempted against a key that happens to be gone.
+    """
+    from orchestrator.db import queries
+    from orchestrator.web import routes_worker
+
+    fake_job_row = {
+        "id": STUB_JOB_ID,
+        "title_id": None,
+        "edition_id": uuid.uuid4(),
+        "stereo_layout": None,
+        "status": "done",
+    }
+
+    async def fake_job_by_id(conn, job_id):
+        return fake_job_row
+
+    async def fake_finish_job(conn, job_id, **kwargs):
+        return False
+
+    edition_object_key_called = []
+
+    async def fake_edition_object_key(conn, edition_id):
+        edition_object_key_called.append(edition_id)
+        return "x.mp4"
+
+    deleted = []
+
+    monkeypatch.setattr(queries, "job_by_id", fake_job_by_id, raising=False)
+    monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
+    monkeypatch.setattr(queries, "edition_object_key", fake_edition_object_key, raising=False)
+    monkeypatch.setattr(routes_worker, "delete_object", deleted.append, raising=False)
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/done",
+            json=_valid_done_body(),
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 409
+    assert deleted == []
+    assert edition_object_key_called == [], "the key is never even looked up for a done job"
 
 
 async def test_the_route_refuses_a_failure_reason_outside_the_allowed_set(client):
@@ -680,3 +781,117 @@ def test_done_body_carries_room_for_every_technical_field_the_row_needs():
         "realtime_factor",
     }
     assert needed <= fields, needed - fields
+
+
+# --- Atomicity against a real Postgres (CR-03/IN-10) ---------------------
+#
+# Everything above drives the routes with `_DummyPool`/`_DummyConn` --
+# adequate for the gate, the protocol check and the model's own
+# validation, but a fake connection cannot exhibit a real transaction
+# rolling back. These few tests run the real app against the real
+# migrated Postgres this suite already stands up for its other
+# integration coverage, so "the job's status is unchanged" and "no job is
+# left running" are read back off the actual row, not inferred from a
+# spy.
+
+
+@pytest.fixture
+def worker_client(app_pool):
+    transport = httpx.ASGITransport(app=app)
+    return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+
+
+@pytest.mark.integration
+async def test_a_raise_after_the_terminal_write_leaves_the_job_running_and_deletes_nothing(
+    raw_conn, worker_client, monkeypatch
+):
+    from orchestrator.db import queries
+    from orchestrator.web import routes_worker
+
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn,
+        "Atomic Done Route",
+        f"atomic-done-route-{uuid.uuid4().hex[:8]}",
+        edition_id,
+        f"{edition_id}.mp4",
+        status="preparing",
+    )
+    job_id = await queries.enqueue_job(
+        raw_conn, kind="transcode", title_id=title_id, edition_id=edition_id
+    )
+    claimed = await queries.claim_job(raw_conn, kind="transcode", worker_name="ml-server")
+    assert claimed["id"] == job_id
+
+    deleted = []
+    monkeypatch.setattr(routes_worker, "delete_object", deleted.append, raising=False)
+
+    async def failing_set_technical(*args, **kwargs):
+        raise RuntimeError("a write after the terminal write exploded")
+
+    monkeypatch.setattr(queries, "set_edition_technical", failing_set_technical)
+
+    body = _valid_done_body(attempt=claimed["attempts"], worker="ml-server")
+
+    async with worker_client:
+        resp = await worker_client.post(
+            f"/worker/jobs/{job_id}/done",
+            json=body,
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+
+    assert resp.status_code == 503
+    assert deleted == []
+
+    row = await raw_conn.fetchrow(
+        "SELECT status, finished_at FROM jobs WHERE id = $1", job_id
+    )
+    assert row["status"] == "running"
+    assert row["finished_at"] is None
+
+    title = await raw_conn.fetchrow("SELECT status FROM titles WHERE id = $1", title_id)
+    assert title["status"] == "preparing"
+
+
+@pytest.mark.integration
+async def test_a_raise_between_the_claim_and_the_object_key_lookup_leaves_no_job_running(
+    raw_conn, worker_client, monkeypatch
+):
+    from orchestrator.db import queries
+
+    title_id, edition_id = await _title_and_edition_for_claim(raw_conn)
+    await queries.enqueue_job(
+        raw_conn, kind="transcode", title_id=title_id, edition_id=edition_id
+    )
+
+    async def failing_edition_object_key(conn, edition_id):
+        raise RuntimeError("the lookup after the claim exploded")
+
+    monkeypatch.setattr(queries, "edition_object_key", failing_edition_object_key)
+
+    async with worker_client:
+        resp = await worker_client.post(
+            "/worker/claim",
+            json={"protocol": 1, "worker": "ml-server"},
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+
+    assert resp.status_code == 204, "the existing tolerance: a hiccup reads as an empty queue"
+
+    row = await raw_conn.fetchrow(
+        "SELECT status, worker_name, attempts FROM jobs WHERE title_id = $1", title_id
+    )
+    assert row["status"] == "queued", "the claim itself must have rolled back too"
+    assert row["worker_name"] is None
+    assert row["attempts"] == 0
+
+
+async def _title_and_edition_for_claim(conn) -> tuple:
+    from orchestrator.db import queries
+
+    edition_id = uuid.uuid4()
+    slug = f"claim-atomic-{uuid.uuid4().hex[:8]}"
+    title_id = await queries.create_title_with_edition(
+        conn, "Atomic Claim Route", slug, edition_id, f"{edition_id}.mp4", status="preparing"
+    )
+    return title_id, edition_id
