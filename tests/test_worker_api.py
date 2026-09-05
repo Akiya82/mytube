@@ -10,6 +10,7 @@ in this file. `ALLOWED_FAILURE_REASONS` is still imported inline, in the
 one test that needs it -- everything else is driven through the
 application, never a second, independent route import.
 """
+import json
 import uuid
 
 import httpx
@@ -822,6 +823,48 @@ def test_done_body_carries_room_for_every_technical_field_the_row_needs():
         "realtime_factor",
     }
     assert needed <= fields, needed - fields
+
+
+async def test_the_success_body_the_client_posts_matches_the_route_models_own_fields():
+    """Assembles a success body through the real `WorkerClient.done()`
+    against a substituted transport (the same mechanism
+    `test_worker_client.py` already uses for the client's own tests) and
+    compares the posted keys against `DoneBody`'s own field names -- no
+    key the service does not know, and no required field the converter
+    omits. Both sides are read from their own definitions: the posted
+    body comes from actually calling `done()`, never a hand-written list,
+    and the expected set comes from `DoneBody.model_fields` itself.
+
+    Mutation this test guards against: a field added to `DoneBody`
+    without a matching parameter added to `WorkerClient.done()` (or the
+    reverse) makes the two sets stop matching -- this test then fails in
+    the same second, instead of after a four-minute encode posts a body
+    the service refuses.
+    """
+    from orchestrator.web.routes_worker import DoneBody
+    from worker.client import WorkerClient
+
+    posted: dict = {}
+
+    async def handler(request):
+        posted.update(json.loads(request.content))
+        return httpx.Response(204)
+
+    worker_client = WorkerClient(
+        base_url="http://testserver",
+        token=WORKER_TOKEN,
+        worker_name="ml-server",
+        transport=httpx.MockTransport(handler),
+    )
+    done_kwargs = {
+        k: v for k, v in _valid_done_body().items() if k not in ("protocol", "worker")
+    }
+    try:
+        await worker_client.done(STUB_JOB_ID, **done_kwargs)
+    finally:
+        await worker_client.aclose()
+
+    assert set(posted) == set(DoneBody.model_fields)
 
 
 # --- Atomicity against a real Postgres (CR-03/IN-10) ---------------------
