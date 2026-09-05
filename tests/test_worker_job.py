@@ -665,3 +665,55 @@ def test_a_heartbeat_answered_with_any_other_error_is_logged_and_the_encode_cont
 
     assert client.done_calls
     assert client.failed_calls == []
+
+
+# --- a protocol mismatch ends the process, not the loop (D-146) ----------
+
+
+def test_a_protocol_mismatch_at_check_in_propagates_rather_than_being_swallowed():
+    """The check-in's own broad `except Exception` used to turn this into
+    a logged stack trace every few seconds, same as any other check-in
+    hiccup -- this is not one: the numbers will not agree on the next
+    poll either.
+    """
+    import worker.__main__ as worker_main
+    from worker.client import ProtocolMismatch
+
+    class _MismatchClient:
+        async def claim(self, *, status="idle"):
+            raise ProtocolMismatch(client_protocol=1, service_protocol=2)
+
+    async def _run_it():
+        with pytest.raises(ProtocolMismatch):
+            await worker_main._check_in(_MismatchClient(), asyncio.Event(), status="idle")
+
+    asyncio.run(_run_it())
+
+
+def test_a_protocol_mismatch_stops_the_run_loop_rather_than_retrying(monkeypatch, tmp_path):
+    """`_run`'s own `while` loop must not catch this and go around again
+    -- it is the caller's (`main()`'s) job to end the process on it.
+    """
+    import worker.__main__ as worker_main
+    from worker.client import ProtocolMismatch
+
+    calls = {"n": 0}
+
+    async def fake_check_in(client, shutdown_event, *, status):
+        calls["n"] += 1
+        raise ProtocolMismatch(client_protocol=1, service_protocol=2)
+
+    monkeypatch.setattr(worker_main, "_check_in", fake_check_in)
+    monkeypatch.setattr(
+        worker_main.gpu, "free_vram_bytes", lambda: 8_000 * worker_main._BYTES_PER_MIB
+    )
+
+    settings = _settings(tmp_path)
+    shutdown_event = asyncio.Event()
+
+    async def _run_it():
+        with pytest.raises(ProtocolMismatch):
+            await worker_main._run(object(), object(), settings, shutdown_event)
+
+    asyncio.run(_run_it())
+    assert calls["n"] == 1, "the loop must not retry a protocol mismatch"

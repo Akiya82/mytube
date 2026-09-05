@@ -47,7 +47,13 @@ from mytube_media.transcode import (
 
 from worker import gpu
 from worker import storage as worker_storage
-from worker.client import AuthenticationRejected, JobLost, ReportRejected, WorkerClient
+from worker.client import (
+    AuthenticationRejected,
+    JobLost,
+    ProtocolMismatch,
+    ReportRejected,
+    WorkerClient,
+)
 from worker.settings import WorkerSettings
 
 logger = logging.getLogger(__name__)
@@ -674,7 +680,7 @@ async def _check_in(
     shutdown_task.cancel()
     try:
         return claim_task.result()
-    except AuthenticationRejected:
+    except (AuthenticationRejected, ProtocolMismatch):
         raise
     except Exception:
         logger.exception("check-in failed")
@@ -806,6 +812,13 @@ async def main() -> None:
 
     try:
         await _run(client, s3_client, settings, shutdown_event)
+    except ProtocolMismatch as exc:
+        # Moved here, to the first claim, before any work is done -- a
+        # converter left behind used to send a full done report after
+        # four minutes of card time only to have the widened body
+        # refused; this ends the process instead, with one line, the
+        # same way a refused credential does.
+        logger.error("%s", exc)
     finally:
         await client.aclose()
 

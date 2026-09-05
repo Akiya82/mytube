@@ -34,7 +34,7 @@ from orchestrator.storage import delete_object
 logger = logging.getLogger(__name__)
 
 WORKER_PREFIX = "/worker/"
-WORKER_PROTOCOL_VERSION = 1
+WORKER_PROTOCOL_VERSION = 2
 
 # The dotted catalog keys a converter is allowed to report on
 # POST .../failed. Anything else is refused (T-04-07) -- this is what keeps

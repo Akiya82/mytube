@@ -3,17 +3,12 @@
 .../cancelled -- with the database mocked and driven through
 httpx.ASGITransport, in the style of test_resolve.py.
 
-RED state: `orchestrator.web.routes_worker` does not exist yet, and
-`orchestrator.auth` carries no `TOKEN_GATED_PREFIXES` tuple -- the worker
-prefix is not reachable at all today: the session gate answers every
-request below with a 302 to /login (the existing "an operator exists"
-default), never a 401, since /worker/ is absent from every list the gate
-consults. That misbehaviour is exactly the contract this module fixes.
-Per this plan's own prohibition, no test below imports
-`orchestrator.web.routes_worker` at module scope -- everything is driven
-through the application instead, and the two constants
-(`WORKER_PROTOCOL_VERSION`, `ALLOWED_FAILURE_REASONS`) are imported inside
-the one test each that needs them.
+Every request body below carries `WORKER_PROTOCOL_VERSION`, imported at
+module scope (rather than hand-written as a literal) so a future rise in
+that constant is a one-line change here too, not a sweep of every body
+in this file. `ALLOWED_FAILURE_REASONS` is still imported inline, in the
+one test that needs it -- everything else is driven through the
+application, never a second, independent route import.
 """
 import uuid
 
@@ -22,6 +17,7 @@ import pytest
 
 from orchestrator.config import get_settings
 from orchestrator.main import app
+from orchestrator.web.routes_worker import WORKER_PROTOCOL_VERSION
 
 from conftest import WORKER_TOKEN
 
@@ -108,7 +104,7 @@ def _valid_done_body(**overrides) -> dict:
     the absent case sets one to `None` explicitly rather than omitting it.
     """
     body = {
-        "protocol": 1,
+        "protocol": WORKER_PROTOCOL_VERSION,
         "worker": "ml-server",
         "attempt": 1,
         "object_key": "x.mp4",
@@ -142,11 +138,11 @@ def _worker_requests():
     frozen shape this plan fixes.
     """
     return [
-        ("/worker/claim", {"protocol": 1, "worker": "ml-server"}),
+        ("/worker/claim", {"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"}),
         (
             f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
             {
-                "protocol": 1,
+                "protocol": WORKER_PROTOCOL_VERSION,
                 "worker": "ml-server",
                 "attempt": 1,
                 "stage": "working",
@@ -159,7 +155,7 @@ def _worker_requests():
         (
             f"/worker/jobs/{STUB_JOB_ID}/failed",
             {
-                "protocol": 1,
+                "protocol": WORKER_PROTOCOL_VERSION,
                 "worker": "ml-server",
                 "attempt": 1,
                 "reason_key": "failed.reason.upload",
@@ -167,7 +163,7 @@ def _worker_requests():
         ),
         (
             f"/worker/jobs/{STUB_JOB_ID}/cancelled",
-            {"protocol": 1, "worker": "ml-server", "attempt": 1},
+            {"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server", "attempt": 1},
         ),
     ]
 
@@ -195,7 +191,7 @@ async def test_the_route_refuses_a_wrong_token(client):
     async with client:
         resp = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": "Bearer wrong-token-value"},
         )
     assert resp.status_code == 401
@@ -205,12 +201,12 @@ async def test_the_route_refuses_a_token_in_the_wrong_scheme(client):
     async with client:
         bare = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": WORKER_TOKEN},
         )
         basic = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": f"Basic {WORKER_TOKEN}"},
         )
     assert bare.status_code == 401
@@ -229,7 +225,7 @@ async def test_the_route_refuses_a_non_ascii_token_rather_than_crashing(client):
     async with client:
         resp = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": "Bearer tökén-ü".encode("utf-8")},
         )
     assert resp.status_code == 401
@@ -241,7 +237,7 @@ async def test_the_route_refuses_a_token_of_the_right_length_but_wrong_content(c
     async with client:
         resp = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": f"Bearer {wrong_same_length}"},
         )
     assert resp.status_code == 401
@@ -296,7 +292,7 @@ async def test_a_token_gated_request_is_granted_no_operator_session(client):
     async with client:
         resp = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
         )
     assert resp.status_code in (200, 204)
@@ -310,7 +306,7 @@ async def test_a_worker_route_refuses_rather_than_redirects_before_any_operator_
     with something it can log, not with a page.
     """
     async with client:
-        resp = await client.post("/worker/claim", json={"protocol": 1, "worker": "ml-server"})
+        resp = await client.post("/worker/claim", json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"})
     assert resp.status_code == 401
     assert resp.status_code != 302
 
@@ -319,12 +315,12 @@ async def test_no_response_body_or_header_ever_echoes_the_token(client):
     async with client:
         good = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
         )
         bad = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": "Bearer wrong-token-value"},
         )
     for resp in (good, bad):
@@ -348,6 +344,51 @@ async def test_a_claim_from_an_unknown_protocol_version_is_refused(client):
     assert "protocol" in str(body).lower()
 
 
+async def test_a_protocol_mismatch_answer_names_both_versions(client):
+    """The named exception the client raises on this answer needs both
+    numbers to say, in one line, which is which -- naming only one would
+    leave a converter reading its own log guessing what the service
+    actually wants.
+    """
+    async with client:
+        resp = await client.post(
+            "/worker/claim",
+            json={"protocol": 999, "worker": "ml-server"},
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    body = resp.json()
+    assert body["error"] == "protocol_mismatch"
+    assert body["expected_protocol"] == WORKER_PROTOCOL_VERSION
+    assert body["got_protocol"] == 999
+
+
+async def test_a_client_driven_through_a_stubbed_transport_raises_the_named_mismatch(
+    client, monkeypatch
+):
+    """Drives the actual `WorkerClient` against this route (through the
+    ASGI transport, no real network) rather than a hand-built response --
+    the same shape the converter itself hits at its first claim.
+    """
+    import worker.client as worker_client_module
+    from worker.client import ProtocolMismatch, WorkerClient
+
+    monkeypatch.setattr(worker_client_module, "WORKER_PROTOCOL_VERSION", 999)
+
+    worker_client = WorkerClient(
+        base_url="http://testserver",
+        token=WORKER_TOKEN,
+        worker_name="ml-server",
+        transport=httpx.ASGITransport(app=app),
+    )
+    try:
+        with pytest.raises(ProtocolMismatch) as excinfo:
+            await worker_client.claim()
+    finally:
+        await worker_client.aclose()
+
+    assert excinfo.value.service_protocol == WORKER_PROTOCOL_VERSION
+
+
 async def test_an_empty_queue_answers_no_content(client):
     """A worker polling every few seconds should be able to tell the two
     apart without parsing.
@@ -355,7 +396,7 @@ async def test_an_empty_queue_answers_no_content(client):
     async with client:
         resp = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
         )
     assert resp.status_code == 204
@@ -406,7 +447,7 @@ async def test_a_claim_carries_only_the_operator_s_choices(monkeypatch, client):
     async with client:
         resp = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
         )
     assert resp.status_code == 200
@@ -444,7 +485,7 @@ async def test_a_claim_records_the_check_in_even_when_it_finds_nothing(monkeypat
     async with client:
         await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
         )
 
@@ -496,7 +537,7 @@ async def test_a_superseded_report_refuses_with_a_status_the_worker_can_act_on(
     if outcome == "done":
         body = _valid_done_body()
     else:
-        body = {"protocol": 1, "worker": "ml-server", "attempt": 1}
+        body = {"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server", "attempt": 1}
         if outcome == "failed":
             body["reason_key"] = "failed.reason.upload"
 
@@ -567,7 +608,7 @@ async def test_the_route_refuses_a_failure_reason_outside_the_allowed_set(client
         resp = await client.post(
             f"/worker/jobs/{STUB_JOB_ID}/failed",
             json={
-                "protocol": 1,
+                "protocol": WORKER_PROTOCOL_VERSION,
                 "worker": "ml-server",
                 "attempt": 1,
                 "reason_key": "not a real reason at all",
@@ -595,7 +636,7 @@ async def test_a_heartbeat_returns_the_cancel_flag(monkeypatch, client, cancel_r
         resp = await client.post(
             f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
             json={
-                "protocol": 1,
+                "protocol": WORKER_PROTOCOL_VERSION,
                 "worker": "ml-server",
                 "attempt": 1,
                 "stage": "working",
@@ -614,7 +655,7 @@ async def test_an_unknown_job_identifier_answers_a_refusal_rather_than_an_error(
         resp = await client.post(
             f"/worker/jobs/{uuid.uuid4()}/heartbeat",
             json={
-                "protocol": 1,
+                "protocol": WORKER_PROTOCOL_VERSION,
                 "worker": "ml-server",
                 "attempt": 1,
                 "stage": "working",
@@ -650,7 +691,7 @@ async def test_a_heartbeat_whose_progress_value_is_not_a_number_is_refused(
         resp = await client.post(
             f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
             json={
-                "protocol": 1,
+                "protocol": WORKER_PROTOCOL_VERSION,
                 "worker": "ml-server",
                 "attempt": 1,
                 "stage": "working",
@@ -667,7 +708,7 @@ async def test_a_progress_value_outside_the_percentage_range_is_refused(client):
         resp = await client.post(
             f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
             json={
-                "protocol": 1,
+                "protocol": WORKER_PROTOCOL_VERSION,
                 "worker": "ml-server",
                 "attempt": 1,
                 "stage": "working",
@@ -686,7 +727,7 @@ async def test_a_negative_estimate_a_non_positive_speed_and_an_attempt_below_one
     client, field, value
 ):
     body = {
-        "protocol": 1,
+        "protocol": WORKER_PROTOCOL_VERSION,
         "worker": "ml-server",
         "attempt": 1,
         "stage": "working",
@@ -705,7 +746,7 @@ async def test_a_heartbeat_with_an_unknown_stage_word_is_refused_naming_the_fiel
         resp = await client.post(
             f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
             json={
-                "protocol": 1,
+                "protocol": WORKER_PROTOCOL_VERSION,
                 "worker": "ml-server",
                 "attempt": 1,
                 "stage": "not-a-real-stage",
@@ -720,7 +761,7 @@ async def test_a_claim_with_an_unknown_check_in_status_is_refused(client):
     async with client:
         resp = await client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server", "status": "not-a-real-status"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server", "status": "not-a-real-status"},
             headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
         )
     assert resp.status_code == 422
@@ -872,7 +913,7 @@ async def test_a_raise_between_the_claim_and_the_object_key_lookup_leaves_no_job
     async with worker_client:
         resp = await worker_client.post(
             "/worker/claim",
-            json={"protocol": 1, "worker": "ml-server"},
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
             headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
         )
 
