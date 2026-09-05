@@ -1,5 +1,10 @@
 # Experiment 11: conversion on the GPU host — measured acceptance
 
+**Correction applied after deployment (2026-09-05):** the report protocol widened
+and both halves were rolled to the same commit — see "The gap, closed" under
+Claim 4 and the corrected recovery-time figure in the same section before
+reading the verdict table below.
+
 **Run date:** 2026-09-04 (all times UTC)
 **Service:** k3s namespace `mytube`, api image `registry.example.com/mytube/mytube:930634d`
 **Converter host:** `ml-server`, Ubuntu 26.04, AMD FX-8320E (no AVX2), NVIDIA RTX 3050
@@ -245,6 +250,20 @@ stopped. The stale sweep, at its 180 s threshold, returned the job to the queue 
 `done`: 17:05:59 → 17:14:27, **8 min 28 s**, of which about 3.5 min was the stale wait.
 The title ended `active` with exactly one object.
 
+**Recovery-time figure corrected, 2026-09-05:** the stale threshold measured above
+(180 s) was raised to 360 s once every consumer of the job queue started
+heartbeating through its own upload as well as its encode — a converter still
+retrying the final report of an already-finished job needs more room than 180 s
+left, now that the report itself can be retried for up to 300 s. The recovery from
+a killed converter this record measured is therefore **superseded**: at the new
+360 s threshold the same failure recovers in roughly six and a half minutes (360 s
+plus one reaper poll cycle) rather than the three and a half minutes measured
+above, with the second attempt's own encode time unaffected. This was not
+re-measured live — repeating a kill against real hardware to confirm arithmetic
+already implied by the threshold value would cost a GPU-hours for a fact the code
+already guarantees, not a new one — so this figure is arithmetic against the new
+constant, not a fresh measurement, and is written that way on purpose.
+
 Nothing was lost, the attempt count behaved, and no orphaned conversion process was left
 holding the card.
 
@@ -269,25 +288,47 @@ The probe was stopped and the real converter started at 17:16:55; it claimed the
 within 15 s. The job was then cancelled while running for hygiene — row and title gone
 2.2 s later, host clean.
 
-### The gap: the row cannot say what it converted
+### The gap, closed: the row now says what it converted
 
-The library row for a converted title reads `title_status active`, `stereo_layout 2d`,
-`worker_name ml-server`. But `source_codec`, `source_profile`, `subtitle_burned_language`
-and `subtitle_burned_title` are all NULL, and so are the edition's `size_bytes`,
-`duration_seconds`, `width`, `height`, `video_profile`, `video_level`, `pix_fmt` and
-`audio_codec`. The converter's success report carries only the protocol version, its own
-name, the attempt number and the object key — none of the seven `ffprobe`-derived fields
-the detail writer needs, and nothing about what was burned in.
+**Closed 2026-09-05**, after the report protocol widened and both halves were rolled to
+the same commit. A fresh conversion (`Horimiya Piece 01`, a second ten-bit HEVC episode,
+not one of the titles the original run left behind) was run end to end against the
+deployed pair and its edition row read back directly:
 
-The consequence is visible: the check page's technical detail line is empty for a
-converted edition, and the row cannot answer "what was this made from". This was known
-when the worker-facing API shipped and was recorded then rather than papered over with
-fabricated values. It is still open.
+`source_codec hevc`, `source_profile Main 10`, `subtitle_burned_language rus`,
+`subtitle_burned_title Надписи (Crunchyroll)`, `size_bytes 1060989475`,
+`duration_seconds 1421.014`, `width 1920`, `height 1080`, `fps 23.976`,
+`video_profile High`, `video_level 41`, `pix_fmt yuv420p`, `audio_codec aac`,
+`audio_sample_rate 44100`, `audio_channel_layout stereo`, `audio_language rus`,
+`stereo_layout 2d`. `audio_title` read back `NULL` — legitimately, since the source
+track carried no title tag, not a field the report failed to fill. `poster_key` read
+back `65165c71-7bd0-4c74-96ec-4a49984ead27.jpg`, and the object exists in storage
+(head request: 33,337 bytes, `image/jpeg`), next to the video object at the size the
+row itself records (1,060,989,475 bytes, matching byte for byte).
 
-**Verdict on claim 4: SPLIT.** Recovery, cancellation, the absent converter and the full
-card are all measured and all behave. The failure reason is carried and rendered
-server-side. The half of the claim about the operator *seeing* what a converted edition
-was made from is **NOT PASSED** — the data never leaves the converter.
+The job's own average speed (not the tail progress reading) reported **7.58** for this
+run, against a wall time of 279.8 s start-to-finish (an encode phase of roughly 187 s
+implied by the source's 1421.0 s duration at that factor, plus the upload of the
+finished object) — consistent with the reference source's own factor of ~7 measured in
+Claim 3, and clearly distinct from the whole-run factor (1421.0 / 279.8 ≈ 5.08), which
+is what the tail-reading bug this closure fixed would have reported instead.
+
+The consequence: the check page's technical detail line and the library row's poster
+now have real data to render, for any conversion run against this deployed pair from
+this point on. The five editions this phase's own runs converted **before** this
+closure (`horimiya-01`, `horimiya-03`, `horimiya-04`, `horimiya-05`,
+`grand-blue-dreaming-ii-01`) keep their technical columns `NULL` — nothing backfills
+them retroactively, since the report that would have filled them was never sent. An
+operator who wants the detail line on one of those older titles has Retry, which
+re-queues the same source under the new report and fills the row the same way this
+measurement did; no migration is warranted when the existing retry path already
+produces the same result.
+
+**Verdict on claim 4: PASS.** Recovery, cancellation, the absent converter and the full
+card are all measured and all behave (recovery time corrected above for the new
+threshold). The failure reason is carried and rendered server-side. The row now says
+what it was made from and what was burned into it, measured against the deployed pair
+rather than assumed from the protocol change alone.
 
 ---
 
@@ -330,17 +371,17 @@ says which part.
 | 1 | Plan produced and explained; subtitle track chosen for burn-in | **PASS** on the pipeline; **NOT VERIFIED HERE** on its presentation | `transcode` on ten-bit HEVC with the codec named; `passthrough` plus over-ceiling warning on 38 Mbit/s H.264; ASS track enumerated, resolved and burned on both sources. The form's own wording, subtitle list and stereo selector were never opened in a browser |
 | 2 | Preview frame with burned subtitles renders in seconds, before conversion | **PASS** on honesty; **NOT MEASURED** on duration | Preview at 602.28 s against the delivered file at the same timestamp: same text, same italic face from the attached fonts, same position, same size, legible in both, no encoding damage across two ffmpeg builds on two machines. The render was not put on a clock |
 | 3 | Queued in Postgres, run on a separate NVENC machine, ready in under five minutes, workstation free | **PASS** | 249.2 s on the 23.75-min reference (factor 7.06), 275.9 s on a 24.0-min source of a different shape (7.24), three further runs at 246–275 s; queue waits 1.0–5.6 s; card at encoder 80 % mean / 100 % peak; workstation's own card at encoder 0 %, GPU 3 % throughout |
-| 4 | Status and failure reason visible; a stranded job returns to the queue by itself | **SPLIT: PASS** on recovery and status; **NOT PASSED** on "the row says what it was converted from" | Cancel: job `cancelled` in 4.6 s, row gone in 5.6 s, no process, no object, no dangling multipart. Kill: returned to the queue ≈3 min 30 s after the kill at a 180 s threshold, second attempt finished in 246.1 s, 8 min 28 s end to end. Absent converter: `waiting_for_converter`, named, "1 minute". Full card: `waiting_for_gpu` at 5225 MiB against a 9000 MiB floor, claimed within 15 s once free. **But** the converted edition's technical detail, source codec/profile and burned-subtitle fields are all NULL, and the check page's detail line is empty |
+| 4 | Status and failure reason visible; a stranded job returns to the queue by itself | **PASS** (corrected 2026-09-05) | Cancel: job `cancelled` in 4.6 s, row gone in 5.6 s, no process, no object, no dangling multipart. Kill: measured ≈3 min 30 s after the kill at the then-180 s threshold, second attempt finished in 246.1 s, 8 min 28 s end to end — **superseded**: the threshold is now 360 s, so the same recovery is ≈6.5 min by arithmetic against the new constant, not re-measured. Absent converter: `waiting_for_converter`, named, "1 minute". Full card: `waiting_for_gpu` at 5225 MiB against a 9000 MiB floor, claimed within 15 s once free. The converted edition's technical detail, source codec/profile and burned-subtitle fields were all NULL when this record was first written; a fresh conversion against the rolled pair on 2026-09-05 read back every field non-null (or a legitimately null `audio_title`) and the poster object confirmed in storage — see "The gap, closed" above |
 | 5 | 3D layout detected, stored, unbroken by scaling; stereo hint shown | **PASS** on flat sources; **NOT EXERCISED** on 3D material; **NOT VERIFIED HERE** on the hint | `2d` detected and stored on both editions; delivered file 1920×1080 with the source's own aspect. Neither source was side-by-side or over-under; the badge and the check-page hint were not seen in a browser |
 
 ---
 
 ## Still open after this run
 
-1. **The success report does not carry what the row needs.** The technical detail, the
-   source codec and profile, and the burned subtitle's language and title never reach the
-   service, so the library row and the check page cannot describe a converted edition.
-   This is the one recorded non-pass above.
+1. ~~The success report does not carry what the row needs.~~ **Closed 2026-09-05** — the
+   report protocol widened, both halves rolled together, and a fresh conversion against
+   the deployed pair read back a fully populated edition row with a real poster. See "The
+   gap, closed" under Claim 4.
 2. **The chapter text track.** The MP4 muxer writes the source's chapters as a `text`
    stream in the output. Whether the target player tolerates it is unknown — and an as-is
    remux of a chaptered container would carry the same track, so this is not specific to
@@ -363,11 +404,12 @@ absence for a pass:
   world's own player; subtitle legibility at the size they actually render; whether the
   chapter text track bothers the player.
 - The library rows changing live — queued, working with a percentage, uploading — the
-  stop and retry buttons, the converted-edition detail line (expected empty, per the gap
-  above) and the stereo badge.
+  stop and retry buttons, the converted-edition detail line (populated as of 2026-09-05,
+  per the gap closed above, but never seen rendered in a browser) and the stereo badge.
 
 ## Library state left behind
 
 `horimiya-01`, `grand-blue-dreaming-ii-01`, `horimiya-03`, `horimiya-04` and
-`horimiya-05` are active converted titles from this run. They can be kept or deleted;
-nothing else was added.
+`horimiya-05` are active converted titles from the original run; their technical
+columns stay `NULL` as noted above. `horimiya-piece-01`, converted 2026-09-05 to close
+the gap, carries the full detail line and a poster. All six can be kept or deleted.
