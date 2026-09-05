@@ -17,6 +17,8 @@ import time
 import uuid
 from pathlib import Path
 
+import pytest
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "probe"
 
 # Streams in this fixture: 0 video, 1 audio, 2 and 3 subtitles -- so the
@@ -27,6 +29,28 @@ _AUDIO_STREAM = 1
 
 def _probe_json() -> dict:
     return json.loads((FIXTURES_DIR / "subtitles_mixed.json").read_text(encoding="utf-8"))
+
+
+def _output_probe_json() -> dict:
+    """A distinguishable fixture for the *output* probe only -- different
+    geometry, profile, level, fps and audio shape from `_probe_json()`'s
+    own source fixture, so a test can prove a reported field came from
+    here and not from the source.
+    """
+    data = json.loads((FIXTURES_DIR / "subtitles_mixed.json").read_text(encoding="utf-8"))
+    for stream in data["streams"]:
+        if stream["codec_type"] == "video":
+            stream["width"] = 1280
+            stream["height"] = 720
+            stream["profile"] = "High"
+            stream["level"] = 41
+            stream["avg_frame_rate"] = "30/1"
+        elif stream["codec_type"] == "audio":
+            stream["sample_rate"] = "44100"
+            stream["channel_layout"] = "stereo"
+            stream["tags"] = {"language": "jpn", "title": "Dub"}
+    data["format"]["duration"] = "603.5"
+    return data
 
 
 class _FakeClient:
@@ -115,6 +139,7 @@ def _job(**overrides) -> dict:
         "job_id": str(uuid.uuid4()),
         "attempt": 1,
         "object_key": "abc.mp4",
+        "edition_id": str(uuid.uuid4()),
         "source_path": "movie.mkv",
         "audio_stream_index": _AUDIO_STREAM,
         "subtitle_kind": "embedded",
@@ -132,12 +157,15 @@ def _run_one_job(
     job,
     probe_json=None,
     *,
+    output_probe_json=None,
     upload_file=None,
     abort_multipart=None,
     run_result=None,
     run_seconds: float = 0.0,
     heartbeat_interval: float | None = None,
     heartbeat_responses: list | None = None,
+    poster_run_ffmpeg=None,
+    tail_progress_speed: float = 999.0,
 ) -> tuple[list[str] | None, _FakeClient]:
     """Drive one job to its end and hand back the command that would have
     been run, or `None` when the job failed before building one.
@@ -151,16 +179,29 @@ def _run_one_job(
     `heartbeat_interval` overrides the module's own real interval so a
     test does not have to wait real seconds; `heartbeat_responses` is
     handed to `_FakeClient` unchanged.
+
+    `output_probe_json` is what `compat.probe`/`compat.analyze` see for
+    the *output* file only -- defaults to `probe_json` (the source's own
+    fixture) when a test does not care to tell the two apart. A test that
+    hands over a distinguishable fixture here can prove a reported field
+    came from the output, not the source. `poster_run_ffmpeg` replaces
+    the poster extraction's own healthy no-op default, the way
+    `upload_file` replaces the video upload's.
     """
     import worker.__main__ as worker_main
 
     probe_json = probe_json if probe_json is not None else _probe_json()
+    output_probe_json = output_probe_json if output_probe_json is not None else probe_json
     commands = []
     client = _FakeClient(heartbeat_responses=heartbeat_responses)
 
     async def fake_run(cmd, *, should_cancel=lambda: False, on_progress=None, **kwargs):
         commands.append(cmd)
         client.captured_on_progress = on_progress
+        # A stub output file so the production code's own size stat
+        # (`destination.stat().st_size`) has something to read -- no real
+        # ffmpeg process runs in this file (module docstring).
+        Path(cmd[-1]).write_bytes(b"stub-output-bytes")
         elapsed = 0.0
         step = 0.01
         while elapsed < run_seconds:
@@ -170,6 +211,15 @@ def _run_one_job(
             elapsed += step
         if run_seconds and should_cancel():
             return _CancelledResult()
+        if on_progress is not None:
+            from mytube_media.runner import Progress
+
+            # A deliberately wrong "tail" reading -- proves the reported
+            # speed is the measured wall time, not whatever this last
+            # progress block happened to say.
+            await on_progress(
+                Progress(out_time_seconds=elapsed, speed=tail_progress_speed, done=True), 100.0
+            )
         return run_result if run_result is not None else _FakeResult()
 
     def fake_extract_embedded_track(source, stream_index, scratch_dir, extension="ass"):
@@ -185,7 +235,12 @@ def _run_one_job(
         dest.write_text("1\n00:00:01,000 --> 00:00:02,000\nStub cue\n", encoding="utf-8")
         return dest
 
-    monkeypatch.setattr(worker_main.compat, "probe", lambda path: probe_json)
+    def fake_probe(path):
+        if str(path).endswith("output.mp4"):
+            return output_probe_json
+        return probe_json
+
+    monkeypatch.setattr(worker_main.compat, "probe", fake_probe)
     monkeypatch.setattr(worker_main.compat, "moov_before_mdat", lambda path: True)
     monkeypatch.setattr(worker_main, "run_ffmpeg_with_progress", fake_run)
     monkeypatch.setattr(worker_main, "extract_embedded_track", fake_extract_embedded_track)
@@ -199,6 +254,11 @@ def _run_one_job(
         worker_main.worker_storage,
         "abort_multipart",
         abort_multipart or (lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(
+        worker_main.remux,
+        "run_ffmpeg",
+        poster_run_ffmpeg or (lambda *args, **kwargs: None),
     )
     if heartbeat_interval is not None:
         monkeypatch.setattr(worker_main, "HEARTBEAT_INTERVAL_SECONDS", heartbeat_interval)
@@ -297,6 +357,148 @@ def test_a_bitmap_choice_is_resolved_to_its_own_overlay_branch(monkeypatch, tmp_
     assert "-filter_complex" in cmd
     assert "overlay" in cmd[cmd.index("-filter_complex") + 1]
     assert client.failed_calls == []
+
+
+# --- the success report (D-146, CONV-04's poster gap) --------------------
+
+
+def test_a_finished_job_reports_the_output_probes_own_facts_not_the_sources(
+    monkeypatch, tmp_path
+):
+    """The whole point of keeping the output probe instead of discarding
+    it: every field describing the stored object comes from what the
+    encode actually produced, never from the source it was made from.
+    """
+    output_probe_json = _output_probe_json()
+    _cmd, client = _run_one_job(
+        monkeypatch, tmp_path, _job(), output_probe_json=output_probe_json
+    )
+
+    assert client.done_calls
+    report = client.done_calls[0]
+    assert report["width"] == 1280
+    assert report["height"] == 720
+    assert report["video_profile"] == "High"
+    assert report["video_level"] == 41
+    assert report["fps"] == 30.0
+    assert report["audio_sample_rate"] == 44100
+    assert report["audio_channel_layout"] == "stereo"
+    assert report["audio_language"] == "jpn"
+    assert report["audio_title"] == "Dub"
+    assert report["duration_seconds"] == pytest.approx(603.5)
+    assert report["size_bytes"] == len(b"stub-output-bytes")
+    # The source's own facts, read from the source probe, never the
+    # output's.
+    assert report["source_codec"] == "h264"
+    assert report["source_profile"] == "Constrained Baseline"
+
+
+def test_an_audio_stream_with_no_language_tag_reports_it_as_absent(monkeypatch, tmp_path):
+    """The default fixture's own audio track carries no language or title
+    tag at all -- the report must say so, never invent a substitute.
+    """
+    _cmd, client = _run_one_job(monkeypatch, tmp_path, _job())
+
+    assert client.done_calls
+    report = client.done_calls[0]
+    assert report["audio_language"] is None
+    assert report["audio_title"] is None
+
+
+def test_an_embedded_burn_reports_the_tracks_language_and_title(monkeypatch, tmp_path):
+    _cmd, client = _run_one_job(monkeypatch, tmp_path, _job())
+
+    assert client.done_calls
+    report = client.done_calls[0]
+    assert report["subtitle_burned_language"] == "rus"
+    assert report["subtitle_burned_title"] == "Russian"
+
+
+def test_no_subtitle_chosen_reports_both_burned_fields_as_absent(monkeypatch, tmp_path):
+    job = _job(subtitle_kind="none", subtitle_stream_index=None)
+    _cmd, client = _run_one_job(monkeypatch, tmp_path, job)
+
+    assert client.done_calls
+    report = client.done_calls[0]
+    assert report["subtitle_burned_language"] is None
+    assert report["subtitle_burned_title"] is None
+
+
+def test_an_external_burn_reports_the_files_own_name_with_no_language(monkeypatch, tmp_path):
+    """An external file carries no language tag this converter could read
+    -- the file's own name is the only thing worth reporting in its place.
+    """
+    job = _job(
+        subtitle_kind="external",
+        subtitle_stream_index=None,
+        subtitle_path="Subs/movie.en.srt",
+    )
+    _cmd, client = _run_one_job(monkeypatch, tmp_path, job)
+
+    assert client.done_calls
+    report = client.done_calls[0]
+    assert report["subtitle_burned_language"] is None
+    assert report["subtitle_burned_title"] == "movie.en.srt"
+
+
+def test_the_reported_speed_is_the_source_duration_over_the_measured_wall_time(
+    monkeypatch, tmp_path
+):
+    """The value that used to survive was whatever the final progress
+    block happened to read -- the tail of the file, which can differ
+    several-fold from the mean. This pins the replacement: source
+    duration over the encode's own measured wall time, driven by a fake
+    run that actually sleeps for `run_seconds` of real wall time so the
+    two monotonic readings either side of it measure something real.
+    """
+    _cmd, client = _run_one_job(monkeypatch, tmp_path, _job(), run_seconds=0.3)
+
+    assert client.done_calls
+    report = client.done_calls[0]
+    # The source fixture's own duration is 1.021 seconds; a healthy
+    # margin around the expected ratio absorbs scheduling jitter, but the
+    # deliberately wrong 999.0 tail reading the fake run also sends
+    # through `on_progress` is nowhere near this range either way.
+    assert report["realtime_factor"] == pytest.approx(1.021 / 0.3, rel=0.5)
+    assert report["realtime_factor"] != 999.0
+
+
+def test_a_successful_conversion_uploads_and_reports_a_poster_key(monkeypatch, tmp_path):
+    uploaded = []
+
+    def spy_upload(client_arg, settings_arg, path, key, content_type="video/mp4"):
+        uploaded.append((key, content_type))
+
+    _cmd, client = _run_one_job(monkeypatch, tmp_path, _job(), upload_file=spy_upload)
+
+    assert client.done_calls
+    report = client.done_calls[0]
+    assert report["poster_key"] is not None
+    assert report["poster_key"].endswith(".jpg")
+    poster_uploads = [u for u in uploaded if u[1] == "image/jpeg"]
+    assert poster_uploads, "the poster must be uploaded under image/jpeg"
+
+
+def test_a_poster_extraction_failure_is_logged_and_the_conversion_still_succeeds(
+    monkeypatch, tmp_path, caplog
+):
+    """A poster that will not extract must never fail a conversion -- the
+    row just degrades to the placeholder, the same discipline the as-is
+    add path already follows.
+    """
+
+    def failing_run_ffmpeg(argv, *, timeout):
+        raise RuntimeError("no frame could be extracted")
+
+    with caplog.at_level(logging.ERROR):
+        _cmd, client = _run_one_job(
+            monkeypatch, tmp_path, _job(), poster_run_ffmpeg=failing_run_ffmpeg
+        )
+
+    assert client.failed_calls == []
+    assert client.done_calls
+    assert client.done_calls[0]["poster_key"] is None
+    assert "poster" in caplog.text.lower()
 
 
 def test_a_storage_error_while_cleaning_up_after_a_failed_upload_is_swallowed(

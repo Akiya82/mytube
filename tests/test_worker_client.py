@@ -34,6 +34,41 @@ def _client(handler):
     )
 
 
+def _valid_done_kwargs(**overrides) -> dict:
+    """Every keyword `WorkerClient.done()` requires, filled with a
+    plausible value -- the baseline every call site below sends, mirroring
+    `test_worker_api.py`'s own `_valid_done_body()` for the same widened
+    shape, one field name apart (no `protocol`/`worker`, which `_body()`
+    adds itself).
+    """
+    kwargs = {
+        "attempt": 1,
+        "object_key": "x.mp4",
+        "source_codec": "hevc",
+        "source_profile": "Main 10",
+        "subtitle_burned_language": "eng",
+        "subtitle_burned_title": "English",
+        "size_bytes": 123_456_789,
+        "duration_seconds": 1423.5,
+        "width": 1920,
+        "height": 1080,
+        "fps": 23.976,
+        "video_profile": "High",
+        "video_level": 41,
+        "pix_fmt": "yuv420p",
+        "audio_codec": "aac",
+        "audio_sample_rate": 48000,
+        "audio_channel_layout": "stereo",
+        "audio_language": "eng",
+        "audio_title": "English",
+        "audio_reencoded": False,
+        "poster_key": "edition-1.jpg",
+        "realtime_factor": 1.4,
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
 def _method_calls():
     return {
         "claim": lambda c: c.claim(),
@@ -45,7 +80,7 @@ def _method_calls():
             eta_seconds=60,
             realtime_factor=1.0,
         ),
-        "done": lambda c: c.done(STUB_JOB_ID, attempt=1, object_key="x.mp4"),
+        "done": lambda c: c.done(STUB_JOB_ID, **_valid_done_kwargs()),
         "failed": lambda c: c.failed(
             STUB_JOB_ID, attempt=1, reason_key="failed.reason.upload"
         ),
@@ -170,7 +205,7 @@ async def test_a_refused_report_is_raised_as_a_rejection_the_caller_can_act_on()
 
     client = _client(handler)
     with pytest.raises(ReportRejected):
-        await client.done(STUB_JOB_ID, attempt=1, object_key="x.mp4")
+        await client.done(STUB_JOB_ID, **_valid_done_kwargs())
 
     assert calls["n"] == 1
 

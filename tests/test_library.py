@@ -765,6 +765,31 @@ async def test_converted_detail_line_names_the_burned_subtitle_only_when_one_was
     assert "Subtitles burned: eng (English)" in resp.text
 
 
+async def test_converted_detail_line_names_an_external_burn_with_no_language(
+    client, queries_stub
+):
+    """An external subtitle file carries no language tag at all -- the
+    line still has to say something was burned, in the same unknown-
+    language wording the audio line already uses, rather than staying
+    gated on a field an external burn can never carry.
+    """
+    queries_stub.rows = [
+        _row(
+            title_name="External Burn Clip",
+            size_bytes=750_000_000,
+            duration_seconds=1000.0,
+            source_codec="hevc",
+            subtitle_burned_language=None,
+            subtitle_burned_title="movie.en.srt",
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "Subtitles burned: Unknown language (movie.en.srt)" in resp.text
+
+
 async def test_stereo_badge_appears_for_a_non_flat_layout_on_an_as_is_edition_half_sbs(
     client, queries_stub
 ):

@@ -16,9 +16,10 @@ import contextlib
 import logging
 import shutil
 import signal
+import time
 from pathlib import Path
 
-from mytube_media import compat, transcode
+from mytube_media import compat, remux, transcode
 from mytube_media.compat import ProbeError
 from mytube_media.runner import FfmpegFailed, run_ffmpeg_with_progress
 from mytube_media.share import ShareEscape, safe_join
@@ -28,6 +29,7 @@ from mytube_media.subtitles import (
     collect_fonts,
     copy_external_track,
     embedded_subtitle_kind,
+    embedded_tracks,
     extract_embedded_track,
     extraction_extension,
     read_text,
@@ -66,6 +68,11 @@ TRANSCODE_TIMEOUT_SECONDS = 10800
 # transfer running longer than the reaper's stale threshold used to get
 # its own job requeued out from under it.
 HEARTBEAT_INTERVAL_SECONDS = 3.0
+
+# Same figure the add-consumer's own poster extraction uses
+# (orchestrator/media/queue.py) -- one frame, nothing that should ever
+# take this long against a file already sitting on local disk.
+POSTER_TIMEOUT_SECONDS = 60
 
 # The dotted catalog keys this program is allowed to report on a
 # failure -- the service's own allow-list
@@ -324,6 +331,7 @@ async def _process_job(
             (s for s in probe_json["streams"] if s.get("codec_type") == "video"), None
         )
         source_codec = video_stream.get("codec_name") if video_stream else None
+        source_profile = video_stream.get("profile") if video_stream else None
         sample_aspect_ratio = video_stream.get("sample_aspect_ratio") if video_stream else None
 
         plan = TranscodePlan(
@@ -376,6 +384,28 @@ async def _process_job(
             # burned, and that is the file whose encoding matters here.
             _, charenc = await asyncio.to_thread(read_text, subtitle_burn_path)
 
+        # What gets reported as burned, resolved from the same source
+        # probe and the same enumeration `embedded_subtitle_kind` already
+        # walked above -- never a second, independent read of the stream
+        # list. An external file carries no language tag at all; its own
+        # name is the only thing worth reporting in its place.
+        subtitle_burned_language = None
+        subtitle_burned_title = None
+        if subtitle_kind in ("embedded_text", "embedded_bitmap"):
+            burned_track = next(
+                (
+                    t
+                    for t in embedded_tracks(probe_json)
+                    if t.stream_index == subtitle_stream_index
+                ),
+                None,
+            )
+            if burned_track is not None:
+                subtitle_burned_language = burned_track.language
+                subtitle_burned_title = burned_track.title
+        elif subtitle_kind == "external":
+            subtitle_burned_title = Path(subtitle_share_path).name
+
         subtitle = SubtitleChoice(
             kind=subtitle_kind,
             stream_index=subtitle_stream_index,
@@ -408,6 +438,12 @@ async def _process_job(
             progress_state["progress_pct"] = percent
             progress_state["realtime_factor"] = progress.speed
 
+        # A monotonic reading either side of the run, not the last
+        # progress block's own speed -- that reading is the tail of the
+        # file and can differ several-fold from the mean, and twenty such
+        # samples make a median of noise, which is exactly the number the
+        # next add form's own estimate reads.
+        encode_started_at = time.monotonic()
         result = await run_ffmpeg_with_progress(
             cmd,
             duration_seconds=verdict.duration_seconds,
@@ -415,20 +451,64 @@ async def _process_job(
             should_cancel=_should_stop,
             timeout=TRANSCODE_TIMEOUT_SECONDS,
         )
+        encode_elapsed_seconds = time.monotonic() - encode_started_at
         if result.cancelled:
             raise _JobCancelled()
 
         # The same two checks this project already runs on every file it
         # produces before publishing it: it must decode, and its moov
         # atom must precede mdat so a player can start before the
-        # download finishes.
+        # download finishes. Kept this time, rather than discarded: this
+        # probe is the one honest description of what the stored object
+        # actually is -- reading the source a second time would describe
+        # a file this converter did not produce.
         try:
-            await asyncio.to_thread(compat.probe, destination)
+            output_probe_json = await asyncio.to_thread(compat.probe, destination)
             moov_first = await asyncio.to_thread(compat.moov_before_mdat, destination)
         except ProbeError as exc:
             raise _OutputVerificationError(str(exc)) from exc
         if not moov_first:
             raise _OutputVerificationError(f"{destination}: the moov atom is not first")
+
+        output_verdict = compat.analyze(output_probe_json)
+        # The stored object's own audio track -- exactly one always
+        # survives into the output (D-42), so the first (and only) entry
+        # `audio_tracks` finds is it; `Verdict` itself carries the
+        # reconciled codec/rate/layout but not the language/title tags,
+        # which live on the track, not the format block.
+        output_audio_track = next(iter(output_verdict.tracks), None)
+        # Stat'ed here, before the scratch directory is removed in the
+        # `finally` below -- this is the size of what was actually
+        # uploaded, not a guess from the source.
+        output_size_bytes = await asyncio.to_thread(lambda: destination.stat().st_size)
+
+        # A poster extracted from the output, not the source: the output
+        # is what the edition actually is, on local disk, carrying the
+        # burned subtitles and the final geometry. Same timestamp helper
+        # and command builder the as-is path already uses (D-72); a
+        # poster that will not extract must never fail a conversion,
+        # exactly as it never fails an add.
+        scratch_poster = job_scratch / "poster.jpg"
+        poster_key: str | None = None
+        try:
+            at_seconds = remux.poster_timestamp(output_verdict.duration_seconds)
+            poster_cmd = remux.build_poster_command(
+                destination, scratch_poster, at_seconds=at_seconds
+            )
+            await asyncio.to_thread(remux.run_ffmpeg, poster_cmd, timeout=POSTER_TIMEOUT_SECONDS)
+            candidate_poster_key = f"{job['edition_id']}.jpg"
+            await asyncio.to_thread(
+                worker_storage.upload_file,
+                s3_client,
+                settings,
+                str(scratch_poster),
+                candidate_poster_key,
+                "image/jpeg",
+            )
+            poster_key = candidate_poster_key
+        except Exception:
+            logger.exception("job %s: poster extraction failed", job_id)
+            poster_key = None
 
         # Writing the dictionary is the whole of setting this stage --
         # the loop picks it up on its next tick and keeps reporting
@@ -441,6 +521,16 @@ async def _process_job(
             )
         except Exception as exc:
             raise _UploadError(str(exc)) from exc
+
+        # The job's own average speed -- the source duration over the
+        # wall time the encode actually took. Falls back to the last
+        # progress reading only when the source's own duration could not
+        # be read at all, which never happens for a file that already
+        # made it through the free-space estimate above.
+        if verdict.duration_seconds and encode_elapsed_seconds > 0:
+            realtime_factor = verdict.duration_seconds / encode_elapsed_seconds
+        else:
+            realtime_factor = progress_state["realtime_factor"] or 1.0
 
         # Stopped deliberately here, before the terminal report: a tick
         # landing after this report has already committed would be
@@ -458,7 +548,33 @@ async def _process_job(
             await _abort_upload_quietly(s3_client, settings, object_key, job_id)
         else:
             try:
-                await client.done(job_id, attempt=attempt, object_key=object_key)
+                await client.done(
+                    job_id,
+                    attempt=attempt,
+                    object_key=object_key,
+                    source_codec=source_codec,
+                    source_profile=source_profile,
+                    subtitle_burned_language=subtitle_burned_language,
+                    subtitle_burned_title=subtitle_burned_title,
+                    size_bytes=output_size_bytes,
+                    duration_seconds=output_verdict.duration_seconds,
+                    width=output_verdict.width,
+                    height=output_verdict.height,
+                    fps=output_verdict.fps,
+                    video_profile=output_verdict.video_profile,
+                    video_level=output_verdict.video_level,
+                    pix_fmt=output_verdict.pix_fmt,
+                    audio_codec=output_verdict.audio_codec,
+                    audio_sample_rate=output_verdict.audio_sample_rate,
+                    audio_channel_layout=output_verdict.audio_channel_layout,
+                    audio_language=(
+                        output_audio_track.language if output_audio_track else None
+                    ),
+                    audio_title=output_audio_track.title if output_audio_track else None,
+                    audio_reencoded=verdict.audio_needs_reencode,
+                    poster_key=poster_key,
+                    realtime_factor=realtime_factor,
+                )
             except ReportRejected:
                 # The job moved on to a different attempt. This converter
                 # has no delete beyond its own keys (D-115): only abort a

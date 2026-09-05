@@ -165,13 +165,67 @@ class WorkerClient:
         )
         return bool(response.json().get("cancel_requested", False))
 
-    async def done(self, job_id, *, attempt: int, object_key: str) -> None:
-        """A finished transcode. The route's own body is frozen to just
-        these two fields -- see `orchestrator/web/routes_worker.py`'s
-        `DoneBody`.
+    async def done(
+        self,
+        job_id,
+        *,
+        attempt: int,
+        object_key: str,
+        source_codec: str,
+        source_profile: str | None,
+        subtitle_burned_language: str | None,
+        subtitle_burned_title: str | None,
+        size_bytes: int,
+        duration_seconds: float,
+        width: int,
+        height: int,
+        fps: float,
+        video_profile: str,
+        video_level: int | None,
+        pix_fmt: str,
+        audio_codec: str,
+        audio_sample_rate: int,
+        audio_channel_layout: str,
+        audio_language: str | None,
+        audio_title: str | None,
+        audio_reencoded: bool,
+        poster_key: str | None,
+        realtime_factor: float,
+    ) -> None:
+        """A finished transcode. The body widened past `attempt`/
+        `object_key` in this plan: the route's own `DoneBody` needs what
+        the conversion measured to fill the library row's detail line and
+        its poster, and every field name here matches the route's own,
+        so nothing between the wire and the write has to translate. See
+        `orchestrator/web/routes_worker.py`'s `DoneBody` for which of
+        these may still be sent as an explicit `None`.
         """
         await self._post_and_decide(
-            f"/jobs/{job_id}/done", self._body(attempt=attempt, object_key=object_key)
+            f"/jobs/{job_id}/done",
+            self._body(
+                attempt=attempt,
+                object_key=object_key,
+                source_codec=source_codec,
+                source_profile=source_profile,
+                subtitle_burned_language=subtitle_burned_language,
+                subtitle_burned_title=subtitle_burned_title,
+                size_bytes=size_bytes,
+                duration_seconds=duration_seconds,
+                width=width,
+                height=height,
+                fps=fps,
+                video_profile=video_profile,
+                video_level=video_level,
+                pix_fmt=pix_fmt,
+                audio_codec=audio_codec,
+                audio_sample_rate=audio_sample_rate,
+                audio_channel_layout=audio_channel_layout,
+                audio_language=audio_language,
+                audio_title=audio_title,
+                audio_reencoded=audio_reencoded,
+                poster_key=poster_key,
+                realtime_factor=realtime_factor,
+            ),
         )
 
     async def failed(self, job_id, *, attempt: int, reason_key: str) -> None:

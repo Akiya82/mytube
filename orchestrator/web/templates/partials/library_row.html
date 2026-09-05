@@ -253,8 +253,8 @@
         {% if row.source_codec %}
           &middot; {{ t("library.detail.converted_from").format(codec=row.source_codec) }}
           {% if row.output_bytes_per_second is not none %}&middot; {{ row.output_bytes_per_second | filesizeformat_binary }}/s{% endif %}
-          {% if row.subtitle_burned_language %}
-            &middot; {{ t("library.detail.subtitles_burned").format(language=row.subtitle_burned_language, title=row.subtitle_burned_title or "") }}
+          {% if row.subtitle_burned_language or row.subtitle_burned_title %}
+            &middot; {{ t("library.detail.subtitles_burned").format(language=row.subtitle_burned_language or t("add.track.language_unknown"), title=row.subtitle_burned_title or "") }}
           {% endif %}
         {% endif %}
         {% if row.stereo_layout and row.stereo_layout != "2d" %}
