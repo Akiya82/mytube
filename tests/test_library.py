@@ -653,6 +653,32 @@ async def test_stage_working_carries_percent_and_remaining(client, queries_stub)
     assert "55%" in resp.text
 
 
+async def test_stage_working_with_no_estimate_carries_percent_alone(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at="2026-08-22T00:00:00Z",
+            **_job(
+                job_kind="transcode",
+                job_status="running",
+                job_db_stage="working",
+                job_progress_pct=42.0,
+                job_eta_seconds=None,
+            ),
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-job-stage="working"' in resp.text
+    assert "42%" in resp.text
+    assert "about" not in resp.text
+    assert "left" not in resp.text
+
+
 async def test_stage_uploading_carries_percent(client, queries_stub):
     title_id = uuid.uuid4()
     queries_stub.rows = [

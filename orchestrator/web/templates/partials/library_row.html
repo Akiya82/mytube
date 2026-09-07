@@ -67,7 +67,7 @@
       {% elif row.job_stage == "waiting_for_gpu" %}
         <span class="chip chip--waiting">{{ t("library.status.waiting_for_gpu") }}</span>
       {% elif row.job_stage == "working" %}
-        <span class="chip chip--preparing">{{ t("library.status.working").format(percent=row.job_percent, remaining=row.job_remaining_text) }}</span>
+        <span class="chip chip--preparing">{% if row.job_remaining_text %}{{ t("library.status.working").format(percent=row.job_percent, remaining=row.job_remaining_text) }}{% else %}{{ t("library.status.working_no_eta").format(percent=row.job_percent) }}{% endif %}</span>
       {% elif row.job_stage == "uploading" %}
         <span class="chip chip--preparing">{{ t("library.status.uploading").format(percent=row.job_percent) }}</span>
       {% elif row.job_stage == "cancelling" %}
@@ -218,7 +218,7 @@
       {% elif row.job_stage == "waiting_for_gpu" %}
         <span class="chip chip--waiting">{{ t("library.status.waiting_for_gpu") }}</span>
       {% elif row.job_stage == "working" %}
-        <span class="chip chip--preparing">{{ t("library.status.working").format(percent=row.job_percent, remaining=row.job_remaining_text) }}</span>
+        <span class="chip chip--preparing">{% if row.job_remaining_text %}{{ t("library.status.working").format(percent=row.job_percent, remaining=row.job_remaining_text) }}{% else %}{{ t("library.status.working_no_eta").format(percent=row.job_percent) }}{% endif %}</span>
       {% elif row.job_stage == "uploading" %}
         <span class="chip chip--preparing">{{ t("library.status.uploading").format(percent=row.job_percent) }}</span>
       {% elif row.job_stage == "cancelling" %}

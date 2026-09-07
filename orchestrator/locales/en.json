@@ -85,6 +85,7 @@
   "library.status.waiting_for_converter_none": "Waiting for a converter (none connected yet)",
   "library.status.waiting_for_gpu": "Waiting for GPU memory",
   "library.status.working": "Working, {percent}% - about {remaining} left",
+  "library.status.working_no_eta": "Working, {percent}%",
   "library.thumbnail.placeholder_label": "No preview available",
   "login.cta.submit": "Sign in",
   "login.error.invalid_credentials": "Incorrect username or password.",

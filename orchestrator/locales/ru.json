@@ -85,6 +85,7 @@
   "library.status.waiting_for_converter_none": "Ожидание конвертера (пока никто не подключался)",
   "library.status.waiting_for_gpu": "Ожидание свободной памяти видеокарты",
   "library.status.working": "Идёт обработка, {percent}% - осталось около {remaining}",
+  "library.status.working_no_eta": "Идёт обработка, {percent}%",
   "library.thumbnail.placeholder_label": "Предпросмотр недоступен",
   "login.cta.submit": "Войти",
   "login.error.invalid_credentials": "Неверное имя пользователя или пароль.",
