@@ -183,26 +183,22 @@
       {% if convert_estimate_seconds %}
         <p class="cost-line">{{ t("convert.estimate").format(time=convert_estimate_seconds | humanize_seconds) }}</p>
       {% endif %}
-      {% if not_enough_space_convert %}
-        <div class="banner banner--error" role="alert">
-          {{ warning(cls="banner__icon") }}
-          <div class="banner__text">
-            <p class="banner__body">{{ t("reason.storage_full") }}</p>
-          </div>
-        </div>
-      {% endif %}
     </div>
   {% endif %}
 
-  {# --- 8. The as-is cost line, unchanged position. --- #}
-  <p class="cost-line">{{ t("add.estimate").format(size=size_bytes | filesizeformat_binary, time=estimate_seconds | humanize_seconds) }}</p>
-  {% if not_enough_space %}
-    <div class="banner banner--error" role="alert">
-      {{ warning(cls="banner__icon") }}
-      <div class="banner__text">
-        <p class="banner__body">{{ t("reason.storage_full") }}</p>
+  {# --- 8. The as-is cost line and its free-space banner: gated on the
+     same predicate the as-is button below renders behind, so neither ever
+     describes an action the page is not offering. --- #}
+  {% if verdict is not none and verdict.eligible %}
+    <p class="cost-line">{{ t("add.estimate").format(size=size_bytes | filesizeformat_binary, time=estimate_seconds | humanize_seconds) }}</p>
+    {% if not_enough_space %}
+      <div class="banner banner--error" role="alert">
+        {{ warning(cls="banner__icon") }}
+        <div class="banner__text">
+          <p class="banner__body">{{ t("reason.storage_full") }}</p>
+        </div>
       </div>
-    </div>
+    {% endif %}
   {% endif %}
 
   {# --- 10. Two actions -- exactly one is the filled primary at any time. --- #}

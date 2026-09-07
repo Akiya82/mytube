@@ -646,6 +646,33 @@ async def test_not_enough_space_banner_when_disk_usage_is_low(web_client, monkey
     assert "disabled" in submit_tag
 
 
+async def test_convert_only_source_shows_neither_as_is_estimate_nor_space_banner(
+    web_client, monkeypatch
+):
+    """A source that can only be converted has no as-is button on the
+    page, so it must show neither the as-is cost line nor the free-space
+    banner -- even with zero bytes free, since the interface no longer
+    measures anything for the conversion path at all.
+    """
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("high10_10bit.json"))
+
+    class _Usage:
+        free = 0
+
+    monkeypatch.setattr(
+        routes_share.shutil, "disk_usage", lambda path: _Usage()
+    )
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert 'name="add"' not in resp.text
+    assert " about " not in resp.text  # the as-is estimate's own fragment
+    assert "Not enough free space" not in resp.text
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "disabled" not in convert_tag
+
+
 # --- POST /add/{path} -- the convert branch (D-145, D-147, D-148) -------
 
 

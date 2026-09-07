@@ -30,11 +30,6 @@ from fastapi.responses import RedirectResponse
 
 from mytube_media.compat import ProbeError, analyze, moov_before_mdat, probe
 from mytube_media.subtitles import external_tracks
-from mytube_media.transcode import (
-    bitrate_for_output,
-    output_dimensions,
-    required_free_bytes_for_transcode,
-)
 from mytube_media.share import (
     ShareEscape,
     ShareUnavailable,
@@ -208,21 +203,6 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         size_bytes, already_correct=already_correct
     )
 
-    # The conversion path's own free-space precheck (D-52's conversion
-    # equivalent) -- the encoded output plus the +faststart rewrite, never
-    # the as-is formula, since the source is never copied for this path.
-    not_enough_space_convert = False
-    if verdict is not None:
-        out_w, out_h = output_dimensions(
-            verdict.width or 0, verdict.height or 0, verdict.stereo_layout
-        )
-        target_bitrate = bitrate_for_output(out_w, out_h, verdict.stereo_layout)
-        if verdict.duration_seconds:
-            required_convert_bytes = required_free_bytes_for_transcode(
-                target_bitrate, verdict.duration_seconds
-            )
-            not_enough_space_convert = free_bytes < required_convert_bytes
-
     estimate_seconds = 0.0
     if settings.add_estimate_mb_per_second > 0:
         estimate_seconds = size_bytes / (settings.add_estimate_mb_per_second * 1024 * 1024)
@@ -249,7 +229,6 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         # (Amendment 2) -- a source with none has no add path either way
         # (see analyze()'s own reason.no_audio branch).
         and (not slug_plan.is_tombstone or reuse_confirmed)
-        and not not_enough_space_convert
         and not (differs_convert and not add_anyway_confirmed)
     )
 
@@ -278,7 +257,6 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         size_bytes=size_bytes,
         estimate_seconds=estimate_seconds,
         not_enough_space=not_enough_space,
-        not_enough_space_convert=not_enough_space_convert,
         convert_estimate_seconds=convert_estimate_value,
         subtitle_tracks_external=subtitle_tracks_external,
         can_add=can_add,

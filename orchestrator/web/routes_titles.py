@@ -42,7 +42,6 @@ an event loop with `GET /v/{slug}` and `/healthz`, and a bucket
 enumeration on a cold cache run bare stops both for its whole duration.
 """
 import asyncio
-import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,7 +53,6 @@ from fastapi.responses import RedirectResponse, Response
 from mytube_media.compat import ProbeError, audio_tracks, probe
 from mytube_media.share import ShareEscape, relative_to_root, safe_join
 from mytube_media.stereo3d import LAYOUTS as STEREO_LAYOUTS
-from mytube_media.transcode import bitrate_for_output, output_dimensions, required_free_bytes_for_transcode
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media.add import (
@@ -197,32 +195,6 @@ async def add_confirm_route(
             clean_subtitle_path = relative_to_root(root, subtitle_target)
         else:
             clean_subtitle_kind = "none"
-
-        # The free-space precheck for the conversion path (D-52's
-        # conversion-side equivalent): the source is read over the share
-        # and never copied, so what needs room is the encoded output plus
-        # the +faststart rewrite that follows it -- mytube_media.transcode's
-        # own formula, not the as-is one, since the two paths cost
-        # completely different amounts of scratch space.
-        duration_seconds = probe_json.get("format", {}).get("duration")
-        try:
-            duration_seconds = float(duration_seconds)
-        except (TypeError, ValueError):
-            duration_seconds = None
-        video = next(
-            (s for s in probe_json["streams"] if s.get("codec_type") == "video"), None
-        )
-        if duration_seconds and video is not None:
-            out_w, out_h = output_dimensions(
-                video.get("width") or 0, video.get("height") or 0, stereo_layout
-            )
-            target_bitrate = bitrate_for_output(out_w, out_h, stereo_layout)
-            required = required_free_bytes_for_transcode(target_bitrate, duration_seconds)
-            free_bytes = await asyncio.to_thread(
-                lambda: shutil.disk_usage(settings.work_dir).free
-            )
-            if free_bytes < required:
-                return _unreachable_response(request, status_code=400)
 
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
