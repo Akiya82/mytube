@@ -133,7 +133,7 @@
   "reason.no_audio": "This video has no audio track, so there is nothing to add yet.",
   "reason.pixfmt": "This video is 10-bit, or another unsupported color format, which is not supported yet.",
   "reason.profile": "This video uses the {profile} profile, which is not supported yet.",
-  "reason.storage_full": "Not enough free space to add this file safely. Free up space and try again.",
+  "reason.storage_full": "Not enough free space on the service's own scratch disk to add this file safely. Free up space and try again.",
   "reason.unreadable": "This file could not be read.",
   "setup.cta.submit": "Create password",
   "setup.error.invalid_token.body": "Check the interface container's log for the current setup link:",

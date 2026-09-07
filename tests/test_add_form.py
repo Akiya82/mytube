@@ -642,6 +642,7 @@ async def test_not_enough_space_banner_when_disk_usage_is_low(web_client, monkey
         resp = await web_client.get("/add/a-video.mp4")
 
     assert "Not enough free space" in resp.text
+    assert "scratch disk" in resp.text
     submit_tag = resp.text.split('type="submit"')[1].split(">")[0]
     assert "disabled" in submit_tag
 
