@@ -80,6 +80,13 @@ HEARTBEAT_INTERVAL_SECONDS = 3.0
 # take this long against a file already sitting on local disk.
 POSTER_TIMEOUT_SECONDS = 60
 
+# Mirrors the upper bound the heartbeat route declares for this field
+# (orchestrator/web/routes_worker.py's HeartbeatBody.eta_seconds), repeated
+# here rather than imported, since this package imports nothing from
+# orchestrator. An estimate above this is refused per tick, and a refused
+# tick is a tick that observes no cancellation.
+MAX_ETA_SECONDS = 7 * 24 * 3600
+
 # The dotted catalog keys this program is allowed to report on a
 # failure -- the service's own allow-list
 # (orchestrator/web/routes_worker.py's ALLOWED_FAILURE_REASONS), repeated
@@ -169,6 +176,31 @@ def _reason_key_for(exc: Exception) -> str:
     if isinstance(exc, _UploadError):
         return "failed.reason.upload"
     return "failed.reason.unknown"
+
+
+def _eta_seconds(
+    duration_seconds: float | None, out_time_seconds: float | None, speed: float | None
+) -> int | None:
+    """The remaining source time a progress block implies, or `None` when
+    any input leaves the answer unknowable rather than guessed.
+
+    `None` for an absent or zero duration (no verdict to measure against),
+    for an absent output timestamp (a timestamp of zero is still ffmpeg's
+    first real block and counts), and for a speed that is `None`, zero or
+    negative (a stalled or unreadable reading, not a slow one). Otherwise
+    the remaining source time -- duration minus the timestamp, floored at
+    zero so a block past the end reports zero rather than a negative
+    number -- divided by speed, truncated to an integer and capped at
+    `MAX_ETA_SECONDS`.
+    """
+    if not duration_seconds:
+        return None
+    if out_time_seconds is None:
+        return None
+    if speed is None or speed <= 0:
+        return None
+    remaining_source_seconds = max(duration_seconds - out_time_seconds, 0.0)
+    return min(int(remaining_source_seconds / speed), MAX_ETA_SECONDS)
 
 
 async def _abort_upload_quietly(s3_client, settings: WorkerSettings, key: str, job_id) -> None:

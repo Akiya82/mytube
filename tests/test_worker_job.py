@@ -717,3 +717,56 @@ def test_a_protocol_mismatch_stops_the_run_loop_rather_than_retrying(monkeypatch
 
     asyncio.run(_run_it())
     assert calls["n"] == 1, "the loop must not retry a protocol mismatch"
+
+
+# --- the remaining-time estimate: defined for every absent input ---------
+
+
+def test_eta_a_source_and_a_mid_run_block_report_the_remaining_source_time():
+    import worker.__main__ as worker_main
+
+    assert worker_main._eta_seconds(600.0, 60.0, 2.0) == 270
+
+
+def test_eta_a_source_with_no_known_duration_reports_no_estimate():
+    import worker.__main__ as worker_main
+
+    assert worker_main._eta_seconds(None, 60.0, 2.0) is None
+
+
+def test_eta_a_block_with_no_output_timestamp_reports_no_estimate():
+    import worker.__main__ as worker_main
+
+    assert worker_main._eta_seconds(600.0, None, 2.0) is None
+
+
+def test_eta_a_block_reporting_no_or_non_positive_speed_reports_no_estimate():
+    import worker.__main__ as worker_main
+
+    assert worker_main._eta_seconds(600.0, 60.0, None) is None
+    assert worker_main._eta_seconds(600.0, 60.0, 0.0) is None
+    assert worker_main._eta_seconds(600.0, 60.0, -1.0) is None
+
+
+def test_eta_the_first_block_ffmpeg_emits_still_reports_an_estimate():
+    """A timestamp of zero is ffmpeg's first real block, not an absent
+    reading -- it must still yield an estimate.
+    """
+    import worker.__main__ as worker_main
+
+    assert worker_main._eta_seconds(600.0, 0.0, 2.0) == 300
+
+
+def test_eta_a_block_past_the_source_duration_reports_zero_not_negative():
+    import worker.__main__ as worker_main
+
+    assert worker_main._eta_seconds(600.0, 900.0, 2.0) == 0
+
+
+def test_eta_an_estimate_above_the_routes_ceiling_is_capped_at_it():
+    import worker.__main__ as worker_main
+
+    assert (
+        worker_main._eta_seconds(worker_main.MAX_ETA_SECONDS * 10, 0.0, 0.1)
+        == worker_main.MAX_ETA_SECONDS
+    )
