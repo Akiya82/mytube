@@ -679,6 +679,36 @@ async def test_stage_working_with_no_estimate_carries_percent_alone(client, quer
     assert "left" not in resp.text
 
 
+async def test_stage_working_at_the_very_end_still_carries_a_remaining_time(client, queries_stub):
+    """Zero is a real estimate, not a missing one. The converter reports it
+    for a progress block whose output timestamp has already passed the
+    source duration, and the row must say so rather than fall back to the
+    form that carries the percentage alone.
+    """
+    title_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at="2026-08-22T00:00:00Z",
+            **_job(
+                job_kind="transcode",
+                job_status="running",
+                job_db_stage="working",
+                job_progress_pct=99.0,
+                job_eta_seconds=0,
+            ),
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-job-stage="working"' in resp.text
+    assert "99%" in resp.text
+    assert "under a minute" in resp.text
+
+
 async def test_stage_uploading_carries_percent(client, queries_stub):
     title_id = uuid.uuid4()
     queries_stub.rows = [

@@ -424,7 +424,7 @@ def derive_job_ui(data: dict, settings) -> None:
     progress = data.get("job_progress_pct")
     data["job_percent"] = int(round(progress)) if progress is not None else 0
     eta = data.get("job_eta_seconds")
-    data["job_remaining_text"] = humanize_seconds(eta) if eta else ""
+    data["job_remaining_text"] = humanize_seconds(eta) if eta is not None else ""
 
     # A running job with the flag set is shown cancelling regardless of
     # its own `stage` column -- nothing in this codebase writes
