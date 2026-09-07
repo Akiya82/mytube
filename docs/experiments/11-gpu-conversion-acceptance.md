@@ -330,6 +330,50 @@ threshold). The failure reason is carried and rendered server-side. The row now 
 what it was made from and what was burned into it, measured against the deployed pair
 rather than assumed from the protocol change alone.
 
+### The remaining time, now on the row
+
+**Closed 2026-09-08.** The status sentence's own remaining-time slot was permanently
+empty until this round: the converter now computes it from the source duration, the
+output timestamp and the current speed, and posts it with every heartbeat. Measured
+against the deployed pair on a fresh conversion (`Horimiya Piece 02`, a third ten-bit
+HEVC episode, never converted before): the job row's own estimate column read `171`
+seconds at `8.5%` and `149` seconds at `20.3%` twenty-three seconds later — a positive
+number that fell as the encode proceeded, not a static placeholder. The conversion
+went on to reach `done`, with the edition row reading back `source_codec hevc`,
+`source_profile Main 10`, `subtitle_burned_language rus`, `subtitle_burned_title
+Надписи (Crunchyroll)`, `size_bytes 881216842`, `duration_seconds 1421.06`, closing the
+one component of this claim the previous round had to write down as failed.
+
+### The start-up refusal, on the real host
+
+**Closed 2026-09-08.** The converter now refuses to start against a scratch mount it
+cannot write to, instead of claiming a job and failing partway through with a message
+that blames the source file. Reproduced on the real GPU host: a throwaway container of
+this round's converter image, given a root-owned directory bind-mounted at its own
+scratch path, no card and only fake credentials, exited immediately with one line,
+recorded verbatim —
+
+```
+ERROR:__main__:scratch directory /work is not writable by this container's user -- see the setup guide for the ownership it needs
+```
+
+— before contacting the service, the storage or the card. The temporary directory and
+the throwaway container were both removed afterwards. The real converter, checked in
+the same session, never logged that line and kept claiming and finishing work normally
+throughout.
+
+### The outside bring-up path, run for real
+
+**Closed 2026-09-08.** The self-hoster's own documented bring-up command
+(`docker compose --env-file .env.worker -f docker-compose.worker.yml up -d --build`)
+was exercised by the container tool itself, not merely read, on the commit this round
+ships: with a normal `PATH` the interpolation test rendered a temporary `.env.worker`
+against the compose file and confirmed the fake values it held came out the other
+side (7 tests passed, none skipped); with the container tool's own directory stripped
+from `PATH` for one invocation the same test skipped cleanly instead of failing (the
+recorded pair from the prior round: 7 passed with the tool present, 6 passed plus 1
+skipped without it). Both outcomes hold again on this round's final commit.
+
 ---
 
 ## Defects this run found, and their fixes
@@ -371,7 +415,7 @@ says which part.
 | 1 | Plan produced and explained; subtitle track chosen for burn-in | **PASS** on the pipeline; **NOT VERIFIED HERE** on its presentation | `transcode` on ten-bit HEVC with the codec named; `passthrough` plus over-ceiling warning on 38 Mbit/s H.264; ASS track enumerated, resolved and burned on both sources. The form's own wording, subtitle list and stereo selector were never opened in a browser |
 | 2 | Preview frame with burned subtitles renders in seconds, before conversion | **PASS** on honesty; **NOT MEASURED** on duration | Preview at 602.28 s against the delivered file at the same timestamp: same text, same italic face from the attached fonts, same position, same size, legible in both, no encoding damage across two ffmpeg builds on two machines. The render was not put on a clock |
 | 3 | Queued in Postgres, run on a separate NVENC machine, ready in under five minutes, workstation free | **PASS** | 249.2 s on the 23.75-min reference (factor 7.06), 275.9 s on a 24.0-min source of a different shape (7.24), three further runs at 246–275 s; queue waits 1.0–5.6 s; card at encoder 80 % mean / 100 % peak; workstation's own card at encoder 0 %, GPU 3 % throughout |
-| 4 | Status and failure reason visible; a stranded job returns to the queue by itself | **PASS** (corrected 2026-09-05) | Cancel: job `cancelled` in 4.6 s, row gone in 5.6 s, no process, no object, no dangling multipart. Kill: measured ≈3 min 30 s after the kill at the then-180 s threshold, second attempt finished in 246.1 s, 8 min 28 s end to end — **superseded**: the threshold is now 360 s, so the same recovery is ≈6.5 min by arithmetic against the new constant, not re-measured. Absent converter: `waiting_for_converter`, named, "1 minute". Full card: `waiting_for_gpu` at 5225 MiB against a 9000 MiB floor, claimed within 15 s once free. The converted edition's technical detail, source codec/profile and burned-subtitle fields were all NULL when this record was first written; a fresh conversion against the rolled pair on 2026-09-05 read back every field non-null (or a legitimately null `audio_title`) and the poster object confirmed in storage — see "The gap, closed" above |
+| 4 | Status and failure reason visible; a stranded job returns to the queue by itself | **PASS** (corrected 2026-09-05, remaining time closed 2026-09-08) | Cancel: job `cancelled` in 4.6 s, row gone in 5.6 s, no process, no object, no dangling multipart. Kill: measured ≈3 min 30 s after the kill at the then-180 s threshold, second attempt finished in 246.1 s, 8 min 28 s end to end — **superseded**: the threshold is now 360 s, so the same recovery is ≈6.5 min by arithmetic against the new constant, not re-measured. Absent converter: `waiting_for_converter`, named, "1 minute". Full card: `waiting_for_gpu` at 5225 MiB against a 9000 MiB floor, claimed within 15 s once free. The converted edition's technical detail, source codec/profile and burned-subtitle fields were all NULL when this record was first written; a fresh conversion against the rolled pair on 2026-09-05 read back every field non-null (or a legitimately null `audio_title`) and the poster object confirmed in storage — see "The gap, closed" above. The status sentence's remaining time was empty until this round: a fresh conversion against the redeployed pair on 2026-09-08 read the job row's own estimate at 171 s (8.5%) and 149 s (20.3%) twenty-three seconds later — see "The remaining time, now on the row" above |
 | 5 | 3D layout detected, stored, unbroken by scaling; stereo hint shown | **PASS** on flat sources; **NOT EXERCISED** on 3D material; **NOT VERIFIED HERE** on the hint | `2d` detected and stored on both editions; delivered file 1920×1080 with the source's own aspect. Neither source was side-by-side or over-under; the badge and the check-page hint were not seen in a browser |
 
 ---
@@ -412,4 +456,6 @@ absence for a pass:
 `horimiya-01`, `grand-blue-dreaming-ii-01`, `horimiya-03`, `horimiya-04` and
 `horimiya-05` are active converted titles from the original run; their technical
 columns stay `NULL` as noted above. `horimiya-piece-01`, converted 2026-09-05 to close
-the gap, carries the full detail line and a poster. All six can be kept or deleted.
+the gap, carries the full detail line and a poster. `horimiya-piece-02`, converted
+2026-09-08 to measure the remaining-time estimate against the redeployed pair, carries
+the same. All seven can be kept or deleted.
