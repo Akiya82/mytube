@@ -283,7 +283,7 @@ It reads its variables from its own `.env.worker`, a separate file on the
 GPU host — **not** a copy of this service's own `.env`. Copying that file
 instead would hand the GPU host the service's own storage key, database
 password, signing secret and share password, all readable from the
-container's environment; only the eleven variables below belong on that
+container's environment; only the thirteen variables below belong on that
 machine.
 
 | Variable | Purpose | Requirement |
