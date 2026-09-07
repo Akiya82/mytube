@@ -5,7 +5,11 @@
 # exactly as it does today, untouched by this one.
 #
 # Bring the converter up with:
-#   docker compose -f docker-compose.worker.yml up -d --build
+#   docker compose --env-file .env.worker -f docker-compose.worker.yml up -d --build
+#
+# The env-file flag is not optional: the values below come from that file,
+# and the tool only reads a file named .env by default -- without the flag
+# every required variable below is missing and the command fails.
 #
 # One service. No published ports -- the converter listens on nothing; it
 # only ever calls out to the service over MYTUBE_ORCHESTRATOR_URL and to

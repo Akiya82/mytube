@@ -272,8 +272,12 @@ to mistake for a broken card when the real gap is the toolkit.
 Bring it up with the second compose file, on the machine that has the card:
 
 ```bash
-docker compose -f docker-compose.worker.yml up -d --build
+docker compose --env-file .env.worker -f docker-compose.worker.yml up -d --build
 ```
+
+The `--env-file` flag is not optional: the tool only reads a file named
+`.env` by default, and without the flag every required variable below is
+missing, and the command fails five times over, once per required variable.
 
 It reads its variables from its own `.env.worker`, a separate file on the
 GPU host — **not** a copy of this service's own `.env`. Copying that file
@@ -294,6 +298,21 @@ machine.
 | `MYTUBE_WORKER_MAX_OUTPUT_WIDTH` | The encoder's output width ceiling | Optional |
 | `MYTUBE_SHARE_HOST_PATH` | Where the source share is mounted on this host, bind-mounted read-only into the container | Required |
 | `MYTUBE_WORKER_SCRATCH_PATH` | A scratch directory with room for a large file plus its own rewrite pass | Required |
+
+**The scratch directory must be owned by uid `10001`, the fixed non-root user
+the converter image runs as.** A bind mount the container tool creates for a
+missing host directory belongs to root, and that user cannot write into it.
+Make the directory and hand it to that uid before the first run:
+
+```bash
+mkdir -p ./worker-scratch
+chown 10001 ./worker-scratch
+```
+
+Skip this and the converter refuses to start: it checks the directory is
+writable before claiming any job and stops with one line naming it, rather
+than claiming a job and failing partway through with a message that points
+at the source file instead.
 
 **The worker's own storage credential should be narrower than the service's,
 not a copy of it.** Scope it to put objects and abort a multipart upload in
