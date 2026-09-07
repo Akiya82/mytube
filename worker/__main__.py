@@ -253,7 +253,12 @@ async def _process_job(
     # nothing else passes progress between the two. The callback never
     # awaits the network itself; the loop is the only thing that ever
     # calls `client.heartbeat` for this job.
-    progress_state: dict = {"stage": "working", "progress_pct": None, "realtime_factor": None}
+    progress_state: dict = {
+        "stage": "working",
+        "progress_pct": None,
+        "realtime_factor": None,
+        "eta_seconds": None,
+    }
 
     def _should_stop() -> bool:
         return cancel_state["requested"] or shutdown_event.is_set()
@@ -274,6 +279,7 @@ async def _process_job(
                     attempt=attempt,
                     stage=progress_state["stage"],
                     progress_pct=progress_state["progress_pct"],
+                    eta_seconds=progress_state["eta_seconds"],
                     realtime_factor=progress_state["realtime_factor"],
                 )
             except JobLost:
@@ -472,9 +478,20 @@ async def _process_job(
             # No network call here on purpose -- a service that never
             # answers must not delay the encode. The heartbeat loop reads
             # this same dictionary on its own timer and is the only thing
-            # that ever posts a heartbeat for this job.
+            # that ever posts a heartbeat for this job. The estimate is
+            # computed here for the same reason the percentage is.
             progress_state["progress_pct"] = percent
-            progress_state["realtime_factor"] = progress.speed
+            if progress.speed is not None and progress.speed > 0:
+                # A block reporting no speed, or a zero or negative one, is
+                # a stalled or unreadable reading, not a slow one -- both
+                # values are left at whatever the last usable block set
+                # rather than overwritten with a number the service
+                # refuses (a bare truthiness test would let a negative
+                # speed through).
+                progress_state["realtime_factor"] = progress.speed
+                progress_state["eta_seconds"] = _eta_seconds(
+                    verdict.duration_seconds, progress.out_time_seconds, progress.speed
+                )
 
         # A monotonic reading either side of the run, not the last
         # progress block's own speed -- that reading is the tail of the

@@ -166,6 +166,7 @@ def _run_one_job(
     heartbeat_responses: list | None = None,
     poster_run_ffmpeg=None,
     tail_progress_speed: float = 999.0,
+    mid_progress=None,
 ) -> tuple[list[str] | None, _FakeClient]:
     """Drive one job to its end and hand back the command that would have
     been run, or `None` when the job failed before building one.
@@ -179,6 +180,11 @@ def _run_one_job(
     `heartbeat_interval` overrides the module's own real interval so a
     test does not have to wait real seconds; `heartbeat_responses` is
     handed to `_FakeClient` unchanged.
+
+    `mid_progress`, when given a `Progress` instance, is awaited into
+    `on_progress` (with a small percentage) before the fake run enters its
+    wait loop, so a progress block genuinely precedes some of the
+    heartbeats rather than arriving only at the end of the run.
 
     `output_probe_json` is what `compat.probe`/`compat.analyze` see for
     the *output* file only -- defaults to `probe_json` (the source's own
@@ -202,6 +208,8 @@ def _run_one_job(
         # (`destination.stat().st_size`) has something to read -- no real
         # ffmpeg process runs in this file (module docstring).
         Path(cmd[-1]).write_bytes(b"stub-output-bytes")
+        if mid_progress is not None and on_progress is not None:
+            await on_progress(mid_progress, 1.0)
         elapsed = 0.0
         step = 0.01
         while elapsed < run_seconds:
@@ -621,6 +629,54 @@ def test_the_progress_callback_performs_no_network_call(monkeypatch, tmp_path):
     # The job already finished above with a healthy client; this proves
     # the callback's own shape needs nothing from the client at all.
     asyncio.run(_call_it())
+
+
+def test_a_mid_run_progress_block_yields_a_positive_integer_eta_on_a_heartbeat(
+    monkeypatch, tmp_path
+):
+    """One heartbeat taken after a real progress block carries a positive
+    integer estimate -- the fixture's 1.021-second source at a mid-run
+    speed of 0.05x has 20 seconds of source time left.
+    """
+    from mytube_media.runner import Progress
+
+    _cmd, client = _run_one_job(
+        monkeypatch,
+        tmp_path,
+        _job(),
+        heartbeat_interval=0.01,
+        run_seconds=0.1,
+        mid_progress=Progress(out_time_seconds=0.0, speed=0.05, done=False),
+    )
+
+    etas = [c["eta_seconds"] for c in client.heartbeat_calls if c.get("eta_seconds")]
+    assert etas, "expected at least one heartbeat carrying a positive eta_seconds"
+    assert all(isinstance(v, int) and v > 0 for v in etas)
+
+
+def test_a_stalled_block_reporting_zero_speed_sends_no_zero_eta_on_any_heartbeat(
+    monkeypatch, tmp_path
+):
+    """A block reporting a speed of zero must leave both the realtime
+    factor and the estimate at whatever the last usable block set --
+    forwarding a zero would be refused by the route, and the tail block
+    this harness sends by default is pinned to zero too so a late tick
+    cannot smuggle a zero estimate in past this assertion.
+    """
+    from mytube_media.runner import Progress
+
+    _cmd, client = _run_one_job(
+        monkeypatch,
+        tmp_path,
+        _job(),
+        heartbeat_interval=0.01,
+        run_seconds=0.1,
+        mid_progress=Progress(out_time_seconds=0.0, speed=0.0, done=False),
+        tail_progress_speed=0.0,
+    )
+
+    assert not any(c.get("realtime_factor") == 0 for c in client.heartbeat_calls)
+    assert not any(c.get("eta_seconds") == 0 for c in client.heartbeat_calls)
 
 
 def test_a_heartbeat_answered_not_found_stops_the_run_and_reports_nothing(
