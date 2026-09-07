@@ -2,8 +2,7 @@
 its container and the images it runs in -- rather than its runtime
 behavior, which the other `test_worker_*` files already cover.
 
-Two properties are asserted here, both read straight from the files
-rather than from a running container:
+Three properties are asserted here:
 
 1. The converter's compose service names none of the service's own
    secrets and every variable `WorkerSettings` declares, so a leak on the
@@ -13,15 +12,33 @@ rather than from a running container:
 2. Both `Dockerfile` and `Dockerfile.worker` switch to a non-root user
    before the entrypoint runs, so an ffmpeg invocation over untrusted
    media never runs as uid 0.
+3. The documented bring-up command actually resolves the compose file's
+   interpolation against a real env file, read straight from a running
+   container tool rather than inferred from the file's own text -- the
+   only check in this file that exercises the tool's own interpolation,
+   and the one a text scan of the compose file cannot make: it proves the
+   values resolved rather than that the placeholders exist.
 
 No YAML parser is added for this: the project's own dependency set does
 not already carry one (`pyproject.toml`), so the compose file's
 `environment:` block is found with a plain line scan instead -- exactly
 the fallback the project rule prefers over a new dependency for one
 test.
+
+The third property needs a real container tool, unlike the first two.
+`_container_tool()` below is a second, deliberate skip mechanism beside
+`conftest.py`'s Docker-daemon probe: that one is bound to the
+`integration` marker and gates fixtures that need a running daemon (a
+Postgres container). This one gates a client-side render that needs no
+daemon at all, only the CLI and its compose plugin -- a client without an
+engine, or without the plugin, must skip here too, never fail.
 """
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from worker.settings import WorkerSettings
 
@@ -134,3 +151,75 @@ def test_dockerfile_runs_as_a_non_root_user():
 def test_dockerfile_worker_runs_as_a_non_root_user():
     directives = _user_directives(DOCKERFILE_WORKER)
     assert directives == ["USER mytube"]
+
+
+def _container_tool() -> str | None:
+    """Locate a container tool with a working compose plugin on the
+    search path. Returns the tool's own path only when both
+    `shutil.which` finds it and `docker compose version` succeeds within
+    a short timeout; returns nothing otherwise -- a client without an
+    engine, or without the compose plugin, must skip the test that calls
+    this, never fail it.
+    """
+    tool = shutil.which("docker")
+    if tool is None:
+        return None
+    try:
+        subprocess.run(
+            [tool, "compose", "version"], capture_output=True, timeout=5, check=True
+        )
+    except Exception:
+        return None
+    return tool
+
+
+def test_worker_compose_interpolates_a_real_env_file(tmp_path):
+    """The one check in this file a text scan cannot make: render the
+    documented bring-up command against a temporary env file holding the
+    thirteen names the setup guide's table lists, and prove the fake
+    values it contains come out the other side. The rendered output is
+    asserted against and never printed.
+    """
+    tool = _container_tool()
+    if tool is None:
+        pytest.skip("no container tool with a working compose plugin found on PATH")
+
+    env_file = tmp_path / ".env.worker"
+    with open(env_file, "w", newline="\n", encoding="utf-8") as fh:
+        fh.write(
+            "MYTUBE_ORCHESTRATOR_URL=https://worker-test.example\n"
+            "MYTUBE_WORKER_TOKEN=fake-worker-token-0000\n"
+            "MYTUBE_S3_ENDPOINT=https://s3-test.example\n"
+            "MYTUBE_S3_BUCKET=fake-bucket\n"
+            "MYTUBE_S3_REGION=fake-region\n"
+            "MYTUBE_WORKER_S3_KEY=fake-worker-key\n"
+            "MYTUBE_WORKER_S3_SECRET=fake-worker-secret\n"
+            "MYTUBE_WORKER_NAME=fake-worker-name\n"
+            "MYTUBE_WORKER_VRAM_MIN_MIB=1536\n"
+            "MYTUBE_WORKER_POLL_SECONDS=5.0\n"
+            "MYTUBE_WORKER_MAX_OUTPUT_WIDTH=1920\n"
+            f"MYTUBE_SHARE_HOST_PATH={tmp_path / 'share'}\n"
+            f"MYTUBE_WORKER_SCRATCH_PATH={tmp_path / 'scratch'}\n"
+        )
+
+    result = subprocess.run(
+        [
+            tool,
+            "compose",
+            "--env-file",
+            str(env_file),
+            "-f",
+            str(COMPOSE_WORKER),
+            "config",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    rendered = result.stdout
+    assert "https://worker-test.example" in rendered
+    assert "fake-worker-key" in rendered
+    assert "fake-bucket" in rendered
