@@ -14,6 +14,7 @@ else is rebuilt from the file as it is right now.
 import asyncio
 import contextlib
 import logging
+import os
 import shutil
 import signal
 import time
@@ -797,6 +798,23 @@ async def _run(
         await _process_job(client, s3_client, settings, job, scratch_root, shutdown_event)
 
 
+def _require_writable_scratch(scratch_root: Path) -> None:
+    """Stop the converter before it claims anything if the scratch mount
+    cannot be written to. A bind mount the container tool creates for a
+    missing host directory belongs to root, and this container's own
+    non-root user cannot write into it -- the honest response is to
+    refuse loudly here, once, rather than claim a job and fail partway
+    through with a message that blames the source file instead.
+    """
+    if not os.access(scratch_root, os.W_OK):
+        logger.error(
+            "scratch directory %s is not writable by this container's user "
+            "-- see the setup guide for the ownership it needs",
+            scratch_root,
+        )
+        raise SystemExit(1)
+
+
 def _clean_scratch(scratch_root: Path) -> None:
     """Remove anything a previous run left behind under `scratch_root` --
     a crash mid-job can leave a job-id-named directory with a partial
@@ -821,6 +839,7 @@ async def main() -> None:
 
     scratch_root = Path(settings.work_dir)
     scratch_root.mkdir(parents=True, exist_ok=True)
+    _require_writable_scratch(scratch_root)
     await asyncio.to_thread(_clean_scratch, scratch_root)
 
     try:

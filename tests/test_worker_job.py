@@ -826,3 +826,24 @@ def test_eta_an_estimate_above_the_routes_ceiling_is_capped_at_it():
         worker_main._eta_seconds(worker_main.MAX_ETA_SECONDS * 10, 0.0, 0.1)
         == worker_main.MAX_ETA_SECONDS
     )
+
+
+def test_a_writable_scratch_root_passes_the_check(tmp_path):
+    import worker.__main__ as worker_main
+
+    worker_main._require_writable_scratch(tmp_path)
+
+
+def test_an_unwritable_scratch_root_ends_the_process_naming_the_directory(
+    monkeypatch, tmp_path, caplog
+):
+    import worker.__main__ as worker_main
+
+    monkeypatch.setattr(worker_main.os, "access", lambda *_args, **_kwargs: False)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit) as exc_info:
+            worker_main._require_writable_scratch(tmp_path)
+
+    assert exc_info.value.code != 0
+    assert str(tmp_path) in caplog.text
