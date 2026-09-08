@@ -138,6 +138,7 @@ def test_every_branch_reports_its_own_season_provenance_key(filename):
         "detected_numeral",
         "detected_ordinal",
         "detected_trailing_digit",
+        "detected_fallback",
         "none",
     }
 
