@@ -5,18 +5,22 @@ fixtures.
 `test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_check`
 were the two red-on-purpose tests an earlier phase wrote against a template
 and an `orchestrator.auth` module that did not exist yet; both have been
-green for two phases now. The digest has since been re-pinned exactly
-once, deliberately, in the same edit that added the playlist address's
-`location /p/` block below the sentinel -- see `DELIVERY_DIGEST`'s own
-comment for what it was taken after. Below both of those is a fifth test,
-new in this phase: this project adopted a pinned digest precisely because
-a comment asking a future reader to remember one line is not enforcement,
-and relying on exactly that to keep an application status constant and a
-template directive in agreement would be the same mistake one file over --
-so `test_the_not_ready_status_the_application_answers_is_mapped_to_a_clip`
+green for several phases now. The digest has since been re-pinned twice,
+each time deliberately: once for the playlist phase's own `location /p/`
+block and its `error_page 425` mapping, and once more in this phase for
+the fifth `error_page 423` mapping, `EDITION_PREPARING_STATUS`'s own line
+-- see `DELIVERY_DIGEST`'s own comment for what each re-pin was taken
+after. Below both of the original tests is a third and fourth, added
+across those same two phases: this project adopted a pinned digest
+precisely because a comment asking a future reader to remember one line is
+not enforcement, and relying on exactly that to keep an application status
+constant and a template directive in agreement would be the same mistake
+one file over -- so `test_the_not_ready_status_the_application_answers_is_mapped_to_a_clip`
 ties `orchestrator.web.routes_playlists.PLAYLIST_NOT_READY_STATUS` to the
 template's own `error_page` mapping, parsed out of the template rather than
-restated as a literal.
+restated as a literal, and this phase's own
+`test_the_preparing_status_the_application_answers_is_mapped_to_a_clip`
+does the identical thing for `orchestrator.resolve.EDITION_PREPARING_STATUS`.
 """
 import hashlib
 import re
@@ -33,14 +37,15 @@ SENTINEL = "# ==== admin surface begins here ===="
 # Taken from the template by computing sha256 over everything before
 # SENTINEL (UTF-8 bytes) -- pasted here as a literal, never recomputed
 # from the same file at test time, which would make this test always
-# pass. Re-pinned once, deliberately, after the playlist phase's own edit
-# to the delivery block: a fourth `location /p/` block (mirroring `/v/`)
-# and a fourth `error_page 425 ... playlist-not-ready.mp4` mapping. This
-# is that phase's one and only digest re-pin -- the artifact keys under
-# either assembly mechanism have the same shape the delivery block
-# already accepts, so nothing else in the phase touches the head of this
-# file.
-DELIVERY_DIGEST = "090de78a1c175b2cebb353833508e125a05b66bf8a489211a71eb0f34b72a1d3"
+# pass. Re-pinned twice, each time deliberately: once after the playlist
+# phase's own edit to the delivery block (a fourth `location /p/` block
+# mirroring `/v/`, and a fourth `error_page 425 ... playlist-not-ready.mp4`
+# mapping), and once more in this phase for its own one-line addition, a
+# fifth `error_page 423 ... preparing.mp4` mapping -- this phase's one and
+# only digest re-pin, since the public prefix location needed no change
+# and every numbered/edition address reaches the application through the
+# existing `location /v/` block unmodified.
+DELIVERY_DIGEST = "d26fbd164e1be46e755d435f269a7495f8b68dd4e1ed0c9c1daa822f2baef57c"
 
 # A prefix `location` block (not a regex `location ~ ...` block) whose body
 # proxies to the `orchestrator` upstream. The object-storage location is a
@@ -165,4 +170,27 @@ def test_the_not_ready_status_the_application_answers_is_mapped_to_a_clip():
         f"but the application's PLAYLIST_NOT_READY_STATUS is "
         f"{PLAYLIST_NOT_READY_STATUS} -- a player receiving the real status "
         "would get no mapped clip at all and see a black screen"
+    )
+
+
+def test_the_preparing_status_the_application_answers_is_mapped_to_a_clip():
+    """The identical tripwire, one status code lower in the same table:
+    changing `EDITION_PREPARING_STATUS` without updating the template's own
+    `error_page` mapping would leave a still-converting episode's address
+    answering a status the delivery block does not map to any clip.
+    """
+    from orchestrator.resolve import EDITION_PREPARING_STATUS
+
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+
+    match = re.search(r"error_page\s+(\d+)\s+=200\s+/errors/preparing\.mp4;", text)
+    assert match, (
+        "no `error_page <code> =200 /errors/preparing.mp4;` directive "
+        "found in the template"
+    )
+    assert int(match.group(1)) == EDITION_PREPARING_STATUS, (
+        f"the template maps status {match.group(1)} to the preparing clip, "
+        f"but the application's EDITION_PREPARING_STATUS is "
+        f"{EDITION_PREPARING_STATUS} -- a viewer of a still-converting "
+        "episode would get no mapped clip at all and see a black screen"
     )

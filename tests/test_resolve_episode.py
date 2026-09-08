@@ -13,15 +13,62 @@ import uuid
 from pathlib import Path
 
 import asyncpg
+import httpx
 import pytest
 
+from orchestrator.config import get_settings
 from orchestrator.db import queries
+from orchestrator.main import app
+from orchestrator.resolve import EDITION_PREPARING_STATUS
 
 from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def _resolve_app_env(settings):
+    """Pulls in conftest's `settings` fixture for its env-var side effect
+    (get_settings() otherwise raises) and clears the @lru_cache both before
+    and after, the same shape every other module driving the real
+    application through httpx already uses.
+    """
+    get_settings.cache_clear()
+    yield settings
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+async def _normalize_new_statuses_after_test(raw_conn):
+    """The identical cleanup test_queries.py's own fixture of the same name
+    performs, needed for the identical reason: this file's own tests leave
+    titles in 'preparing' behind (the preparing-status HTTP tests above all
+    do), and migration 0002's own downgrade re-adds the narrower three-
+    value titles_status_check -- a 'preparing' row still present when that
+    downgrade runs violates it outright. test_slug_history.py's full
+    round-trip test (downgrade base, upgrade head) shares this same
+    session-scoped Postgres and runs the full chain through 0002, so
+    without this, its result would depend on which of this file's tests
+    ran first.
+    """
+    yield
+    await raw_conn.execute(
+        "UPDATE titles SET status = 'active' WHERE status IN ('preparing', 'failed')"
+    )
+
+
+@pytest.fixture
+async def http_client(app_pool):
+    """The real application, wired to the real migrated Postgres via
+    `app_pool` -- no db.queries monkeypatching. `/v/` and `/refresh/` are
+    host-exempt (orchestrator.auth.HOST_EXEMPT_PREFIXES), so no session and
+    no matching admin hostname is needed to reach them.
+    """
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client
 
 
 def _alembic_env(migrated_db_url: str) -> dict:
@@ -550,3 +597,232 @@ async def test_resolve_edition_reports_episode_and_edition_status_across_prepari
     )
     row_deleted = await queries.resolve_edition(raw_conn, deleted_edition_id)
     assert row_deleted["episode_status"] == "deleted"
+
+
+# --- Task 3: the two new public addresses, the preparing stub, and the ---
+# --- edition-slug rule, driven through the real application            ---
+
+
+async def test_http_numbered_address_redirects_with_a_signed_location(raw_conn, http_client):
+    _title_id, slug, episodes = await _seed_series(raw_conn, "http-numbered", episode_count=1)
+
+    resp = await http_client.get(f"/v/{slug}/1", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert "/blob/" in resp.headers["location"]
+    assert "sig=" in resp.headers["location"]
+
+
+async def test_http_leading_zero_forms_reach_the_same_episode(raw_conn, http_client):
+    _title_id, slug, episodes = await _seed_series(raw_conn, "http-leading-zero", episode_count=1)
+
+    locations = set()
+    for form in ("1", "01", "001"):
+        resp = await http_client.get(f"/v/{slug}/{form}", follow_redirects=False)
+        assert resp.status_code == 302
+        locations.add(resp.headers["location"].split("?")[0])
+
+    assert len(locations) == 1
+
+
+async def test_http_non_numeric_segment_reaches_the_film_edition_branch(raw_conn, http_client):
+    edition_id = uuid.uuid4()
+    slug = _slug("http-film")
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "HTTP Film", slug, edition_id, f"{edition_id}.mp4"
+    )
+    episode_id = await _episode_id_for_title(raw_conn, title_id)
+    alt_edition_id = uuid.uuid4()
+    await raw_conn.execute(
+        """
+        INSERT INTO editions (id, episode_id, object_key, status, slug)
+        VALUES ($1, $2, $3, 'active', $4)
+        """,
+        alt_edition_id,
+        episode_id,
+        f"{alt_edition_id}.mp4",
+        "directors-cut",
+    )
+
+    resp = await http_client.get(f"/v/{slug}/directors-cut", follow_redirects=False)
+    assert resp.status_code == 302
+    assert f"/blob/{alt_edition_id}.mp4" in resp.headers["location"]
+
+
+async def test_http_three_segment_address_reaches_the_edition_of_that_episode(
+    raw_conn, http_client
+):
+    _title_id, slug, episodes = await _seed_series(
+        raw_conn, "http-episode-edition", episode_count=1
+    )
+    episode_id = episodes[1]
+    alt_edition_id = uuid.uuid4()
+    await raw_conn.execute(
+        """
+        INSERT INTO editions (id, episode_id, object_key, status, slug)
+        VALUES ($1, $2, $3, 'active', $4)
+        """,
+        alt_edition_id,
+        episode_id,
+        f"{alt_edition_id}.mp4",
+        "dub-en",
+    )
+
+    resp = await http_client.get(f"/v/{slug}/1/dub-en", follow_redirects=False)
+    assert resp.status_code == 302
+    assert f"/blob/{alt_edition_id}.mp4" in resp.headers["location"]
+
+
+async def test_http_preparing_answers_the_preparing_status_from_all_four_routes(
+    raw_conn, http_client
+):
+    edition_id = uuid.uuid4()
+    slug = _slug("http-preparing")
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "HTTP Preparing", slug, edition_id, f"{edition_id}.mp4", status="preparing"
+    )
+    await raw_conn.execute("UPDATE editions SET status = 'preparing' WHERE id = $1", edition_id)
+
+    bare_resp = await http_client.get(f"/v/{slug}", follow_redirects=False)
+    numbered_resp = await http_client.get(f"/v/{slug}/1", follow_redirects=False)
+    refresh_resp = await http_client.get(f"/refresh/{edition_id}", follow_redirects=False)
+
+    assert bare_resp.status_code == EDITION_PREPARING_STATUS
+    assert numbered_resp.status_code == EDITION_PREPARING_STATUS
+    assert refresh_resp.status_code == EDITION_PREPARING_STATUS
+    for resp in (bare_resp, numbered_resp, refresh_resp):
+        assert resp.status_code != 410
+
+
+async def test_http_deleted_episode_answers_gone_from_all_four_routes(raw_conn, http_client):
+    edition_id = uuid.uuid4()
+    slug = _slug("http-deleted-episode")
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "HTTP Deleted Episode", slug, edition_id, f"{edition_id}.mp4"
+    )
+    episode_id = await _episode_id_for_title(raw_conn, title_id)
+    await raw_conn.execute("UPDATE episodes SET status = 'deleted' WHERE id = $1", episode_id)
+
+    bare_resp = await http_client.get(f"/v/{slug}", follow_redirects=False)
+    numbered_resp = await http_client.get(f"/v/{slug}/1", follow_redirects=False)
+    refresh_resp = await http_client.get(f"/refresh/{edition_id}", follow_redirects=False)
+
+    assert bare_resp.status_code == 410
+    assert numbered_resp.status_code == 410
+    assert refresh_resp.status_code == 410
+
+
+async def test_http_unknown_number_answers_not_found(raw_conn, http_client):
+    _title_id, slug, _episodes = await _seed_series(
+        raw_conn, "http-unknown-number", episode_count=1
+    )
+
+    resp = await http_client.get(f"/v/{slug}/999", follow_redirects=False)
+    assert resp.status_code == 404
+
+
+async def test_http_absurdly_long_numeric_segment_answers_not_found_not_raising(
+    raw_conn, http_client
+):
+    _title_id, slug, _episodes = await _seed_series(
+        raw_conn, "http-absurd-segment", episode_count=1
+    )
+
+    resp = await http_client.get(f"/v/{slug}/{'9' * 40}", follow_redirects=False)
+    assert resp.status_code == 404
+
+
+async def test_http_a_title_created_after_the_migration_answers_at_its_numbered_address(
+    raw_conn, http_client
+):
+    edition_id = uuid.uuid4()
+    slug = _slug("http-created-after")
+    await queries.create_title_with_edition(
+        raw_conn, "HTTP Created After Migration", slug, edition_id, f"{edition_id}.mp4"
+    )
+
+    bare_resp = await http_client.get(f"/v/{slug}", follow_redirects=False)
+    numbered_resp = await http_client.get(f"/v/{slug}/01", follow_redirects=False)
+
+    assert bare_resp.status_code == 302
+    assert numbered_resp.status_code == 302
+    assert (
+        bare_resp.headers["location"].split("?")[0]
+        == numbered_resp.headers["location"].split("?")[0]
+    )
+
+
+async def test_http_bare_address_with_an_episode_pointer_plays_that_episode(
+    raw_conn, http_client
+):
+    title_id, _series_slug, episodes = await _seed_series(
+        raw_conn, "http-pointer-series", episode_count=2
+    )
+    episode_2_id = episodes[2]
+    episode_2_edition = await raw_conn.fetchval(
+        "SELECT default_edition_id FROM episodes WHERE id = $1", episode_2_id
+    )
+
+    moved_slug = _slug("http-moved-pointer")
+    await raw_conn.execute(
+        "INSERT INTO slug_history (slug, title_id, episode_id, is_current) "
+        "VALUES ($1, $2, $3, false)",
+        moved_slug,
+        title_id,
+        episode_2_id,
+    )
+
+    resp = await http_client.get(f"/v/{moved_slug}", follow_redirects=False)
+    assert resp.status_code == 302
+    assert f"/blob/{episode_2_edition}.mp4" in resp.headers["location"]
+
+    # Also answers preparing correctly when that specific episode is not
+    # ready -- the whole point of the pointer is that it is this episode's
+    # own readiness that decides, not the series' first episode.
+    await raw_conn.execute(
+        "UPDATE editions SET status = 'preparing' WHERE id = $1", episode_2_edition
+    )
+    resp_preparing = await http_client.get(f"/v/{moved_slug}", follow_redirects=False)
+    assert resp_preparing.status_code == EDITION_PREPARING_STATUS
+
+
+async def test_http_refresh_of_a_preparing_and_a_deleted_edition(raw_conn, http_client):
+    _title_id, slug, episodes = await _seed_series(
+        raw_conn, "http-refresh-statuses", episode_count=2
+    )
+    episode_1_edition = await raw_conn.fetchval(
+        "SELECT default_edition_id FROM episodes WHERE id = $1", episodes[1]
+    )
+    episode_2_edition = await raw_conn.fetchval(
+        "SELECT default_edition_id FROM episodes WHERE id = $1", episodes[2]
+    )
+    await raw_conn.execute(
+        "UPDATE editions SET status = 'preparing' WHERE id = $1", episode_1_edition
+    )
+    await raw_conn.execute("UPDATE episodes SET status = 'deleted' WHERE id = $1", episodes[2])
+
+    preparing_resp = await http_client.get(
+        f"/refresh/{episode_1_edition}", follow_redirects=False
+    )
+    deleted_resp = await http_client.get(f"/refresh/{episode_2_edition}", follow_redirects=False)
+
+    assert preparing_resp.status_code == EDITION_PREPARING_STATUS
+    assert deleted_resp.status_code == 410
+    assert "location" not in preparing_resp.headers
+    assert "location" not in deleted_resp.headers
+
+
+async def test_http_a_title_with_one_ready_and_one_preparing_episode_serves_both(
+    raw_conn, http_client
+):
+    _title_id, slug, episodes = await _seed_series(
+        raw_conn, "http-mixed-readiness", episode_count=1
+    )
+    season_id = await _season_id_for_title(raw_conn, _title_id)
+    await _add_episode(raw_conn, _title_id, season_id, 2, edition_status="preparing")
+
+    ready_resp = await http_client.get(f"/v/{slug}/1", follow_redirects=False)
+    preparing_resp = await http_client.get(f"/v/{slug}/2", follow_redirects=False)
+
+    assert ready_resp.status_code == 302
+    assert preparing_resp.status_code == EDITION_PREPARING_STATUS

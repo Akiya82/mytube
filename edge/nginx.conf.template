@@ -195,6 +195,7 @@ server {
     error_page 410             =200 /errors/deleted.mp4;
     error_page 403 500 502 503 504 =200 /errors/unavailable.mp4;
     error_page 425             =200 /errors/playlist-not-ready.mp4;
+    error_page 423             =200 /errors/preparing.mp4;
 
     location /errors/ {
         internal;

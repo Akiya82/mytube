@@ -48,6 +48,40 @@ def similar_key(slug: str) -> str:
     return slug.replace("-", "")
 
 
+class EditionSlugRefused(Exception):
+    """Raised when a candidate cannot be used as an edition slug."""
+
+
+def normalize_edition_slug(name: str) -> str:
+    """`normalize_slug`, plus one more refusal: an edition slug may never
+    be made only of digits.
+
+    An edition slug and an episode number share the same second path
+    segment (GET /v/{slug}/{segment}, orchestrator.resolve) -- the route
+    decides which resolver to run purely from whether that segment is made
+    only of digits, in Python, before either query runs. A slug that
+    normalised to an all-digit string would be silently read as an episode
+    number instead of an edition slug the moment it was saved, and the
+    address would resolve to whichever episode happened to hold that
+    number -- or to nothing at all -- rather than to the edition it names.
+
+    Uniqueness is scoped to one episode, not global, and is the caller's
+    job, checked inside its own locked transaction exactly as a title
+    slug's uniqueness already is (create_title_with_edition). It is
+    deliberately not checked here, so this stays a pure function and
+    nobody later reaches for a database read inside it.
+    """
+    slug = normalize_slug(name)
+    if slug.isdigit():
+        raise EditionSlugRefused(
+            f"{slug!r} is made only of digits -- an edition slug shaped "
+            "like that would be read as an episode number at the same "
+            "address, and the edition would never resolve. Choose a slug "
+            "with at least one non-digit character."
+        )
+    return slug
+
+
 def pick_unique_slug(candidate: str, taken: set[str]) -> tuple[str, list[str]]:
     """Deterministically pick a free slug close to `candidate`.
 

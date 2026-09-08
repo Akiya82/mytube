@@ -2,7 +2,14 @@ import re
 
 import pytest
 
-from orchestrator.slugs import SlugError, normalize_slug, pick_unique_slug, similar_key
+from orchestrator.slugs import (
+    EditionSlugRefused,
+    SlugError,
+    normalize_edition_slug,
+    normalize_slug,
+    pick_unique_slug,
+    similar_key,
+)
 
 
 def test_transliterates_cyrillic_title():
@@ -73,3 +80,22 @@ def test_pick_unique_slug_no_similar_when_none_match():
     slug, similar = pick_unique_slug("brand-new", {"something-else"})
     assert slug == "brand-new"
     assert similar == []
+
+
+def test_normalize_edition_slug_passes_a_normal_name_through():
+    assert normalize_edition_slug("Dub RU") == "dub-ru"
+
+
+def test_normalize_edition_slug_refuses_an_all_digit_slug():
+    with pytest.raises(EditionSlugRefused):
+        normalize_edition_slug("2024")
+
+
+def test_normalize_edition_slug_refuses_a_slug_that_normalises_to_digits_only():
+    with pytest.raises(EditionSlugRefused):
+        normalize_edition_slug("  007  ")
+
+
+def test_normalize_edition_slug_refuses_an_empty_result():
+    with pytest.raises(SlugError):
+        normalize_edition_slug("???")

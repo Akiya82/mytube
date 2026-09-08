@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds four short MP4 clips to stand in for error codes: "this video was
-# deleted", "no such link", "service unavailable", "playlist not ready yet".
-# Each is 6s, 1280x720, H.264 High, yuv420p, +faststart (this project's own
-# encoding pitfalls).
+# Builds five short MP4 clips to stand in for error codes: "this video was
+# deleted", "no such link", "service unavailable", "playlist not ready yet",
+# "this video is still being prepared". Each is 6s, 1280x720, H.264 High,
+# yuv420p, +faststart (this project's own encoding pitfalls).
 #
 # Usage: make_error_clips.sh <fontfile> [output_dir]
 #   fontfile     required argument, with no "smart" default: DejaVuSans
@@ -92,5 +92,6 @@ build_clip "this video was deleted" "$OUTPUT_DIR/deleted.mp4"
 build_clip "no such link" "$OUTPUT_DIR/not-found.mp4"
 build_clip "service unavailable" "$OUTPUT_DIR/unavailable.mp4"
 build_clip "playlist not ready yet" "$OUTPUT_DIR/playlist-not-ready.mp4"
+build_clip "this video is still being prepared, try again in a few minutes" "$OUTPUT_DIR/preparing.mp4"
 
-echo "OK: four clips built and verified in $OUTPUT_DIR"
+echo "OK: five clips built and verified in $OUTPUT_DIR"
