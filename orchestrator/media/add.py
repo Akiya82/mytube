@@ -175,3 +175,57 @@ def parse_subtitle_choice(
 # `mytube_media.subtitles`, beside the enumeration it walks. The name is
 # still exported from here, which is where the rest of the service
 # already reaches for it.
+
+
+# --- the audio_choice form field (D-180, D-181, T-05-13) -------------------
+
+_AUDIO_KIND_EMBEDDED_PREFIX = "embedded:"
+_AUDIO_KIND_EXTERNAL_PREFIX = "external:"
+
+
+class AudioChoiceRefused(Exception):
+    """`audio_choice` is malformed -- never a catalog key shown to the
+    operator, just a signal for the caller to answer its own refusal
+    shape, the same role `SubtitleChoiceRefused` already plays.
+    """
+
+
+def parse_audio_choice(value: str) -> tuple[str, int | None, str | None]:
+    """`(kind, stream_index, path)` from the add form's single
+    `audio_choice` radio value -- `kind` is one of `"embedded"` or
+    `"external"`; there is no `"none"` (an audio choice is never optional,
+    D-42) and no `"manual"` (a hand-typed audio path is joined into an
+    `external:` value by the form's own script before it ever reaches this
+    parser -- see static/app.js -- so this grammar stays exactly two
+    shapes wide).
+
+    `path` is always a share-relative string when `kind` is `"external"`,
+    never an absolute one and never trusted un-contained -- the caller
+    still has to resolve it through `mytube_media.share.safe_join` before
+    it touches the filesystem (T-05-13), this function only shapes the
+    value and performs no filesystem access of its own.
+
+    Raises `AudioChoiceRefused` for anything malformed: no recognised
+    prefix, an embedded index that is not a plain integer, an external
+    path that is empty, or an external path that is absolute (a leading
+    `/` or a Windows drive letter) -- an absolute path could only ever
+    have been crafted by hand, since every path this form itself ever
+    emits is share-relative.
+    """
+    if value.startswith(_AUDIO_KIND_EMBEDDED_PREFIX):
+        raw_index = value[len(_AUDIO_KIND_EMBEDDED_PREFIX):]
+        try:
+            return "embedded", int(raw_index), None
+        except ValueError:
+            raise AudioChoiceRefused() from None
+
+    if value.startswith(_AUDIO_KIND_EXTERNAL_PREFIX):
+        rel = value[len(_AUDIO_KIND_EXTERNAL_PREFIX):]
+        if not rel:
+            raise AudioChoiceRefused()
+        posix = PurePosixPath(rel)
+        if posix.is_absolute() or (len(rel) > 1 and rel[1] == ":"):
+            raise AudioChoiceRefused()
+        return "external", None, rel
+
+    raise AudioChoiceRefused()

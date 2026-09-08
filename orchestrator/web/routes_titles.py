@@ -50,23 +50,48 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse, Response
 
-from mytube_media.compat import ProbeError, audio_tracks, probe
+from mytube_media.compat import ProbeError, audio_tracks, external_audio_track, probe
 from mytube_media.share import ShareEscape, relative_to_root, safe_join
 from mytube_media.stereo3d import LAYOUTS as STEREO_LAYOUTS
 from orchestrator.config import get_settings
 from orchestrator.db import queries
+from orchestrator.language import resolve_track_kind
 from orchestrator.media.add import (
+    AudioChoiceRefused,
     SlugPlan,
     SubtitleChoiceRefused,
     embedded_subtitle_kind,
+    parse_audio_choice,
     parse_subtitle_choice,
     plan_slug,
 )
 from orchestrator.reaper import reap_once
 from orchestrator.slugs import SlugError
 from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
-from orchestrator.web.routes_share import _resolve_share_path, _unreachable_response
+from orchestrator.web.routes_share import (
+    _folder_segments_relative_to,
+    _resolve_share_path,
+    _unreachable_response,
+)
 from orchestrator.web.templates import humanize_seconds, render
+
+
+def _resolve_signs_only(source: Path, subtitle_target: Path) -> bool | None:
+    """D-186 at add time: the first folder token between the source and
+    the chosen external subtitle file that resolves to signs-only or
+    full, or `None` when nothing in the path resolves either word -- the
+    exact same resolution `routes_share._render_add_form` already applies
+    when it draws the caption for this same file, re-run here because the
+    route validates the choice fresh rather than trusting what the form
+    last rendered (T-02-06's own discipline, applied to this new field).
+    """
+    folder_segments = _folder_segments_relative_to(source, subtitle_target)
+    for token in folder_segments:
+        kind = resolve_track_kind(token)
+        if kind in ("signs_only", "full"):
+            return kind == "signs_only"
+    return None
+
 
 router = APIRouter()
 
@@ -102,7 +127,7 @@ async def add_confirm_route(
     path: str,
     name: str = Form(...),
     slug: str = Form(...),
-    audio_track: str = Form(...),
+    audio_choice: str = Form(...),
     stereo_layout: str = Form("2d"),
     subtitle_choice: str = Form("none"),
     subtitle_manual_path: str = Form(""),
@@ -135,30 +160,60 @@ async def add_confirm_route(
     if not clean_name:
         return _unreachable_response(request, status_code=400)
 
+    # T-05-13: the compound audio choice is re-derived from the form on
+    # every submission, never trusted from an earlier page render -- a
+    # submission bypassing the page's own controls gets exactly the same
+    # scrutiny a normal one does.
     try:
-        audio_index = int(audio_track)
-    except ValueError:
+        audio_kind, audio_index, audio_rel_path = parse_audio_choice(audio_choice)
+    except AudioChoiceRefused:
         return _unreachable_response(request, status_code=400)
 
     if stereo_layout not in STEREO_LAYOUTS:
         return _unreachable_response(request, status_code=400)
 
-    # Re-probed here, not trusted from the form that opened the page (T-02-06):
-    # `audio_index` ends up as an ffmpeg stream selector, so it is checked
-    # against the file as it is right now, not as it was when the form drew.
+    # Re-probed here, not trusted from the form that opened the page
+    # (T-02-06): the embedded audio index and the subtitle choice both end
+    # up as ffmpeg stream selectors, so both are checked against the file
+    # as it is right now, not as it was when the form drew.
     try:
         probe_json = await asyncio.to_thread(probe, target)
     except ProbeError:
         return _unreachable_response(request, status_code=400)
 
-    tracks = audio_tracks(probe_json)
-    selected = next((t for t in tracks if t.index == audio_index), None)
-    if selected is None:
-        return _unreachable_response(request, status_code=400)
+    external_audio_rel_path: str | None = None
+    if audio_kind == "embedded":
+        tracks = audio_tracks(probe_json)
+        selected = next((t for t in tracks if t.index == audio_index), None)
+        if selected is None:
+            return _unreachable_response(request, status_code=400)
+        audio_channels = selected.channels
+    else:
+        # An external audio choice is contained against the share root the
+        # same way an external subtitle choice already is, and must exist
+        # right now -- a missing or out-of-bounds choice fails the request
+        # with its own refusal (T-05-16), never a silent fall back to the
+        # embedded track, since the operator specifically asked for the
+        # dub (add.audio_choice.missing / add.audio_choice.outside_share).
+        try:
+            audio_target = safe_join(root, audio_rel_path)
+        except ShareEscape:
+            return _unreachable_response(request, status_code=400)
+        exists = await asyncio.to_thread(audio_target.is_file)
+        if not exists:
+            return _unreachable_response(request, status_code=400)
+        try:
+            probed_external = await asyncio.to_thread(external_audio_track, audio_target)
+        except ProbeError:
+            return _unreachable_response(request, status_code=400)
+        external_audio_rel_path = relative_to_root(root, audio_target)
+        audio_index = None
+        audio_channels = probed_external.channels
 
     clean_subtitle_kind = "none"
     clean_subtitle_stream_index: int | None = None
     clean_subtitle_path: str | None = None
+    subtitle_signs_only: bool | None = None
 
     if is_convert:
         try:
@@ -193,6 +248,12 @@ async def add_confirm_route(
                 return _unreachable_response(request, status_code=400)
             clean_subtitle_kind = "external"
             clean_subtitle_path = relative_to_root(root, subtitle_target)
+            # D-186: the editions.subtitle_burned_signs_only column is
+            # written below, once the edition exists, only when a folder
+            # token between the source and this file actually resolved
+            # one of the two words -- left unset (NULL) otherwise, since
+            # unknown and known-false are different facts.
+            subtitle_signs_only = _resolve_signs_only(target, subtitle_target)
         else:
             clean_subtitle_kind = "none"
 
@@ -247,7 +308,7 @@ async def add_confirm_route(
                 status="preparing",
                 source_path=rel_path,
                 audio_stream_index=audio_index,
-                audio_channels=selected.channels,
+                audio_channels=audio_channels,
                 # D-139: both actions carry the layout selector and both
                 # store what it says -- a file that arrives already
                 # stereo-compatible takes this as-is path, and it is the
@@ -258,6 +319,11 @@ async def add_confirm_route(
                 # edition is never written twice for the same fact.
                 stereo_layout=None if is_convert else stereo_layout,
             )
+
+            if subtitle_signs_only is not None:
+                await queries.set_edition_subtitle_signs_only(
+                    conn, edition_id, subtitle_signs_only
+                )
 
             # The row is written and the response returns before the
             # actual work happens (D-49) -- the durable `jobs` table row
@@ -278,6 +344,7 @@ async def add_confirm_route(
                     subtitle_stream_index=clean_subtitle_stream_index,
                     subtitle_path=clean_subtitle_path,
                     stereo_layout=stereo_layout,
+                    external_audio_path=external_audio_rel_path,
                 )
             else:
                 await queries.enqueue_job(
@@ -287,6 +354,7 @@ async def add_confirm_route(
                     edition_id=edition_id,
                     source_path=rel_path,
                     audio_stream_index=audio_index,
+                    external_audio_path=external_audio_rel_path,
                 )
 
     return RedirectResponse("/library", status_code=302)

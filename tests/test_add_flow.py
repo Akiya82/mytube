@@ -27,6 +27,7 @@ from mytube_media.compat import probe as ffprobe_probe
 from orchestrator.config import get_settings
 from orchestrator.main import app
 from orchestrator.media import queue as queue_module
+from orchestrator.media.add import AudioChoiceRefused, parse_audio_choice
 from orchestrator.media.queue import AddJob
 
 from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
@@ -180,7 +181,7 @@ def _post_data(clip: dict, *, name: str, slug: str, confirm_reuse: str = "false"
     return {
         "name": name,
         "slug": slug,
-        "audio_track": str(clip["audio_index"]),
+        "audio_choice": f"embedded:{clip['audio_index']}",
         "confirm_reuse": confirm_reuse,
     }
 
@@ -383,6 +384,69 @@ async def test_poster_extraction_failure_still_ends_active_with_null_poster_key(
     assert edition["poster_key"] is None
 
 
+# --- parse_audio_choice (T-05-13) ----------------------------------------
+
+
+def test_parse_audio_choice_embedded_returns_the_absolute_stream_index():
+    assert parse_audio_choice("embedded:2") == ("embedded", 2, None)
+
+
+def test_parse_audio_choice_external_returns_the_share_relative_path():
+    assert parse_audio_choice("external:RUS Sound/AniStar/dub_05.mka") == (
+        "external",
+        None,
+        "RUS Sound/AniStar/dub_05.mka",
+    )
+
+
+def test_parse_audio_choice_refuses_an_absolute_unix_path():
+    with pytest.raises(AudioChoiceRefused):
+        parse_audio_choice("external:/etc/passwd")
+
+
+def test_parse_audio_choice_refuses_a_windows_drive_absolute_path():
+    with pytest.raises(AudioChoiceRefused):
+        parse_audio_choice("external:C:/dub.mka")
+
+
+def test_parse_audio_choice_refuses_a_value_with_no_separator():
+    with pytest.raises(AudioChoiceRefused):
+        parse_audio_choice("2")
+
+
+def test_parse_audio_choice_refuses_a_non_numeric_embedded_index():
+    with pytest.raises(AudioChoiceRefused):
+        parse_audio_choice("embedded:not-a-number")
+
+
+def test_parse_audio_choice_refuses_an_empty_external_path():
+    with pytest.raises(AudioChoiceRefused):
+        parse_audio_choice("external:")
+
+
+def test_parse_audio_choice_never_touches_the_filesystem(monkeypatch):
+    """`parse_audio_choice` shapes the value only -- containment and
+    existence are the caller's job (T-05-13). Proven by making every
+    filesystem entry point explode and confirming a normal call still
+    answers normally.
+    """
+    import os
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("parse_audio_choice touched the filesystem")
+
+    monkeypatch.setattr("builtins.open", _boom)
+    monkeypatch.setattr(os, "stat", _boom)
+    monkeypatch.setattr(os.path, "exists", _boom)
+
+    assert parse_audio_choice("embedded:2") == ("embedded", 2, None)
+    assert parse_audio_choice("external:Subs/dub.mka") == (
+        "external",
+        None,
+        "Subs/dub.mka",
+    )
+
+
 # --- validation ---------------------------------------------------------
 
 
@@ -397,7 +461,7 @@ async def test_invalid_audio_index_rejected_with_400_and_writes_no_row(
         data={
             "name": "Bad Audio Index",
             "slug": "bad-audio-index",
-            "audio_track": "999",
+            "audio_choice": "embedded:999",
             "confirm_reuse": "false",
         },
         follow_redirects=False,

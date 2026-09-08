@@ -480,6 +480,26 @@ async def set_edition_poster(conn: asyncpg.Connection, edition_id, poster_key: s
     )
 
 
+async def set_edition_subtitle_signs_only(
+    conn: asyncpg.Connection, edition_id, signs_only: bool
+) -> None:
+    """Record D-186's signs-only/full attribute on the edition, resolved
+    from the chosen subtitle's own folder tokens at add time -- the
+    operator's choice is already known the moment the add route validates
+    it, so this never waits for the conversion itself to finish. Called
+    only when the route actually resolved one of the two words (`bool`,
+    not `bool | None`): an unresolved folder leaves the column at its
+    default `NULL` by simply never being called, since an unknown
+    attribute and a known-false one are different facts (see the column's
+    own migration comment).
+    """
+    await conn.execute(
+        "UPDATE editions SET subtitle_burned_signs_only = $2 WHERE id = $1",
+        edition_id,
+        signs_only,
+    )
+
+
 async def editions_by_source_paths(
     conn: asyncpg.Connection, paths: list[str]
 ) -> list[asyncpg.Record]:

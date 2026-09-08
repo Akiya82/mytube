@@ -111,6 +111,7 @@ def db_stub(monkeypatch):
     stub = _Stub()
     stub.create_title_calls = []
     stub.enqueue_job_calls = []
+    stub.set_edition_subtitle_signs_only_calls = []
 
     async def _resolve_slug(conn, slug):
         return stub.resolve_slug_result
@@ -134,12 +135,18 @@ def db_stub(monkeypatch):
         stub.enqueue_job_calls.append(kwargs)
         return "22222222-2222-2222-2222-222222222222"
 
+    async def _set_edition_subtitle_signs_only(conn, edition_id, signs_only):
+        stub.set_edition_subtitle_signs_only_calls.append(signs_only)
+
     monkeypatch.setattr(queries, "resolve_slug", _resolve_slug)
     monkeypatch.setattr(queries, "taken_slugs", _taken_slugs)
     monkeypatch.setattr(queries, "editions_by_source_paths", _editions_by_source_paths)
     monkeypatch.setattr(queries, "median_realtime_factor", _median_realtime_factor)
     monkeypatch.setattr(queries, "create_title_with_edition", _create_title_with_edition)
     monkeypatch.setattr(queries, "enqueue_job", _enqueue_job)
+    monkeypatch.setattr(
+        queries, "set_edition_subtitle_signs_only", _set_edition_subtitle_signs_only
+    )
     return stub
 
 
@@ -1002,7 +1009,7 @@ def _post_add(client, **overrides):
     data = {
         "name": "A Video",
         "slug": "a-video",
-        "audio_track": "1",
+        "audio_choice": "embedded:1",
         "stereo_layout": "2d",
         "subtitle_choice": "none",
         "subtitle_manual_path": "",
@@ -1155,6 +1162,7 @@ async def test_convert_payload_carries_only_the_operators_choices(post_client, d
     assert job["subtitle_stream_index"] == 2
     assert job["subtitle_path"] is None
     assert job["stereo_layout"] == "2d"
+    assert job["external_audio_path"] is None
     # Nothing derived -- no command, no encoder settings, no filter string.
     assert set(job.keys()) == {
         "kind",
@@ -1166,7 +1174,127 @@ async def test_convert_payload_carries_only_the_operators_choices(post_client, d
         "subtitle_stream_index",
         "subtitle_path",
         "stereo_layout",
+        "external_audio_path",
     }
+
+
+# --- POST /add/{path} -- the audio_choice compound value (T-05-13) -------
+
+
+async def test_an_external_audio_choice_queues_the_external_path(
+    post_client, db_stub, share_root, monkeypatch
+):
+    (share_root / "RUS Sound").mkdir()
+    (share_root / "RUS Sound" / "dub.mka").write_bytes(b"stub dub bytes")
+    monkeypatch.setattr(
+        routes_titles,
+        "external_audio_track",
+        lambda path: AudioTrack(
+            index=0,
+            codec="aac",
+            channels=2,
+            language="rus",
+            title="Russian dub",
+            external_path=str(path),
+        ),
+    )
+
+    async with post_client:
+        resp = await _post_add(post_client, audio_choice="external:RUS Sound/dub.mka")
+
+    assert resp.status_code == 302
+    assert len(db_stub.enqueue_job_calls) == 1
+    job = db_stub.enqueue_job_calls[0]
+    assert job["external_audio_path"] == "RUS Sound/dub.mka"
+    assert job["audio_stream_index"] is None
+    assert db_stub.create_title_calls[0]["audio_stream_index"] is None
+    assert db_stub.create_title_calls[0]["audio_channels"] == 2
+
+
+async def test_an_external_audio_choice_refuses_an_absolute_path(post_client, db_stub):
+    async with post_client:
+        resp = await _post_add(post_client, audio_choice="external:/etc/passwd")
+
+    assert resp.status_code == 400
+    assert db_stub.create_title_calls == []
+
+
+async def test_an_external_audio_choice_refuses_a_path_outside_the_share(
+    post_client, db_stub
+):
+    async with post_client:
+        resp = await _post_add(post_client, audio_choice="external:../outside.mka")
+
+    assert resp.status_code == 400
+    assert db_stub.create_title_calls == []
+
+
+async def test_an_external_audio_choice_refuses_a_path_that_does_not_exist(
+    post_client, db_stub
+):
+    async with post_client:
+        resp = await _post_add(post_client, audio_choice="external:RUS Sound/no-such.mka")
+
+    assert resp.status_code == 400
+    assert db_stub.create_title_calls == []
+
+
+async def test_an_embedded_index_the_probe_never_reported_is_refused_via_audio_choice(
+    post_client, db_stub
+):
+    async with post_client:
+        resp = await _post_add(post_client, audio_choice="embedded:999")
+
+    assert resp.status_code == 400
+    assert db_stub.create_title_calls == []
+
+
+async def test_a_malformed_audio_choice_bypassing_the_page_is_refused(post_client, db_stub):
+    """A submission with no page's own controls behind it -- an
+    unrecognised `audio_choice` value -- is refused the same way a
+    tampered one would be (T-05-13).
+    """
+    async with post_client:
+        resp = await _post_add(post_client, audio_choice="not-a-real-choice")
+
+    assert resp.status_code == 400
+    assert db_stub.create_title_calls == []
+
+
+async def test_convert_with_an_external_subtitle_signs_only_folder_writes_the_attribute(
+    post_client, db_stub, share_root
+):
+    (share_root / "Subs" / "Signs").mkdir(parents=True)
+    (share_root / "Subs" / "Signs" / "a-video.eng.srt").write_bytes(b"1\n")
+
+    async with post_client:
+        resp = await _post_add(
+            post_client,
+            add=None,
+            convert="1",
+            subtitle_choice="external:Subs/Signs/a-video.eng.srt",
+        )
+
+    assert resp.status_code == 302
+    assert db_stub.set_edition_subtitle_signs_only_calls == [True]
+
+
+async def test_convert_with_an_external_subtitle_in_an_unlabelled_folder_leaves_the_attribute_unset(
+    post_client, db_stub, share_root
+):
+    (share_root / "Subs" / "Random").mkdir(parents=True)
+    (share_root / "Subs" / "Random" / "a-video.eng.srt").write_bytes(b"1\n")
+
+    async with post_client:
+        resp = await _post_add(
+            post_client,
+            add=None,
+            convert="1",
+            subtitle_choice="external:Subs/Random/a-video.eng.srt",
+        )
+
+    assert resp.status_code == 302
+    assert db_stub.set_edition_subtitle_signs_only_calls == []
 
 
 # --- required_free_bytes: already-correct vs. not ------------------------

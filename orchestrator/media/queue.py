@@ -556,6 +556,16 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         selected_track = next(
             (t for t in verdict.tracks if t.index == job.audio_stream_index), None
         )
+        # D-181: the technical detail describes whichever track actually
+        # ended up in the output -- the external dub when the job chose
+        # one, the embedded track otherwise. `job.audio_stream_index` never
+        # matches an external dub's own index by construction (T-05-13's
+        # form never emits an embedded index alongside an external
+        # choice), so `selected_track` alone would silently record no
+        # language/title at all for a job that plainly has both.
+        audio_track_for_technical = (
+            external_track if external_audio_source is not None else selected_track
+        )
 
         async def _mark_active(conn) -> None:
             await queries.set_edition_technical(
@@ -565,8 +575,12 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 duration_seconds=verdict.duration_seconds or 0.0,
                 width=verdict.width or 0,
                 height=verdict.height or 0,
-                audio_language=selected_track.language if selected_track else None,
-                audio_title=selected_track.title if selected_track else None,
+                audio_language=(
+                    audio_track_for_technical.language if audio_track_for_technical else None
+                ),
+                audio_title=(
+                    audio_track_for_technical.title if audio_track_for_technical else None
+                ),
                 audio_reencoded=verdict.audio_needs_reencode,
                 # The four video parameters come straight from the verdict:
                 # the video stream is always copied, so its parameters
@@ -583,13 +597,19 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 pix_fmt=verdict.pix_fmt,
                 audio_codec=(
                     compat.effective_audio_codec(
-                        selected_track.codec, verdict.audio_needs_reencode
+                        audio_track_for_technical.codec, verdict.audio_needs_reencode
                     )
-                    if selected_track
+                    if audio_track_for_technical
                     else None
                 ),
-                audio_sample_rate=selected_track.sample_rate if selected_track else None,
-                audio_channel_layout=selected_track.channel_layout if selected_track else None,
+                audio_sample_rate=(
+                    audio_track_for_technical.sample_rate if audio_track_for_technical else None
+                ),
+                audio_channel_layout=(
+                    audio_track_for_technical.channel_layout
+                    if audio_track_for_technical
+                    else None
+                ),
             )
             if poster_key is not None:
                 await queries.set_edition_poster(conn, job.edition_id, poster_key)
