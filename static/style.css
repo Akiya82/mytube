@@ -779,19 +779,60 @@ button.site-nav__link {
   gap: var(--space-md);
 }
 
-/* The manual subtitle path field, revealed only while its own radio is
-   checked (04-UI-SPEC.md States -> Subtitles, item 5). `:has()` reaches
-   into the radio-group fieldset for the one option's checked state --
-   the input sits inside its own <label>, so a bare `:checked ~` sibling
-   selector cannot see past that wrapper; `:has()` is plain CSS, still no
-   script, and is the mechanism this rule actually needs for the markup
-   shape every other radio option in this project already uses. */
+/* The manual audio/subtitle path field (05-UI-SPEC.md External audio and
+   subtitle labelling): always visible now, the fallback beside the real
+   picker rather than a state gated on a visible radio option -- the
+   `:has()`-driven reveal this replaced is gone along with the radio
+   option it watched for (T-05-14, static/app.js). */
 .manual-path-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.manual-path-field__row {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.manual-path-field__row .form-field__input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The sidecar/audio picker's own container (T-05-14): empty and hidden
+   until static/app.js fetches a candidate list into it, the same
+   `:empty` mechanism `.preview-panel` already uses. */
+.picker-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.picker-panel:empty {
   display: none;
 }
 
-.radio-group:has(#subtitle-choice-manual:checked) ~ .manual-path-field {
+/* External track captions (05-UI-SPEC.md States -> External audio and
+   subtitle labelling): a second line under an external option's own
+   filename. The muted caption reuses .audio-note's own tint; only the
+   stacked alignment and the inline warning line are new selectors, and
+   neither introduces a colour or a spacing value this stylesheet does
+   not already have. */
+.radio-group__option--stacked {
+  align-items: flex-start;
+}
+
+.radio-group__option-text {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.radio-group__warning {
+  font-size: var(--text-label-size);
+  color: var(--status-preparing-text);
+  margin: 0;
 }
 
 /* The preview panel (04-UI-SPEC.md States -> Preview) -- empty until a

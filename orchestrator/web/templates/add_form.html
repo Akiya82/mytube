@@ -120,16 +120,69 @@
 
     {# --- 6. Audio track picker -- condition loosened from
        "verdict.eligible" to "the probe succeeded" (Amendment 2): a
-       conversion needs a track chosen exactly as a copy does. --- #}
+       conversion needs a track chosen exactly as a copy does. Embedded and
+       external tracks share one list (D-181): the file's own streams
+       first, in file order, then every dub the walker found beside it.
+       Gated on the source having at least one embedded audio stream --
+       analyze() already refuses eligibility entirely (reason.no_audio)
+       for a source with none, so an audio picker of any kind, manual
+       included, would have nothing to attach a choice to. --- #}
+    {% if verdict.tracks %}
     <fieldset class="form-field radio-group">
       <legend class="form-field__label">{{ t("add.field.audio") }}</legend>
       {% for track in verdict.tracks %}
         <label class="radio-group__option">
-          <input type="radio" name="audio_track" value="{{ track.index }}"{% if track.index == verdict.default_track_index %} checked{% endif %}>
+          <input type="radio" name="audio_choice" value="embedded:{{ track.index }}"{% if track.index == verdict.default_track_index %} checked{% endif %}>
           <span>{{ track.language or t("add.track.language_unknown") }}{% if track.title %} - {{ track.title }}{% endif %}</span>
         </label>
       {% endfor %}
+      {% for track in audio_tracks_external %}
+        <label class="radio-group__option radio-group__option--stacked">
+          <input type="radio" name="audio_choice" value="external:{{ track.rel_path }}">
+          <span class="radio-group__option-text">
+            <span>{{ track.name }}</span>
+            <span class="audio-note">{{ t("track.external.label").format(folder=track.folder_label, language=(track.language or t("add.track.language_unknown")), codec=track.codec) }}</span>
+            {% if track.duration_warning %}
+              <span class="radio-group__warning">{{ t("track.external.duration_warning").format(seconds=track.duration_gap_seconds | round | int) }}</span>
+            {% endif %}
+          </span>
+        </label>
+      {% endfor %}
+      {# The manual audio choice (T-05-14): a hidden group member with no
+         static value in this template at all -- static/app.js gives it
+         one only once the operator actually types into or picks from the
+         manual field below, so submitting the form with that field
+         untouched never sends a stray choice. #}
+      <input type="radio" name="audio_choice" id="audio-choice-manual" class="visually-hidden" tabindex="-1" aria-hidden="true">
     </fieldset>
+    <div class="form-field manual-path-field">
+      <label class="form-field__label" for="audio-manual-path">{{ t("audio.field.manual_path") }}</label>
+      <div class="manual-path-field__row">
+        <input
+          class="form-field__input"
+          type="text"
+          id="audio-manual-path"
+          placeholder="{{ t('audio.field.manual_path_placeholder') }}"
+          data-manual-path-input
+          data-manual-choice-radio="audio-choice-manual"
+          data-manual-source-path="{{ rel_path }}"
+        >
+        <button
+          type="button"
+          class="btn btn--secondary"
+          data-picker-open
+          data-picker-source="{{ rel_path }}"
+          data-picker-kind="audio"
+        >{{ t("share.cta.pick_sidecar") }}</button>
+      </div>
+      <div
+        class="picker-panel"
+        data-picker-panel
+        data-picker-target-input="audio-manual-path"
+        data-picker-target-radio="audio-choice-manual"
+      ></div>
+    </div>
+    {% endif %}
 
     {# --- 7. The conversion block (NEW). --- #}
     <div class="convert-block">
@@ -157,28 +210,63 @@
             </label>
           {% endfor %}
           {% for track in subtitle_tracks_external %}
-            <label class="radio-group__option">
+            <label class="radio-group__option radio-group__option--stacked">
               <input type="radio" name="subtitle_choice" value="external:{{ track.rel_path }}">
-              <span>{{ track.name }}{% if track.language %} ({{ track.language }}){% endif %}</span>
+              <span class="radio-group__option-text">
+                <span>{{ track.name }}</span>
+                <span class="audio-note">{% if track.folder_label %}{{ track.folder_label }} - {% endif %}{{ track.language or t("add.track.language_unknown") }}</span>
+                {% if track.track_kind == "signs_only" %}
+                  <span class="audio-note">{{ t("track.kind.signs_only") }}</span>
+                {% elif track.track_kind == "full" %}
+                  <span class="audio-note">{{ t("track.kind.full") }}</span>
+                {% endif %}
+              </span>
             </label>
           {% endfor %}
-          <label class="radio-group__option">
-            <input type="radio" name="subtitle_choice" value="manual" id="subtitle-choice-manual">
-            <span>{{ t("subtitle.option.manual") }}</span>
-          </label>
+          {# The manual subtitle choice (T-05-14): a hidden group member
+             carrying no static value in this template at all -- the same
+             mechanism the audio group above uses. The server-side grammar
+             (orchestrator.media.add.parse_subtitle_choice) still accepts
+             the literal "manual" value this radio's own script gives it,
+             joining subtitle_manual_path onto the source's own folder
+             exactly as before this plan. #}
+          <input type="radio" name="subtitle_choice" id="subtitle-choice-manual" class="visually-hidden" tabindex="-1" aria-hidden="true">
         </fieldset>
-        {# CSS-only reveal (:checked ~ sibling), no script -- see
-           style.css's own rule for this class pair. A hidden but present
-           input inside a fieldset gated by which radio is checked is
-           simply not the value a plain HTML form submits. #}
         <div class="form-field manual-path-field">
           <label class="form-field__label" for="subtitle-manual-path">{{ t("subtitle.field.manual_path") }}</label>
-          <input class="form-field__input" type="text" id="subtitle-manual-path" name="subtitle_manual_path" placeholder="{{ t('subtitle.field.manual_path_placeholder') }}">
+          <div class="manual-path-field__row">
+            <input
+              class="form-field__input"
+              type="text"
+              id="subtitle-manual-path"
+              name="subtitle_manual_path"
+              placeholder="{{ t('subtitle.field.manual_path_placeholder') }}"
+              data-manual-path-input
+              data-manual-choice-radio="subtitle-choice-manual"
+              data-manual-static-choice="manual"
+            >
+            <button
+              type="button"
+              class="btn btn--secondary"
+              data-picker-open
+              data-picker-source="{{ rel_path }}"
+              data-picker-kind="subtitle"
+            >{{ t("share.cta.pick_sidecar") }}</button>
+          </div>
+          <div
+            class="picker-panel"
+            data-picker-panel
+            data-picker-target-input="subtitle-manual-path"
+            data-picker-target-radio="subtitle-choice-manual"
+          ></div>
         </div>
       {% endif %}
 
       <div class="preview-panel" data-preview-panel data-preview-path="{{ rel_path }}"></div>
-      <button type="button" class="btn btn--secondary" data-preview-render data-preview-loading-label="{{ t('preview.loading') }}">{{ t("preview.cta.render") }}</button>
+      <div class="add-form__actions">
+        <button type="button" class="btn btn--secondary" data-preview-render data-preview-loading-label="{{ t('preview.loading') }}" disabled aria-disabled="true">{{ t("preview.cta.render") }}</button>
+        <span class="add-form__convert-caption" data-preview-disabled-reason>{{ t("preview.disabled.no_choice") }}</span>
+      </div>
 
       {% if convert_estimate_seconds %}
         <p class="cost-line">{{ t("convert.estimate").format(time=convert_estimate_seconds | humanize_seconds) }}</p>

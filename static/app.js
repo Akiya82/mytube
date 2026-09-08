@@ -284,3 +284,112 @@ document.addEventListener("click", (event) => {
 
   _requestPreview(button, form, after);
 });
+
+// The preview gate (05-UI-SPEC.md Keyboard and Accessibility, folded todo
+// "grey out Preview while No subtitles is selected"): disabled with a
+// visible reason while the subtitle choice is "none", enabled the moment
+// a real track is chosen -- embedded, external or manual -- with no page
+// reload. Reads the same radio group `_previewFormValues` already reads
+// at click time; this just keeps the button's own state in sync as the
+// operator changes their mind before ever clicking it.
+function _updatePreviewGate(form) {
+  const button = form.querySelector("[data-preview-render]");
+  if (!button) return;
+  const checked = form.querySelector('[name="subtitle_choice"]:checked');
+  const hasChoice = Boolean(checked && checked.value && checked.value !== "none");
+  button.disabled = !hasChoice;
+  button.setAttribute("aria-disabled", String(!hasChoice));
+  const reason = form.querySelector("[data-preview-disabled-reason]");
+  if (reason) reason.hidden = hasChoice;
+}
+
+document.addEventListener("change", (event) => {
+  const radio = event.target.closest('[name="subtitle_choice"]');
+  if (!radio) return;
+  const form = radio.closest("form");
+  if (form) _updatePreviewGate(form);
+});
+
+document.querySelectorAll(".add-form").forEach((form) => _updatePreviewGate(form));
+
+// The manual audio/subtitle path field (T-05-14): its own hidden radio
+// carries no static value in the template at all (grep's own check that
+// the manual entry is no longer a track-shaped option) -- this listener
+// gives it one only once the operator actually types into the field, so
+// leaving it untouched never sends a stray choice.
+//
+// Subtitle's own manual grammar is unchanged from before this plan
+// (orchestrator.media.add.parse_subtitle_choice still joins
+// subtitle_manual_path onto the source's own folder server-side): the
+// static `data-manual-static-choice="manual"` attribute on that one field
+// is all this listener needs to supply. Audio has no such server-side
+// branch (parse_audio_choice's own grammar is embedded/external only), so
+// its manual field is joined onto the source's own folder right here,
+// the same plain string-concatenation shape the server performs for
+// subtitles, before being submitted as an ordinary `external:` choice.
+document.addEventListener("input", (event) => {
+  const input = event.target.closest("[data-manual-path-input]");
+  if (!input) return;
+  const radio = document.getElementById(input.getAttribute("data-manual-choice-radio"));
+  if (!radio) return;
+
+  if (!input.value) {
+    radio.checked = false;
+  } else {
+    const staticValue = input.getAttribute("data-manual-static-choice");
+    if (staticValue) {
+      radio.value = staticValue;
+    } else {
+      const sourceRelPath = input.getAttribute("data-manual-source-path") || "";
+      const dir = sourceRelPath.split("/").slice(0, -1).join("/");
+      radio.value = `external:${dir ? `${dir}/${input.value}` : input.value}`;
+    }
+    radio.checked = true;
+  }
+
+  const form = input.closest("form");
+  if (form) _updatePreviewGate(form);
+});
+
+// The sidecar/audio picker (T-05-14): opens a server-rendered candidate
+// list into the static, initially-empty `.picker-panel` beside the
+// manual field it belongs to -- the fragment route reuses the exact
+// search the form itself already ran, never a second scan. Picking a row
+// fills the manual field (so the operator sees what was chosen) and sets
+// the hidden radio directly to the matching `external:` value -- already
+// share-relative, since every candidate this route lists came from the
+// walker's own containment check, so no further joining is needed here.
+document.addEventListener("click", (event) => {
+  const openButton = event.target.closest("[data-picker-open]");
+  if (openButton) {
+    const container = openButton.closest(".manual-path-field");
+    const panel = container && container.querySelector("[data-picker-panel]");
+    if (!panel) return;
+    const kind = openButton.getAttribute("data-picker-kind");
+    const source = openButton.getAttribute("data-picker-source") || "";
+    const encodedSource = source.split("/").map(encodeURIComponent).join("/");
+    fetch(`/sidecar-picker/${encodedSource}?kind=${encodeURIComponent(kind)}`)
+      .then((res) => (res.ok ? res.text() : ""))
+      .then((html) => {
+        panel.innerHTML = html.trim();
+      });
+    return;
+  }
+
+  const chooseButton = event.target.closest("[data-picker-choose]");
+  if (chooseButton) {
+    const panel = chooseButton.closest("[data-picker-panel]");
+    if (!panel) return;
+    const input = document.getElementById(panel.getAttribute("data-picker-target-input"));
+    const radio = document.getElementById(panel.getAttribute("data-picker-target-radio"));
+    const value = chooseButton.getAttribute("data-picker-value");
+    if (input) input.value = value;
+    if (radio) {
+      radio.value = `external:${value}`;
+      radio.checked = true;
+    }
+    panel.innerHTML = "";
+    const form = panel.closest("form");
+    if (form) _updatePreviewGate(form);
+  }
+});

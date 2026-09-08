@@ -1127,15 +1127,18 @@ def test_app_js_has_a_poll_timer_and_stays_short():
     # once hand-written drag-and-drop reordering (D-107) landed alongside
     # the poller, the countdown and the copy handler; raised again from
     # 140 once the on-demand preview's two delegated handlers (04-UI-
-    # SPEC.md States -> Preview) landed alongside them -- still well under
-    # a vendored drag-and-drop or lightbox library's own line count, so
-    # the guard still catches what it was built to catch.
+    # SPEC.md States -> Preview) landed alongside them; raised again from
+    # 180 once the preview-disabled gate, the manual audio/subtitle path
+    # join and the sidecar/audio picker's own open/choose handlers (T-05-14)
+    # landed alongside them -- still well under a vendored drag-and-drop or
+    # lightbox library's own line count, so the guard still catches what it
+    # was built to catch.
     code = [
         line
         for line in text.splitlines()
         if line.strip() and not line.strip().startswith("//")
     ]
-    assert len(code) < 180
+    assert len(code) < 260
 
 
 def test_no_htmx_or_cdn_references():

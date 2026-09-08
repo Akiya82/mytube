@@ -1,0 +1,33 @@
+{#- The manual audio/subtitle picker fragment (T-05-14): swapped into the
+   static, initially-empty `.picker-panel` container beside the manual
+   field's own text input and "Browse files" button (static/app.js's
+   delegated open/choose handlers). Never wraps itself in another
+   `.picker-panel` -- the container that requests this fragment already is
+   one, and its own `data-picker-target-input`/`data-picker-target-radio`
+   attributes are what the "choose" handler reads; this partial carries no
+   knowledge of which field it fills. -#}
+<h3 class="section-heading">{{ t("share.picker.heading") }}</h3>
+{% if candidates %}
+  <ul class="share-listing">
+    {% for candidate in candidates %}
+      <li class="share-row">
+        <div class="picker-row">
+          <span class="share-row__meta">
+            <span class="share-row__name">{{ candidate.name }}</span>
+            {% if candidate.folder_label %}
+              <span class="audio-note">{{ candidate.folder_label }}</span>
+            {% endif %}
+          </span>
+          <button
+            type="button"
+            class="btn btn--ghost"
+            data-picker-choose
+            data-picker-value="{{ candidate.rel_path }}"
+          >{{ t("share.cta.use_candidate") }}</button>
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="empty-state__body">{{ t("share.picker.empty") }}</p>
+{% endif %}

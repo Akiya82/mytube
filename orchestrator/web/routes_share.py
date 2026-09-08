@@ -26,10 +26,18 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 
-from mytube_media.compat import ProbeError, analyze, moov_before_mdat, probe
-from mytube_media.subtitles import external_tracks
+from mytube_media.compat import (
+    DURATION_MISMATCH_THRESHOLD_SECONDS,
+    ProbeError,
+    analyze,
+    duration_gap_seconds,
+    external_audio_track,
+    moov_before_mdat,
+    probe,
+)
+from mytube_media.subtitles import external_audio_tracks, external_tracks
 from mytube_media.share import (
     ShareEscape,
     ShareUnavailable,
@@ -40,11 +48,57 @@ from mytube_media.share import (
 from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import queries
+from orchestrator.language import language_from_tokens, resolve_track_kind
 from orchestrator.media.add import SlugPlan, plan_slug, required_free_bytes
+from orchestrator.recognize import recognize_filename
 from orchestrator.slugs import SlugError
 from orchestrator.web.templates import LOCALES, render
 
 router = APIRouter()
+
+# T-05-14's closed vocabulary for the sidecar picker route -- a kind
+# outside this set is refused outright rather than defaulting to one of
+# the two searches.
+_PICKER_KINDS = frozenset({"subtitle", "audio"})
+
+
+def _folder_segments_relative_to(source: Path, candidate: Path) -> tuple[str, ...]:
+    """The folder names between `source`'s own directory and `candidate`
+    -- the same relative shape `mytube_media.subtitles.walk_sidecars`
+    already computes for its own `SidecarCandidate.folder_segments`,
+    re-derived here for a `SubtitleTrack` (`external_tracks`'s own return
+    shape), which does not carry that field itself. Not a second
+    directory scan -- this is a pure path computation over two paths the
+    caller already resolved.
+    """
+    try:
+        rel = candidate.relative_to(source.parent.resolve())
+    except ValueError:
+        return ()
+    return rel.parent.parts
+
+
+def _resolve_sidecar_language(*tokens: str | None) -> str | None:
+    """D-184's chain -- a tag, then a filename suffix, then folder tokens,
+    in that order -- as one call: `None` entries (a tag or suffix the
+    candidate simply does not carry) are dropped before the resolver ever
+    sees them, since `resolve_language` has no real token to check a
+    missing one against.
+    """
+    tag, _source_token = language_from_tokens([token for token in tokens if token])
+    return tag
+
+
+def _resolve_track_kind_from_folders(folder_segments) -> str | None:
+    """D-186: signs-only versus full, read from the folder tokens between
+    the source and the sidecar. The first token that resolves to either
+    word wins; a folder that names neither is neither invented.
+    """
+    for token in folder_segments:
+        kind = resolve_track_kind(token)
+        if kind in ("signs_only", "full"):
+            return kind
+    return None
 
 
 def _href(rel_path: str) -> str:
@@ -135,6 +189,7 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
     # other filesystem walk this route makes.
     root = Path(settings.share_root)
     subtitle_tracks_external: list[dict] = []
+    audio_tracks_external: list[dict] = []
     if verdict is not None:
         try:
             found = await asyncio.to_thread(external_tracks, target, root)
@@ -147,13 +202,74 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
             # filesystem-availability side).
             found = []
         for track in found:
+            candidate_path = Path(track.path)
             try:
-                rel = relative_to_root(root, Path(track.path))
+                rel = relative_to_root(root, candidate_path)
             except ValueError:
                 continue
+            folder_segments = _folder_segments_relative_to(target, candidate_path)
             subtitle_tracks_external.append(
-                {"rel_path": rel, "name": Path(track.path).name, "language": track.language}
+                {
+                    "rel_path": rel,
+                    "name": candidate_path.name,
+                    "folder_label": "/".join(folder_segments),
+                    # D-184: the tag inside the file first -- a bare
+                    # sidecar text file carries none, so only the suffix
+                    # (`track.language`, `_match_sidecar`'s own raw
+                    # return) and the folder tokens are real candidates
+                    # here.
+                    "language": _resolve_sidecar_language(track.language, *folder_segments),
+                    "track_kind": _resolve_track_kind_from_folders(folder_segments),
+                }
             )
+
+        # External audio dubs (D-180, D-181): matched by the episode
+        # number this single file's own name recognises, the same D-173
+        # number match the folder-wide flow will later reuse. A file
+        # nothing recognises an episode number from has no number to pair
+        # a dub against, so the search is simply not run for it rather
+        # than guessed -- an empty audio_tracks_external list, not an
+        # error.
+        recognised = recognize_filename(entry_name)
+        if recognised.episode is not None:
+            try:
+                audio_candidates = await asyncio.to_thread(
+                    external_audio_tracks, target, root, recognised.episode
+                )
+            except (OSError, TypeError):
+                audio_candidates = []
+            for candidate in audio_candidates:
+                try:
+                    audio_rel = relative_to_root(root, candidate.path)
+                except ValueError:
+                    continue
+                folder_label = "/".join(candidate.folder_segments)
+                try:
+                    probed = await asyncio.to_thread(
+                        external_audio_track, candidate.path, folder_label=folder_label
+                    )
+                except ProbeError:
+                    # A dub the walker found but ffprobe cannot read is
+                    # skipped, never shown as a choice with nothing behind
+                    # it -- the same degrade-to-absent rule the sidecar
+                    # walk itself already applies to a filesystem error.
+                    continue
+                gap = duration_gap_seconds(verdict.duration_seconds, probed.duration_seconds)
+                audio_tracks_external.append(
+                    {
+                        "rel_path": audio_rel,
+                        "name": Path(candidate.path).name,
+                        "folder_label": folder_label,
+                        "language": _resolve_sidecar_language(
+                            probed.language, candidate.suffix, *candidate.folder_segments
+                        ),
+                        "codec": probed.codec,
+                        "duration_warning": (
+                            gap is not None and gap > DURATION_MISMATCH_THRESHOLD_SECONDS
+                        ),
+                        "duration_gap_seconds": gap,
+                    }
+                )
 
     pool = request.app.state.db_pool
     convert_estimate_value = None
@@ -259,6 +375,7 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         not_enough_space=not_enough_space,
         convert_estimate_seconds=convert_estimate_value,
         subtitle_tracks_external=subtitle_tracks_external,
+        audio_tracks_external=audio_tracks_external,
         can_add=can_add,
         can_convert=can_convert,
         reuse_href=_href(rel_path) + "?confirm_reuse=1",
@@ -322,6 +439,79 @@ async def share_listing_route(request: Request, path: str = ""):
         entries=rows,
         breadcrumb=_breadcrumb(rel_path),
     )
+
+
+@router.get("/sidecar-picker/{path:path}")
+async def sidecar_picker_route(request: Request, path: str, kind: str = ""):
+    """The candidate-list fragment for the add form's manual audio/
+    subtitle field (T-05-14): reuses the exact same walk the form itself
+    already ran to draw the track lists -- `external_tracks` or
+    `external_audio_tracks` -- never a second scan of its own. `kind` is a
+    closed vocabulary (`subtitle` or `audio`); anything else is refused
+    outright rather than silently defaulting to one of the two searches.
+
+    The source path resolves through `_resolve_share_path`, which is
+    `safe_join` under the same containment discipline every other share
+    route already applies, and every candidate this route lists is one
+    the walker already contained against the share root through that same
+    `safe_join` call -- this route can never disclose a folder the add
+    form could not already open.
+    """
+    if kind not in _PICKER_KINDS:
+        return Response(status_code=400)
+
+    settings = get_settings()
+    root = Path(settings.share_root)
+    try:
+        target, rel_path, is_file = await _resolve_share_path(root, path)
+    except ShareEscape:
+        return Response(status_code=400)
+    if not is_file:
+        return Response(status_code=400)
+
+    candidates: list[dict] = []
+    if kind == "subtitle":
+        try:
+            found = await asyncio.to_thread(external_tracks, target, root)
+        except (OSError, TypeError):
+            found = []
+        for track in found:
+            candidate_path = Path(track.path)
+            try:
+                rel = relative_to_root(root, candidate_path)
+            except ValueError:
+                continue
+            folder_segments = _folder_segments_relative_to(target, candidate_path)
+            candidates.append(
+                {
+                    "rel_path": rel,
+                    "name": candidate_path.name,
+                    "folder_label": "/".join(folder_segments),
+                }
+            )
+    else:
+        recognised = recognize_filename(target.name)
+        if recognised.episode is not None:
+            try:
+                found_audio = await asyncio.to_thread(
+                    external_audio_tracks, target, root, recognised.episode
+                )
+            except (OSError, TypeError):
+                found_audio = []
+            for candidate in found_audio:
+                try:
+                    rel = relative_to_root(root, candidate.path)
+                except ValueError:
+                    continue
+                candidates.append(
+                    {
+                        "rel_path": rel,
+                        "name": Path(candidate.path).name,
+                        "folder_label": "/".join(candidate.folder_segments),
+                    }
+                )
+
+    return render(request, "partials/sidecar_picker.html", candidates=candidates)
 
 
 @router.get("/lang/{code}")

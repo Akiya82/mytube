@@ -8,11 +8,12 @@ subprocess in this file, quick-loop only.
 import json
 import threading
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import pytest
 
-from mytube_media.compat import ProbeError
+from mytube_media.compat import AudioTrack, ProbeError
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
@@ -226,7 +227,7 @@ async def test_silent_file_renders_no_add_control_and_explains_why(
 
     assert resp.status_code == 200
     assert 'name="add"' not in resp.text
-    assert 'name="audio_track"' not in resp.text
+    assert 'name="audio_choice"' not in resp.text
     convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
     assert "disabled" in convert_tag
     assert "no audio track" in resp.text.lower()
@@ -491,7 +492,13 @@ async def test_subtitle_group_lists_embedded_tracks_and_defaults_to_none(
     assert "English" in resp.text
 
 
-async def test_manual_path_reveal_is_script_free_css_only(web_client, monkeypatch):
+async def test_manual_path_field_is_always_present_with_no_inline_script(web_client, monkeypatch):
+    """T-05-14: the manual field is a permanent fallback now, not a state
+    revealed by picking a radio option -- it renders every time, and its
+    own hidden radio carries no static "manual" value in the markup at all
+    (a separate acceptance grep enforces that; this test only re-confirms
+    the field itself and its own wiring hook exist).
+    """
     monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
 
     async with web_client:
@@ -499,10 +506,105 @@ async def test_manual_path_reveal_is_script_free_css_only(web_client, monkeypatc
 
     assert 'id="subtitle-choice-manual"' in resp.text
     assert 'name="subtitle_manual_path"' in resp.text
-    # No inline script and no data-* hook driving the reveal -- it is a
-    # plain radio input plus a plain text field, shown or hidden by
-    # style.css's own :has() rule alone.
+    assert "data-manual-path-input" in resp.text
+    # No inline script anywhere on the page -- every behaviour here comes
+    # from the shared static/app.js file.
     assert "<script>" not in resp.text
+
+
+# --- the manual field is a button, not a track option (T-05-14) --------
+
+
+async def test_the_manual_entry_is_no_longer_a_radio_option_in_either_group(
+    web_client, monkeypatch
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("subtitles_mixed.json"))
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert resp.status_code == 200
+    assert 'value="manual"' not in resp.text.lower()
+    # The button that replaces it is a real control with a real label --
+    # "Browse files" (share.cta.pick_sidecar), rendered twice (audio and
+    # subtitle groups each get their own).
+    assert resp.text.count("Browse files") == 2
+
+
+def test_preview_button_disabled_state_is_wired_to_the_subtitle_choice_in_the_script():
+    """Checkable through the script's own file rather than a browser
+    (05-04-PLAN.md task 2's own acceptance note): the listener that keeps
+    the preview control's disabled state in sync with the current
+    subtitle choice.
+    """
+    script = (Path(__file__).parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+    assert "_updatePreviewGate" in script
+    assert "subtitle_choice" in script
+    assert "button.disabled" in script
+
+
+# --- the sidecar/audio picker route (T-05-14) -----------------------------
+
+
+async def test_sidecar_picker_route_lists_real_subtitle_candidates_for_a_real_source(
+    web_client, share_root
+):
+    _make_sidecar(share_root, ("Subs",), "a-video.eng.srt")
+
+    async with web_client:
+        resp = await web_client.get("/sidecar-picker/a-video.mp4?kind=subtitle")
+
+    assert resp.status_code == 200
+    assert "a-video.eng.srt" in resp.text
+
+
+async def test_sidecar_picker_route_lists_real_audio_candidates_for_a_real_source(
+    web_client, share_root
+):
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("RUS Sound", "AniStar"), "Show - 05.mka")
+
+    async with web_client:
+        resp = await web_client.get(f"/sidecar-picker/{_encoded('Show - 05.mp4')}?kind=audio")
+
+    assert resp.status_code == 200
+    assert "Show - 05.mka" in resp.text
+    assert "AniStar" in resp.text
+
+
+async def test_sidecar_picker_route_refuses_a_source_path_outside_the_share(web_client):
+    async with web_client:
+        resp = await web_client.get("/sidecar-picker/%2E%2E/etc?kind=subtitle")
+
+    assert resp.status_code == 400
+
+
+async def test_sidecar_picker_route_refuses_an_unknown_candidate_kind(web_client):
+    async with web_client:
+        resp = await web_client.get("/sidecar-picker/a-video.mp4?kind=video")
+
+    assert resp.status_code == 400
+
+
+async def test_sidecar_picker_route_empty_state_renders_when_nothing_is_found(web_client):
+    async with web_client:
+        resp = await web_client.get("/sidecar-picker/a-video.mp4?kind=subtitle")
+
+    assert resp.status_code == 200
+    assert "No matching files" in resp.text
+
+
+async def test_sidecar_picker_route_offers_a_value_relative_to_the_share_root_not_absolute(
+    web_client, share_root
+):
+    _make_sidecar(share_root, ("Subs",), "a-video.eng.srt")
+
+    async with web_client:
+        resp = await web_client.get("/sidecar-picker/a-video.mp4?kind=subtitle")
+
+    assert resp.status_code == 200
+    assert 'data-picker-value="Subs/a-video.eng.srt"' in resp.text
+    assert str(share_root) not in resp.text
 
 
 async def test_subtitle_group_is_disabled_under_a_stereo_layout(web_client, monkeypatch):
@@ -513,6 +615,215 @@ async def test_subtitle_group_is_disabled_under_a_stereo_layout(web_client, monk
 
     assert "can" in resp.text and "subtitles burned in during conversion" in resp.text
     assert 'name="subtitle_choice" value="embedded' not in resp.text
+
+
+# --- external audio and subtitle labelling (D-180..D-186) ----------------
+
+
+def _encoded(name: str) -> str:
+    return quote(name)
+
+
+def _make_sidecar(share_root, folder_parts, filename, content=b"stub sidecar bytes"):
+    directory = share_root
+    for part in folder_parts:
+        directory = directory / part
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / filename).write_bytes(content)
+
+
+def _stub_external_audio_track(
+    *, channels=2, codec="aac", language=None, title=None, duration_seconds=2.0
+):
+    def _probe(path, *, folder_label=None):
+        return AudioTrack(
+            index=0,
+            codec=codec,
+            channels=channels,
+            language=language,
+            title=title,
+            external_path=str(path),
+            folder_label=folder_label,
+            duration_seconds=duration_seconds,
+        )
+
+    return _probe
+
+
+async def test_merged_audio_list_contains_embedded_then_external_in_order(
+    web_client, monkeypatch, share_root
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("RUS Sound", "AniStar"), "Show - 05.mka")
+    monkeypatch.setattr(routes_share, "external_audio_track", _stub_external_audio_track())
+
+    async with web_client:
+        resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
+
+    assert resp.status_code == 200
+    embedded_pos = resp.text.index('name="audio_choice" value="embedded:')
+    external_pos = resp.text.index('name="audio_choice" value="external:')
+    assert embedded_pos < external_pos
+
+
+async def test_external_audio_entry_renders_folder_language_and_codec_caption(
+    web_client, monkeypatch, share_root
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("RUS Sound", "AniStar"), "Show - 05.mka")
+    monkeypatch.setattr(
+        routes_share,
+        "external_audio_track",
+        _stub_external_audio_track(language="rus", codec="aac"),
+    )
+
+    async with web_client:
+        resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
+
+    assert resp.status_code == 200
+    assert "RUS Sound/AniStar - ru (aac)" in resp.text
+
+
+async def test_external_audio_entry_with_unresolved_language_shows_unknown_label_and_folder(
+    web_client, monkeypatch, share_root
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("Sound",), "Show - 05.xyz.mka")
+    monkeypatch.setattr(
+        routes_share,
+        "external_audio_track",
+        _stub_external_audio_track(language=None, codec="ac3"),
+    )
+
+    async with web_client:
+        resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
+
+    assert resp.status_code == 200
+    assert "Sound - Unknown language (ac3)" in resp.text
+
+
+async def test_external_audio_duration_mismatch_renders_warning_and_stays_selectable(
+    web_client, monkeypatch, share_root
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("RUS Sound", "AniStar"), "Show - 05.mka")
+    monkeypatch.setattr(
+        routes_share,
+        "external_audio_track",
+        _stub_external_audio_track(duration_seconds=30.0),
+    )
+
+    async with web_client:
+        resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
+
+    assert resp.status_code == 200
+    assert "possible desync" in resp.text
+    assert 'name="audio_choice" value="external:' in resp.text
+
+
+async def test_external_subtitle_entry_resolves_language_from_folder_token(
+    web_client, monkeypatch, share_root
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("Subs", "Russian"), "Show - 05.srt")
+
+    async with web_client:
+        resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
+
+    assert resp.status_code == 200
+    assert "Subs/Russian - ru" in resp.text
+
+
+async def test_external_subtitle_entry_with_unresolved_language_shows_unknown_label_and_folder(
+    web_client, monkeypatch, share_root
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("Subs", "Misc"), "Show - 05.zzz.srt")
+
+    async with web_client:
+        resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
+
+    assert resp.status_code == 200
+    assert "Subs/Misc - Unknown language" in resp.text
+
+
+async def test_external_subtitle_signs_only_folder_renders_signs_only_caption(
+    web_client, monkeypatch, share_root
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("Subs", "Signs"), "Show - 05.eng.srt")
+
+    async with web_client:
+        resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
+
+    assert resp.status_code == 200
+    assert "Signs only" in resp.text
+
+
+async def test_external_subtitle_full_folder_renders_full_caption_and_a_folder_that_says_nothing_renders_neither(
+    web_client, monkeypatch, share_root
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("Subs", "Full"), "Show - 05.rus.srt")
+    _make_sidecar(share_root, ("Subs", "Random"), "Show - 05.eng.srt")
+
+    async with web_client:
+        resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
+
+    assert resp.status_code == 200
+    assert "Full subtitles" in resp.text
+    # The "Random" folder resolves neither word -- only the "Full" entry's
+    # own caption renders, never invented for the entry whose folder says
+    # nothing.
+    assert resp.text.count("Full subtitles") == 1
+    assert "Signs only" not in resp.text
+
+
+async def test_two_same_named_external_subtitles_in_different_folders_render_distinguishably_by_folder(
+    web_client, monkeypatch, share_root
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("Subs", "StudioA"), "Show - 05.eng.srt")
+    _make_sidecar(share_root, ("Subs", "StudioB"), "Show - 05.eng.srt")
+
+    async with web_client:
+        resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
+
+    assert resp.status_code == 200
+    assert "Subs/StudioA - en" in resp.text
+    assert "Subs/StudioB - en" in resp.text
+
+
+async def test_external_audio_choice_leaves_subtitle_default_untouched(
+    web_client, monkeypatch, share_root
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("RUS Sound", "AniStar"), "Show - 05.mka")
+    monkeypatch.setattr(
+        routes_share,
+        "external_audio_track",
+        _stub_external_audio_track(language="rus"),
+    )
+
+    async with web_client:
+        resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
+
+    assert resp.status_code == 200
+    # A Russian dub sitting right there in the audio list changes nothing
+    # about the subtitle group's own default -- "No subtitles" is still
+    # the only checked radio in that fieldset (D-183: no dub-to-signs
+    # heuristic).
+    assert 'name="subtitle_choice" value="none" checked' in resp.text
 
 
 # --- the second-edition gate (D-147) -------------------------------------
