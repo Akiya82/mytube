@@ -138,6 +138,12 @@ class AudioTrack:
     """One audio stream from ffprobe, in file order. `language`/`title`
     are `None` -- never an invented placeholder -- when the source has no
     such tag (D-43's track list must not lie about what it found).
+
+    `external_path`, `folder_label` and `duration_seconds` are `None` for
+    every embedded track `audio_tracks` returns; `external_audio_track`
+    below is the one place that fills them, so a caller can hold embedded
+    and external candidates in one flat list (D-181) and tell them apart
+    by whether `external_path` is set, never by a second type.
     """
 
     index: int
@@ -147,6 +153,9 @@ class AudioTrack:
     title: str | None
     sample_rate: int | None = None
     channel_layout: str | None = None
+    external_path: str | None = None
+    folder_label: str | None = None
+    duration_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -293,6 +302,64 @@ def audio_tracks(probe_json: dict) -> list[AudioTrack]:
             )
         )
     return tracks
+
+
+# D-182: the gap above which the interface shows a duration-mismatch
+# warning next to an external audio track. A starting figure, not a
+# measurement -- ordinary container-overhead differences between a video
+# and a standalone dub sit well under a second, so a few seconds already
+# distinguishes "different container, same cut" from "wrong episode" or
+# "trimmed intro." Named and documented so a later plan can retune it
+# against real dubs rather than guess a second time.
+DURATION_MISMATCH_THRESHOLD_SECONDS = 5.0
+
+
+def external_audio_track(path, *, folder_label: str | None = None) -> AudioTrack:
+    """Probe one external audio file and return it in the same
+    `AudioTrack` shape an embedded stream takes (D-181), so a caller can
+    hold embedded and external candidates in one flat list.
+
+    Runs `probe()` against `path` itself, then reads its first (and, for
+    every real dub in the owner's library, only) audio stream -- an
+    external file, unlike a video source, is never expected to carry more
+    than one. `folder_label` is carried through unchanged, for the
+    interface to show where the file came from ("RUS Sound/AniStar");
+    this function does not compute it -- it has no notion of a share root
+    or a source file to compute it relative to.
+    """
+    probe_json = probe(path)
+    stream = next(s for s in probe_json["streams"] if s.get("codec_type") == "audio")
+    tags = stream.get("tags") or {}
+    return AudioTrack(
+        index=stream.get("index", 0),
+        codec=stream.get("codec_name", ""),
+        channels=stream.get("channels", 0),
+        language=tags.get("language"),
+        title=tags.get("title"),
+        sample_rate=_maybe_number(stream.get("sample_rate"), int),
+        channel_layout=stream.get("channel_layout"),
+        external_path=str(path),
+        folder_label=folder_label,
+        duration_seconds=_maybe_number(probe_json.get("format", {}).get("duration"), float),
+    )
+
+
+def duration_gap_seconds(a: float | None, b: float | None) -> float | None:
+    """The absolute difference between two probed durations -- the pure
+    comparison D-182's warning is built from, computed here so nothing
+    downstream re-derives it from ffmpeg's own mux-time behaviour (Pitfall
+    4: `-shortest` is not how this project measures a mismatch; the two
+    `format.duration` values are already available from each file's own
+    probe, before any mux command is built). Commutative, and `None` when
+    either duration is unmeasurable -- the same "absence is not a warning"
+    rule `Verdict.over_bitrate_ceiling` already keeps for a bitrate ffprobe
+    could not report: an unmeasurable duration is an unknown, never a
+    fabricated gap. This function never refuses anything on its own; it is
+    read by the caller that decides whether to show a warning.
+    """
+    if a is None or b is None:
+        return None
+    return abs(a - b)
 
 
 def _default_track_index(tracks: list[AudioTrack]) -> int | None:

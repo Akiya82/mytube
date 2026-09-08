@@ -206,6 +206,46 @@ def test_a_source_folder_with_no_subtitles_returns_an_empty_list(tmp_path):
     assert tracks == []
 
 
+def test_the_walk_stops_at_the_result_cap(tmp_path, monkeypatch):
+    """The shared walker (`walk_sidecars`) enforces this, not either
+    caller -- proven here through `external_tracks`, the same way
+    `test_external_audio.py` proves it through `external_audio_tracks`.
+    """
+    from mytube_media import subtitles
+    from mytube_media.subtitles import external_tracks
+
+    monkeypatch.setattr(subtitles, "MAX_EXTERNAL_RESULTS", 3)
+    source = tmp_path / "Show.mkv"
+    source.write_bytes(b"")
+    for i in range(6):
+        (tmp_path / f"Show.l{i}.srt").write_text("x", encoding="utf-8")
+
+    tracks = external_tracks(source, tmp_path)
+
+    assert len(tracks) == 3
+
+
+def test_the_walk_stops_at_the_visited_directory_cap(tmp_path, monkeypatch):
+    from mytube_media import subtitles
+    from mytube_media.subtitles import external_tracks
+
+    monkeypatch.setattr(subtitles, "MAX_VISITED_DIRECTORIES", 1)
+    source = tmp_path / "Show.mkv"
+    source.write_bytes(b"")
+    # Two sibling directories under the source's own folder -- the
+    # recursive stage visits the source's own folder itself as its first
+    # directory, so a cap of 1 must stop before either subdirectory is
+    # ever opened.
+    for name in ("A", "B"):
+        nested = tmp_path / name
+        nested.mkdir()
+        (nested / "Show.eng.srt").write_text("x", encoding="utf-8")
+
+    tracks = external_tracks(source, tmp_path)
+
+    assert tracks == []
+
+
 # --- charset ladder -----------------------------------------------------
 
 

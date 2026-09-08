@@ -9,6 +9,23 @@ Every function that reads a subtitle file goes through `read_text` and
 carries its encoding forward -- a caller that only kept the text half of
 that pair would produce a preview and a conversion that both render the
 operator's cp1251 subtitles as mojibake.
+
+`walk_sidecars` is the one directory walk behind both subtitle sidecar
+discovery and external audio dub discovery (D-173, D-180): the source's
+own folder, then a set of named subfolders beside it, then a bounded
+recursive walk, every candidate contained against the share root before
+it is ever returned. `external_tracks` and `external_audio_tracks` are
+both thin callers of it, parameterised by which extensions count and how
+a candidate is matched -- a second, parallel walk would have to re-derive
+the containment check, the visited-directory cap and the result cap, and
+would risk silently omitting one.
+
+This module never resolves a language from a filename, a folder name or a
+probed tag, and never imports anything that could -- that resolution
+(and the vocabulary it needs) belongs to the interface. A candidate here
+carries only what a filesystem walk can know about itself: its path, the
+raw dot-separated suffix in its own name if it has one, and the folder
+names between it and the source.
 """
 import json
 import os
@@ -31,6 +48,14 @@ BITMAP_SUBTITLE_CODECS = frozenset({"hdmv_pgs_subtitle", "dvd_subtitle"})
 # formats this project's own library actually carries (D-122).
 SUBTITLE_EXTENSIONS = frozenset({"srt", "ass", "ssa", "vtt"})
 
+# What `external_audio_tracks` will treat as a dub file at all (D-180).
+# `.mka` is the owner's own real extension -- every dub in the library is
+# a Matroska audio container (confirmed in 05-CONTEXT.md's read of the
+# live share, "RUS Sound/<studio>/*.mka"). The rest are the same family of
+# standalone-audio containers a release group ships a dub in, kept narrow
+# rather than every audio extension ffmpeg can demux.
+AUDIO_SIDECAR_EXTENSIONS = frozenset({"mka", "ac3", "eac3", "aac", "flac", "m4a"})
+
 # The refusal boundary `read_text` enforces before it ever calls
 # `read_bytes()` (T-04-41): a manual subtitle path is operator-chosen and
 # may name any file on the share, including the video itself by a typo of
@@ -48,6 +73,13 @@ MAX_EXTERNAL_RESULTS = 50
 
 # Named folders D-122 checks before falling back to a full recursive walk.
 _NAMED_SUBTITLE_FOLDERS = ("Subs", "Subtitles")
+
+# The folder names D-180's dub search checks before falling back to a full
+# recursive walk, the same two-stage shape as `_NAMED_SUBTITLE_FOLDERS`.
+# "RUS Sound" is the owner's own real folder name; "Sound" and "Audio" are
+# the English equivalents the same search must also recognise, since the
+# product ships in two languages (D-66).
+AUDIO_SIDECAR_FOLDER_NAMES = ("RUS Sound", "Sound", "Audio")
 
 _NO_MATCH = object()
 
@@ -221,22 +253,110 @@ def _match_sidecar(path: Path, stem: str):
     return language
 
 
-def external_tracks(source, share_root) -> list[SubtitleTrack]:
-    """Sidecar subtitle files for `source`, searched in D-122's order:
-    the source's own folder, then `Subs`/`Subtitles` beside it, then
-    recursively under the source's folder. Every candidate is resolved
-    and contained against `share_root` the same way `share.safe_join`
-    guarantees for every other operator-supplied path in this codebase --
-    a path that escapes is skipped, never raised, so one stray symlink
-    cannot cost the whole list (T-04-01).
+# The last standalone run of one to three digits in a filename (D-173): a
+# sidecar filename such as "Crunchyroll_05.ass" or "AniStar - 05.mka" does
+# not need the full recognition machinery (`anitopy`/`guessit`), only a
+# number to pair against the episode it sits beside. Deliberately narrow,
+# the same conservatism `recognize.py`'s own trailing-digit guard uses:
+# bounded at three digits and fenced on both sides by a non-digit, so a
+# four-digit run never matches at all. Concrete strings this must not
+# match on their own digits: "1080p" (a four-digit run, no 1-3-digit
+# substring survives the fence), "2024" (same reasoning, a year), "S01"
+# (the "01" *would* match as a bare two-digit run -- callers that also see
+# a season token must not hand this function the season-qualified name
+# alone without considering that).
+_EPISODE_NUMBER_IN_NAME = re.compile(r"(?<!\d)(\d{1,3})(?!\d)")
+
+
+def _episode_number_from_filename(name: str) -> int | None:
+    """The last standalone 1-3 digit run in `name`, or `None` when there
+    is none -- see `_EPISODE_NUMBER_IN_NAME`'s own comment for the concrete
+    strings this must not match.
+    """
+    matches = _EPISODE_NUMBER_IN_NAME.findall(name)
+    return int(matches[-1]) if matches else None
+
+
+def match_by_episode_number(episode_number: int):
+    """A `walk_sidecars` match predicate (D-173): a candidate belongs to
+    this episode when the last standalone 1-3 digit run in its own
+    filename equals `episode_number`. This is the match D-180's external
+    audio search uses -- a season's dub folder almost never shares a stem
+    with the episode file it pairs with, so base-name equality
+    (`_match_sidecar`'s own rule) cannot be reused here; the episode
+    number in the name is the only thing left to pair on.
+    """
+
+    def _match(path: Path) -> bool:
+        return _episode_number_from_filename(path.name) == episode_number
+
+    return _match
+
+
+def _filename_suffix(name: str) -> str | None:
+    """The dot-separated segment between a filename's base name and its
+    extension, when it has one -- "Show.eng.srt" -> "eng", "Show.srt" ->
+    `None`. Purely mechanical: unlike `_match_sidecar`, this does not check
+    the result against any vocabulary, stem or episode number -- it is raw
+    material for whichever caller of `walk_sidecars` wants to look at it
+    (the interface, resolving a language; never this module, per its own
+    docstring).
+    """
+    stem = Path(name).stem
+    if "." not in stem:
+        return None
+    return stem.rsplit(".", 1)[1]
+
+
+@dataclass(frozen=True)
+class SidecarCandidate:
+    """One file `walk_sidecars` found and already passed through
+    containment, before either caller (`external_tracks`,
+    `external_audio_tracks`) turns it into its own track shape.
+
+    `rel_path` is relative to `source`'s own folder, so a caller can show
+    where a candidate came from ("RUS Sound/AniStar/dub_05.mka") without
+    re-deriving it from `path`. `folder_segments` is the ordered tuple of
+    folder names strictly between the source's folder and the file --
+    empty for a candidate sitting directly beside the source or in one of
+    the immediate named subfolders, non-empty only once the recursive
+    stage of the walk finds something nested deeper.
+    """
+
+    path: Path
+    rel_path: str
+    suffix: str | None
+    folder_segments: tuple[str, ...]
+
+
+def walk_sidecars(
+    source, share_root, *, extensions: frozenset[str], folder_names: tuple[str, ...], match
+) -> list[SidecarCandidate]:
+    """The shared, hardened directory walk behind `external_tracks` (D-122)
+    and `external_audio_tracks` (D-180): the source's own folder, then each
+    of `folder_names` beside it, then a bounded recursive walk under the
+    source's folder. Every bound and every check stays exactly where it
+    was before this function existed: the same `MAX_EXTERNAL_RESULTS`
+    result cap, the same `MAX_VISITED_DIRECTORIES` visited-directory cap,
+    the same per-candidate containment check against `share_root`
+    (`share.safe_join`) before a path is ever returned, the same
+    degrade-to-empty behaviour on a filesystem error.
+
+    `extensions` gates a candidate's file extension before `match` is ever
+    consulted -- cheap and generic, so neither caller re-derives it.
+    `match(path) -> bool` is the domain-specific test: base-name equality
+    plus a language suffix for a subtitle sidecar, an episode number for a
+    dub. A path that escapes containment (a symlink pointing outside the
+    share, say) is skipped, never raised, so one stray entry cannot cost
+    the whole list (T-04-01).
     """
     source = Path(source)
     root = Path(share_root)
-    stem = source.stem
-    results: list[SubtitleTrack] = []
+    results: list[SidecarCandidate] = []
     seen: set[Path] = set()
+    same_folder = source.parent
 
-    def record(candidate: Path, language):
+    def record(candidate: Path) -> None:
         if len(results) >= MAX_EXTERNAL_RESULTS:
             return
         try:
@@ -250,9 +370,25 @@ def external_tracks(source, share_root) -> list[SubtitleTrack]:
         if resolved in seen:
             return
         seen.add(resolved)
-        results.append(SubtitleTrack(kind="external", path=str(resolved), language=language))
+        try:
+            rel_to_source = resolved.relative_to(same_folder.resolve())
+        except ValueError:
+            rel_to_source = Path(resolved.name)
+        results.append(
+            SidecarCandidate(
+                path=resolved,
+                rel_path=rel_to_source.as_posix(),
+                suffix=_filename_suffix(resolved.name),
+                folder_segments=rel_to_source.parent.parts,
+            )
+        )
 
-    def scan_top_level(directory: Path):
+    def candidate_matches(candidate: Path) -> bool:
+        if candidate.suffix.lstrip(".").lower() not in extensions:
+            return False
+        return match(candidate)
+
+    def scan_top_level(directory: Path) -> None:
         if len(results) >= MAX_EXTERNAL_RESULTS or not directory.is_dir():
             return
         try:
@@ -263,14 +399,11 @@ def external_tracks(source, share_root) -> list[SubtitleTrack]:
             if len(results) >= MAX_EXTERNAL_RESULTS:
                 return
             candidate = directory / name
-            language = _match_sidecar(candidate, stem)
-            if language is _NO_MATCH:
-                continue
-            record(candidate, language)
+            if candidate_matches(candidate):
+                record(candidate)
 
-    same_folder = source.parent
     scan_top_level(same_folder)
-    for folder_name in _NAMED_SUBTITLE_FOLDERS:
+    for folder_name in folder_names:
         if len(results) >= MAX_EXTERNAL_RESULTS:
             return results
         scan_top_level(same_folder / folder_name)
@@ -287,12 +420,70 @@ def external_tracks(source, share_root) -> list[SubtitleTrack]:
             if len(results) >= MAX_EXTERNAL_RESULTS:
                 break
             candidate = directory / name
-            language = _match_sidecar(candidate, stem)
-            if language is _NO_MATCH:
-                continue
-            record(candidate, language)
+            if candidate_matches(candidate):
+                record(candidate)
 
     return results
+
+
+def external_tracks(source, share_root) -> list[SubtitleTrack]:
+    """Sidecar subtitle files for `source`, searched in D-122's order:
+    the source's own folder, then `Subs`/`Subtitles` beside it, then
+    recursively under the source's folder. Every candidate is resolved
+    and contained against `share_root` the same way `share.safe_join`
+    guarantees for every other operator-supplied path in this codebase --
+    a path that escapes is skipped, never raised, so one stray symlink
+    cannot cost the whole list (T-04-01).
+
+    A thin caller of `walk_sidecars`: this function's own signature and
+    return type are unchanged from before that extraction, so nothing that
+    calls it today needs editing.
+    """
+    source = Path(source)
+    stem = source.stem
+
+    def match(path: Path) -> bool:
+        return _match_sidecar(path, stem) is not _NO_MATCH
+
+    candidates = walk_sidecars(
+        source,
+        share_root,
+        extensions=SUBTITLE_EXTENSIONS,
+        folder_names=_NAMED_SUBTITLE_FOLDERS,
+        match=match,
+    )
+    return [
+        SubtitleTrack(
+            kind="external",
+            path=str(candidate.path),
+            language=_match_sidecar(candidate.path, stem),
+        )
+        for candidate in candidates
+    ]
+
+
+def external_audio_tracks(source, share_root, episode_number: int) -> list[SidecarCandidate]:
+    """External dub candidates for one episode's `source` file, searched in
+    D-180's order -- identical in shape to `external_tracks`'s own D-122
+    order (the source's own folder, then `AUDIO_SIDECAR_FOLDER_NAMES`
+    beside it, then a bounded recursive walk), matched by the episode
+    number in the candidate's own filename (D-173's number match) rather
+    than by base-name equality, since a season's dub folder almost never
+    shares a stem with the episode file it pairs with.
+
+    Returns raw candidates, never a probed track: turning one into the
+    `compat.AudioTrack` shape (its codec, its channel count, its own
+    duration) needs `ffprobe`, and this module never runs it or imports
+    the module that does -- see the module docstring's own dependency
+    rule. The caller probes each candidate itself.
+    """
+    return walk_sidecars(
+        source,
+        share_root,
+        extensions=AUDIO_SIDECAR_EXTENSIONS,
+        folder_names=AUDIO_SIDECAR_FOLDER_NAMES,
+        match=match_by_episode_number(episode_number),
+    )
 
 
 # Tried in order, each only when the one before it could not decode the
