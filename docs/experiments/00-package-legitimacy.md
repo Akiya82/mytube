@@ -1,4 +1,4 @@
-# Legitimacy of the thirteen phase 1 PyPI packages (T-01-SC)
+# Legitimacy of the thirteen initial PyPI packages (T-01-SC)
 
 **English abstract:** Verified that all thirteen PyPI packages this phase
 installs are the real, legitimate packages, not typosquats or hallucinated
@@ -77,3 +77,23 @@ dependency tree.
 **Verification complete.** The owner personally opened and checked all
 thirteen pypi.org pages (the owner's own report, not an automated or agent
 check) — gate T-01-SC is closed. Dependency installation may begin.
+
+## Four more packages: filename recognition and language resolution
+
+Four more packages enter the dependency set, for turning a release filename
+into a title/season/episode triple and for resolving a language code, name
+or folder token to a canonical tag. The automated checker flags all four the
+same way it flagged the thirteen above — the unusable download-count signal
+already explained there, not repeated here — so each is checked by hand
+against its real registry page instead, the same way as above. Installation
+happens only after this table exists, matching the same gate.
+
+| # | Package | Group | pypi.org URL | Expected repository (from the PyPI page) | Version / pin | Age, legitimacy signals | Confirmed |
+|---|-------|--------|------------------|-------------------------------------------|--------------|-------------------------------|---------------|
+| 14 | `anitopy` | interface (`[api]` extra) | https://pypi.org/project/anitopy/ | github.com/igorcmoura/anitopy | pins the range `>=2.1,<3`; current release queried live at implementation time is 2.1.1 | Long-standing filename-parsing library, published 2022-07-24 and unchanged since, no post-install hook | Awaiting the owner's confirmation |
+| 15 | `guessit` | interface (`[api]` extra) | https://pypi.org/project/guessit/ | guessit-io.github.io/guessit (GitHub org `guessit-io`) | pins the range `>=4.4,<5`; current release queried live at implementation time is 4.4.0 | Actively released (4.4.0, 2026-07-31), no post-install hook | Awaiting the owner's confirmation |
+| 16 | `langcodes` | interface (`[api]` extra) | https://pypi.org/project/langcodes/ | github.com/rspeer/langcodes | pins the range `>=3.5,<4`; current release queried live at implementation time is 3.5.1 | MIT license, long-standing CLDR wrapper, no post-install hook | Awaiting the owner's confirmation |
+| 17 | `language_data` | interface (`[api]` extra) | https://pypi.org/project/language_data/ | github.com/georgkrause/language_data | pins the range `>=1.4,<2`; current release queried live at implementation time is 1.4.0 | Companion data package to `langcodes`, same maintainer lineage, no post-install hook | Awaiting the owner's confirmation |
+
+**What to check for these four:** the same three checks as the table above,
+against these four pypi.org links instead.
