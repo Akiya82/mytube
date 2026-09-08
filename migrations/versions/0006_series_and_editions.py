@@ -79,6 +79,14 @@ that last claimed it.
   this attribute existed) and "not signs-only" are different facts, and
   the interface only shows the attribute once it has actually been
   resolved for a given edition.
+- `editions.started_at`, timestamptz, nullable -- the edition-level twin of
+  `titles.started_at` (0002_add_as_is.py), null while its own conversion
+  job is only queued and set the moment a worker actually picks it up.
+  Added here rather than left for a later migration: readiness already
+  moved from the title to the edition in this same revision, and the
+  "queued vs. actually working" distinction that column exists for has to
+  move with it -- a title-level `started_at` cannot answer that question
+  for one episode out of twelve converting at different times.
 - `titles.changed_at`, timestamptz, not null, defaulting to `now()` --
   the library's new ordering key, so a title rises when an episode or
   edition is added or becomes ready instead of staying pinned to its
@@ -138,6 +146,7 @@ def upgrade() -> None:
         'only shows the badge once this is genuinely known.'
         """
     )
+    op.execute("ALTER TABLE editions ADD COLUMN started_at timestamptz")
 
     op.execute(
         """
@@ -252,6 +261,7 @@ def downgrade() -> None:
     op.execute("ALTER TABLE episodes DROP COLUMN delete_at")
     op.execute("ALTER TABLE episodes DROP COLUMN status")
 
+    op.execute("ALTER TABLE editions DROP COLUMN started_at")
     op.execute("ALTER TABLE editions DROP COLUMN subtitle_burned_signs_only")
     op.execute("ALTER TABLE editions DROP COLUMN failure_reason")
     op.execute("ALTER TABLE editions DROP COLUMN status")

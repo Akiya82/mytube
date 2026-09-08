@@ -661,3 +661,107 @@ async def test_a_finished_playlist_deletion_leaves_nothing_referenced(raw_conn):
     assert artifact_key not in keys, (
         "a completed deletion must not be reported forever as a broken address"
     )
+
+
+# --- Episode-scoped countdown (migrations/versions/0006_series_and_editions.py) ---
+
+
+async def _episode_id_for_title(conn, title_id) -> uuid.UUID:
+    return await conn.fetchval(
+        """
+        SELECT ep.id FROM episodes ep
+        JOIN seasons s ON s.id = ep.season_id
+        WHERE s.title_id = $1
+        """,
+        title_id,
+    )
+
+
+async def test_mark_episode_for_delete_and_cancel_delete_episode_round_trip(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Episode Countdown Title", "episode-countdown-slug", edition_id,
+        f"{edition_id}.mp4",
+    )
+    episode_id = await _episode_id_for_title(raw_conn, title_id)
+
+    await queries.mark_episode_for_delete(raw_conn, episode_id, grace_seconds=3600)
+    row = await raw_conn.fetchrow(
+        "SELECT status, delete_at FROM episodes WHERE id = $1", episode_id
+    )
+    assert row["status"] == "pending_delete"
+    assert row["delete_at"] is not None
+
+    await queries.cancel_delete_episode(raw_conn, episode_id)
+    row = await raw_conn.fetchrow(
+        "SELECT status, delete_at FROM episodes WHERE id = $1", episode_id
+    )
+    assert row["status"] == "active"
+    assert row["delete_at"] is None
+
+
+async def test_due_for_reaping_episodes_and_episode_object_keys(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Episode Reaping Title", "episode-reaping-slug", edition_id,
+        f"{edition_id}.mp4",
+    )
+    episode_id = await _episode_id_for_title(raw_conn, title_id)
+    await queries.set_edition_poster(raw_conn, edition_id, f"{edition_id}-poster.jpg")
+    await queries.mark_episode_for_delete(raw_conn, episode_id, grace_seconds=0)
+
+    due = await queries.due_for_reaping_episodes(raw_conn)
+    row = next(r for r in due if r["episode_id"] == episode_id)
+    assert row["title_id"] == title_id
+
+    keys = await queries.episode_object_keys(raw_conn, episode_id)
+    assert set(keys) == {f"{edition_id}.mp4", f"{edition_id}-poster.jpg"}
+
+
+async def test_finish_delete_episode_tombstones_an_episode_that_was_ever_active(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Tombstone Episode Title", "tombstone-episode-slug", edition_id,
+        f"{edition_id}.mp4",
+    )
+    episode_id = await _episode_id_for_title(raw_conn, title_id)
+
+    await queries.mark_episode_for_delete(raw_conn, episode_id, grace_seconds=0)
+    await queries.finish_delete_episode(raw_conn, episode_id)
+
+    row = await raw_conn.fetchrow("SELECT status FROM episodes WHERE id = $1", episode_id)
+    assert row is not None
+    assert row["status"] == "deleted"
+    # The edition row itself survives untouched, exactly as a reaped
+    # title's rows do -- only the status flips.
+    edition_row = await raw_conn.fetchrow("SELECT id FROM editions WHERE id = $1", edition_id)
+    assert edition_row is not None
+
+
+async def test_finish_delete_episode_hard_deletes_an_episode_that_was_never_active(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Hard Delete Episode Title", "hard-delete-episode-slug", edition_id,
+        f"{edition_id}.mp4",
+    )
+    season_id = await raw_conn.fetchval("SELECT id FROM seasons WHERE title_id = $1", title_id)
+
+    new_edition_id = uuid.uuid4()
+    new_episode_id = await raw_conn.fetchval(
+        "INSERT INTO episodes (season_id) VALUES ($1) RETURNING id", season_id
+    )
+    await raw_conn.execute(
+        "INSERT INTO editions (id, episode_id, object_key, status) VALUES ($1, $2, $3, 'preparing')",
+        new_edition_id, new_episode_id, f"{new_edition_id}.mp4",
+    )
+    await queries.claim_episode_number(raw_conn, title_id, new_episode_id, 2)
+
+    await queries.mark_episode_for_delete(raw_conn, new_episode_id, grace_seconds=0)
+    await queries.finish_delete_episode(raw_conn, new_episode_id)
+
+    row = await raw_conn.fetchrow("SELECT id FROM episodes WHERE id = $1", new_episode_id)
+    assert row is None
+    edition_row = await raw_conn.fetchrow(
+        "SELECT id FROM editions WHERE id = $1", new_edition_id
+    )
+    assert edition_row is None

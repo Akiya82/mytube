@@ -12,7 +12,8 @@ import asyncpg
 
 
 async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | None:
-    """Resolve a slug to its title + default edition, via slug_history.
+    """Resolve a slug to its title, its episode and its default edition,
+    via slug_history.
 
     For a given slug text there may be more than one history row (D-10 reuse:
     a tombstoned title's row plus a new title's row for the same text) --
@@ -20,23 +21,53 @@ async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | 
     rename (single row, still resolves after rename -- ADDR-05) and reuse
     (two rows, the newer one wins, the older stays as history) without a
     special case for either.
+
+    **The episode-pointer branch.** When the winning history row carries a
+    non-null `episode_id` (see migrations/versions/0006_series_and_editions
+    .py for what writes it -- a slug that followed one standalone file into
+    a series), the episode picked is that exact episode, not the title's
+    lowest-numbered one. When it is null -- every row written before this
+    phase, and every ordinary title slug since -- the original lowest-
+    episode lateral runs unchanged, so this branch is a complete no-op for
+    the whole catalog that predates it. Without it, the address handed out
+    for a standalone episode would start playing episode one of whatever
+    series its file later joined, silently, the moment this migration
+    landed.
+
+    Returns the title's own status, the resolved episode's id and status,
+    the episode's default edition id, and that edition's status --
+    readiness now lives on the episode and the edition (D-157), so the
+    title's status alone can no longer decide whether the address is gone,
+    preparing, or ready; see orchestrator.resolve for the routes that read
+    all four together.
     """
     return await conn.fetchrow(
         """
         SELECT
             t.id AS title_id,
             t.status AS status,
-            ep.default_edition_id AS default_edition_id
+            ep.id AS episode_id,
+            ep.status AS episode_status,
+            ep.default_edition_id AS default_edition_id,
+            de.status AS edition_status
         FROM slug_history sh
         JOIN titles t ON t.id = sh.title_id
         LEFT JOIN LATERAL (
-            SELECT e.default_edition_id
-            FROM episodes e
-            JOIN seasons s ON s.id = e.season_id
-            WHERE s.title_id = t.id
-            ORDER BY s.number, e.number
-            LIMIT 1
+            SELECT ep2.id, ep2.status, ep2.default_edition_id
+            FROM episodes ep2
+            WHERE ep2.id = COALESCE(
+                sh.episode_id,
+                (
+                    SELECT e3.id
+                    FROM episodes e3
+                    JOIN seasons s3 ON s3.id = e3.season_id
+                    WHERE s3.title_id = t.id
+                    ORDER BY s3.number, e3.number
+                    LIMIT 1
+                )
+            )
         ) ep ON true
+        LEFT JOIN editions de ON de.id = ep.default_edition_id
         WHERE sh.slug = $1
         ORDER BY sh.created_at DESC
         LIMIT 1
@@ -49,10 +80,19 @@ async def resolve_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Recor
     """Look up an edition by id, with its title's status -- used by
     GET /refresh/{edition_id} (D-04): nginx only knows edition_id, not the
     slug it was reached through, so re-signing has to key off the edition.
+
+    Also returns the episode's own status and the edition's own status
+    (D-157): the refresh address re-signs whatever this edition currently
+    is, and without these two a retry could sign a redirect to an object a
+    per-episode delete has already removed, or to one a conversion has not
+    finished writing yet -- see orchestrator.resolve.refresh_edition_route
+    for where these three statuses get turned into an answer.
     """
     return await conn.fetchrow(
         """
-        SELECT e.id AS edition_id, t.status AS status
+        SELECT
+            e.id AS edition_id, t.status AS status,
+            ep.status AS episode_status, e.status AS edition_status
         FROM editions e
         JOIN episodes ep ON ep.id = e.episode_id
         JOIN seasons s ON s.id = ep.season_id
@@ -82,10 +122,21 @@ async def create_title_with_edition(
     audio_stream_index: int | None = None,
     audio_channels: int | None = None,
     stereo_layout: str | None = None,
+    number: int = 1,
 ):
     """One transaction: title, season #1, episode #1, edition, and the
     slug's first history row -- then point episode.default_edition_id at
     the new edition (D-09).
+
+    `number` (default 1, byte-for-byte the prior behaviour for every
+    existing caller) claims this episode's number in the same transaction,
+    through the identical claim_episode_number helper a renumber uses. This
+    is the one function every creation path in the project goes through --
+    the single-file add's new-title branch, the CLI's own `add`, and a
+    folder screen's new-title move -- so a title created after this
+    migration answers at its numbered address (GET /v/{slug}/{number})
+    immediately, with no backfill and no operator action, the same promise
+    the migration's own backfill makes for every title that predates it.
 
     `status` defaults to 'active' (the CLI's existing behaviour, unchanged).
     The web add flow (D-49) passes `status="preparing"` instead, so the row
@@ -179,6 +230,7 @@ async def create_title_with_edition(
             edition_id,
             episode_id,
         )
+        await claim_episode_number(conn, title_id, episode_id, number)
         await reuse_slug(conn, slug, title_id)
     return title_id
 
@@ -873,6 +925,405 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
         WHERE p.status != 'deleted'
         """
     )
+
+
+# --- Episode/edition queries (0006_series_and_editions.py) ----------------
+
+
+async def touch_title_changed(conn: asyncpg.Connection, title_id) -> None:
+    """Bump a title's changed_at to now() -- the library's new ordering key
+    (migrations/versions/0006_series_and_editions.py). Called by the
+    edition-scoped readiness twins below, so a title rises to the top of
+    the library the moment one of its episodes finishes or fails, exactly
+    as an operator watching the screen would expect. A later plan's own
+    catalog write calls this directly for the same reason.
+    """
+    await conn.execute("UPDATE titles SET changed_at = now() WHERE id = $1", title_id)
+
+
+async def claim_episode_number(
+    conn: asyncpg.Connection, title_id, episode_id, number: int
+) -> None:
+    """Give one episode a new current number, inside the caller's own
+    transaction -- the number equivalent of rename_slug, and the one place
+    both a fresh creation (create_title_with_edition) and an explicit
+    renumber go through.
+
+    Flips this episode's own current row (if it has one) to not-current,
+    then inserts the new current row with a fresh clock_timestamp(). The
+    insert is an upsert on the exact (title_id, number, episode_id) triple
+    -- the identical ON CONFLICT ... DO UPDATE shape rename_slug uses for a
+    rename back to a slug the same title held before, needed for the
+    identical reason: a renumber back to a number this same episode held
+    earlier hits a row that already exists with is_current=false, and a
+    plain INSERT would raise instead of reclaiming it.
+
+    Deliberately does not refuse a number a *different* episode currently
+    holds. The resolve rule (resolve_episode_slug) always answers the
+    newest row for a given (title, number), regardless of which episode is
+    is_current for its own number -- so the older episode's now-superseded
+    claim simply stops winning the moment this one is inserted; nothing
+    about that older row needs to change for the new claim to take effect,
+    the same way slug reuse needs no change to the tombstoned row it
+    outranks.
+    """
+    await conn.execute(
+        """
+        UPDATE episode_number_history SET is_current = false
+        WHERE title_id = $1 AND episode_id = $2 AND is_current
+        """,
+        title_id,
+        episode_id,
+    )
+    await conn.execute(
+        """
+        INSERT INTO episode_number_history (title_id, number, episode_id, is_current, created_at)
+        VALUES ($1, $2, $3, true, clock_timestamp())
+        ON CONFLICT (title_id, number, episode_id)
+        DO UPDATE SET is_current = true, created_at = clock_timestamp()
+        """,
+        title_id,
+        number,
+        episode_id,
+    )
+
+
+async def taken_episode_numbers(conn: asyncpg.Connection, title_id) -> set[int]:
+    """Every number currently claimed by an episode of this title -- the
+    number equivalent of taken_slugs, for a renumber form's own collision
+    check.
+    """
+    rows = await conn.fetch(
+        "SELECT number FROM episode_number_history WHERE title_id = $1 AND is_current",
+        title_id,
+    )
+    return {row["number"] for row in rows}
+
+
+async def episode_for_number(
+    conn: asyncpg.Connection, title_id, number: int
+) -> asyncpg.Record | None:
+    """The episode a number currently resolves to for this title, and
+    whether that claim is the episode's own current one.
+
+    "In use right now" and "used to be this episode's number" are two
+    different answers a renumber form has to tell apart before offering a
+    number back to the operator -- this makes both available in one read,
+    on the identical newest-wins ordering resolve_episode_slug itself uses,
+    so the two functions can never disagree about which claim currently
+    wins a given number.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT episode_id, is_current
+        FROM episode_number_history
+        WHERE title_id = $1 AND number = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        title_id,
+        number,
+    )
+
+
+async def resolve_episode_slug(
+    conn: asyncpg.Connection, slug: str, number: int, edition_slug: str | None = None
+) -> asyncpg.Record | None:
+    """Resolve the numbered address, GET /v/{slug}/{number}[/{edition_slug}],
+    to a title, an episode, and an edition.
+
+    Joins the slug's own newest-wins row (the same rule resolve_slug
+    already applies) to the number's own newest-wins row within that same
+    title (episode_number_history, the identical rule applied a second
+    time to the number half of the address) -- an old slug and an old
+    number both keep answering on one formula each, exactly as ADDR-05
+    already promises for a slug alone. `number` arrives here as an
+    already-parsed integer (see orchestrator.resolve): every leading-zero
+    form of a number collapses onto the same integer before this statement
+    ever runs, so there is only ever one number to look up and this query
+    carries no special case for "01" versus "1".
+
+    When `edition_slug` is given, the edition returned is the one edition
+    of this episode whose own `slug` column matches it exactly -- not a
+    fallback to the default when it fails to match, "an unknown edition
+    slug resolves to nothing" the same way an unknown number does. When
+    `edition_slug` is omitted, the episode's own default_edition_id is
+    used. Returns the title's status, the episode's id and status, and the
+    resolved edition's id and status, or None when the slug or the number
+    does not resolve to anything at all.
+    """
+    return await conn.fetchrow(
+        """
+        WITH winning_slug AS (
+            SELECT sh.title_id
+            FROM slug_history sh
+            WHERE sh.slug = $1
+            ORDER BY sh.created_at DESC
+            LIMIT 1
+        )
+        SELECT
+            t.id AS title_id,
+            t.status AS status,
+            ep.id AS episode_id,
+            ep.status AS episode_status,
+            CASE WHEN $3::text IS NOT NULL THEN chosen.id ELSE ep.default_edition_id END
+                AS edition_id,
+            CASE WHEN $3::text IS NOT NULL THEN chosen.status ELSE def_edition.status END
+                AS edition_status
+        FROM winning_slug ws
+        JOIN titles t ON t.id = ws.title_id
+        JOIN LATERAL (
+            SELECT episode_id
+            FROM episode_number_history
+            WHERE title_id = ws.title_id AND number = $2
+            ORDER BY created_at DESC
+            LIMIT 1
+        ) enh ON true
+        JOIN episodes ep ON ep.id = enh.episode_id
+        LEFT JOIN editions def_edition ON def_edition.id = ep.default_edition_id
+        LEFT JOIN editions chosen ON chosen.episode_id = ep.id AND chosen.slug = $3
+        """,
+        slug,
+        number,
+        edition_slug,
+    )
+
+
+async def resolve_title_edition_slug(
+    conn: asyncpg.Connection, slug: str, edition_slug: str
+) -> asyncpg.Record | None:
+    """Resolve a film's alternative-edition address, GET /v/{slug}/{segment}
+    for a `segment` that is not made only of digits -- an edition of the
+    title's own lowest episode, the one this whole resolver family exists
+    for a single-episode title to have more than one address.
+
+    Reuses the exact lowest-episode lateral resolve_slug's own null-pointer
+    branch runs, then adds one more join: the edition must belong to that
+    lowest episode and carry this exact edition slug. This is why an
+    edition slug may never be made only of digits (see
+    orchestrator.slugs.normalize_edition_slug) -- the caller decides which
+    resolver to run purely from the segment's own shape, in Python, before
+    either statement runs, and a slug that looked like a number would make
+    that decision ambiguous.
+
+    Returns the same column shape resolve_episode_slug does, or None when
+    the slug or the edition slug does not resolve.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT
+            t.id AS title_id,
+            t.status AS status,
+            lowest.id AS episode_id,
+            lowest.status AS episode_status,
+            e.id AS edition_id,
+            e.status AS edition_status
+        FROM slug_history sh
+        JOIN titles t ON t.id = sh.title_id
+        JOIN LATERAL (
+            SELECT ep.id, ep.status
+            FROM episodes ep
+            JOIN seasons s ON s.id = ep.season_id
+            WHERE s.title_id = t.id
+            ORDER BY s.number, ep.number
+            LIMIT 1
+        ) lowest ON true
+        JOIN editions e ON e.episode_id = lowest.id AND e.slug = $2
+        WHERE sh.slug = $1
+        ORDER BY sh.created_at DESC
+        LIMIT 1
+        """,
+        slug,
+        edition_slug,
+    )
+
+
+async def mark_edition_active(conn: asyncpg.Connection, edition_id) -> None:
+    """Flip a 'preparing' edition to 'active' -- the edition-scoped twin of
+    mark_title_active, since readiness now lives on the edition rather than
+    blanketing every address a title owns (D-157). Clears failure_reason
+    too, for the same reason mark_title_active does: the column must never
+    lie if this edition id is ever reused after an earlier failure. Also
+    touches the owning title's changed_at, so the library rises to reflect
+    the episode that just finished.
+    """
+    async with conn.transaction():
+        title_id = await conn.fetchval(
+            """
+            SELECT t.id FROM editions e
+            JOIN episodes ep ON ep.id = e.episode_id
+            JOIN seasons s ON s.id = ep.season_id
+            JOIN titles t ON t.id = s.title_id
+            WHERE e.id = $1
+            """,
+            edition_id,
+        )
+        await conn.execute(
+            "UPDATE editions SET status = 'active', failure_reason = NULL WHERE id = $1",
+            edition_id,
+        )
+        if title_id is not None:
+            await touch_title_changed(conn, title_id)
+
+
+async def mark_edition_failed(conn: asyncpg.Connection, edition_id, reason_key: str) -> None:
+    """Flip an edition to 'failed' with `reason_key`, a translation-catalog
+    key -- the edition-scoped twin of mark_title_failed. Validated the same
+    way the worker-facing job writers already validate a reason key
+    (_validate_failure_reason_key): this column, like theirs, is reachable
+    from a caller this module cannot vet at the call site. Also touches the
+    owning title's changed_at, the same as mark_edition_active -- a failure
+    is exactly as much "something happened to this title" as a success is.
+    """
+    _validate_failure_reason_key(reason_key)
+    async with conn.transaction():
+        title_id = await conn.fetchval(
+            """
+            SELECT t.id FROM editions e
+            JOIN episodes ep ON ep.id = e.episode_id
+            JOIN seasons s ON s.id = ep.season_id
+            JOIN titles t ON t.id = s.title_id
+            WHERE e.id = $1
+            """,
+            edition_id,
+        )
+        await conn.execute(
+            "UPDATE editions SET status = 'failed', failure_reason = $2 WHERE id = $1",
+            edition_id,
+            reason_key,
+        )
+        if title_id is not None:
+            await touch_title_changed(conn, title_id)
+
+
+async def mark_edition_started(conn: asyncpg.Connection, edition_id) -> None:
+    """Set started_at to clock_timestamp() the moment a worker actually
+    dequeues this edition's job -- the edition-scoped twin of
+    mark_title_started, called by the worker, never by the route. See that
+    column's own comment in migrations/versions/0006_series_and_editions.py
+    for why "queued" and "started" have to stay tellable apart at the
+    edition level once readiness no longer blankets a whole title.
+    """
+    await conn.execute(
+        "UPDATE editions SET started_at = clock_timestamp() WHERE id = $1", edition_id
+    )
+
+
+async def mark_episode_for_delete(
+    conn: asyncpg.Connection, episode_id, grace_seconds: int
+) -> None:
+    """Flip one episode to pending_delete with delete_at = now() +
+    grace_seconds -- the episode-scoped twin of mark_for_delete. Every
+    address this episode answers (its own numbered address, and any slug
+    whose history row points straight at it) starts reading its status as
+    gone immediately; the grace window only delays the reaper's physical
+    delete_object, exactly as it does for a whole title.
+    """
+    await conn.execute(
+        """
+        UPDATE episodes
+        SET status = 'pending_delete', delete_at = now() + make_interval(secs => $2)
+        WHERE id = $1
+        """,
+        episode_id,
+        grace_seconds,
+    )
+
+
+async def cancel_delete_episode(conn: asyncpg.Connection, episode_id) -> None:
+    """Undo mark_episode_for_delete -- the episode-scoped twin of
+    cancel_delete. Back to active, delete_at cleared; every address this
+    episode answers starts resolving again immediately.
+    """
+    await conn.execute(
+        "UPDATE episodes SET status = 'active', delete_at = NULL WHERE id = $1",
+        episode_id,
+    )
+
+
+async def due_for_reaping_episodes(conn: asyncpg.Connection) -> list[asyncpg.Record]:
+    """Episodes whose delete_at has passed -- identifiers only (episode_id,
+    title_id), not aggregated object keys.
+
+    Deliberately not one row of aggregated keys per episode, unlike
+    due_for_reaping's own array_agg for a whole title -- the same reason
+    due_for_reaping_playlists gives for playlists: an episode can carry an
+    arbitrary number of editions, and episode_object_keys below is the
+    function that walks them for one episode at a time, at the point the
+    reaper is actually about to delete its objects.
+    """
+    return await conn.fetch(
+        """
+        SELECT ep.id AS episode_id, s.title_id AS title_id
+        FROM episodes ep
+        JOIN seasons s ON s.id = ep.season_id
+        WHERE ep.status = 'pending_delete' AND ep.delete_at <= now()
+        """
+    )
+
+
+async def episode_object_keys(conn: asyncpg.Connection, episode_id) -> list[str]:
+    """Every object key (video, and poster when set) one episode's editions
+    hold -- what the reaper must remove from storage before
+    finish_delete_episode. Read-only, deletes nothing -- the same crash-
+    safety shape failed_title_object_keys and never_active_title_object_keys
+    already give: delete the objects first, then call finish_delete_episode
+    to remove or tombstone the row that was the only record of the keys.
+    """
+    rows = await conn.fetch(
+        "SELECT object_key, poster_key FROM editions WHERE episode_id = $1",
+        episode_id,
+    )
+    keys: list[str] = []
+    for row in rows:
+        if row["object_key"]:
+            keys.append(row["object_key"])
+        if row["poster_key"]:
+            keys.append(row["poster_key"])
+    return keys
+
+
+async def finish_delete_episode(conn: asyncpg.Connection, episode_id) -> None:
+    """Finish one episode's reap, once the reaper has removed the objects
+    episode_object_keys named for it.
+
+    **Tombstone or hard delete, decided here.** An episode with any edition
+    that is -- or, since nothing in this codebase ever moves an edition
+    backward out of 'active', ever was -- 'active' is tombstoned: its own
+    status flips to 'deleted' and every row survives untouched, the same
+    way a reaped title's rows survive (referenced_objects's own docstring:
+    "only titles.status flips"). This has to be a tombstone and not a hard
+    delete, because a number-history row or a slug-history row may point at
+    this exact episode forever, and a gone address must be able to say it
+    is gone rather than answer as if it had never existed.
+
+    An episode none of whose editions ever reached 'active' can never have
+    been handed to a viewer at all -- there is no live address for a
+    tombstone to keep honest -- so it is dropped outright instead, in the
+    same foreign-key unwind order delete_never_active_title already
+    establishes for a whole title: the episode's own default pointer
+    cleared first, then its editions, then the episode row itself.
+    """
+    async with conn.transaction():
+        ever_active = await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM editions WHERE episode_id = $1 AND status = 'active'
+            )
+            """,
+            episode_id,
+        )
+        if ever_active:
+            await conn.execute(
+                "UPDATE episodes SET status = 'deleted' WHERE id = $1", episode_id
+            )
+            return
+
+        await conn.execute(
+            "UPDATE episodes SET default_edition_id = NULL WHERE id = $1", episode_id
+        )
+        await conn.execute("DELETE FROM editions WHERE episode_id = $1", episode_id)
+        await conn.execute("DELETE FROM episodes WHERE id = $1", episode_id)
 
 
 # --- Playlist queries (0004_playlists.py) ---------------------------------
