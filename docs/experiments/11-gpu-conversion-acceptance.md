@@ -344,6 +344,13 @@ went on to reach `done`, with the edition row reading back `source_codec hevc`,
 Надписи (Crunchyroll)`, `size_bytes 881216842`, `duration_seconds 1421.06`, closing the
 one component of this claim the previous round had to write down as failed.
 
+A review of this round's own code then found the estimate's last value being thrown
+away: the converter reports zero for a block whose output timestamp has passed the
+source duration, and the row treated that zero as no estimate at all, so a conversion's
+final ticks showed the percentage alone. The renderer now tests for absence rather than
+truth, and the interface was rolled again to carry the fix; the converter image was
+untouched by it and stayed where the measurements above were taken.
+
 ### The start-up refusal, on the real host
 
 **Closed 2026-09-08.** The converter now refuses to start against a scratch mount it
