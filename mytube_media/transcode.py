@@ -370,7 +370,12 @@ def build_filter_chain(plan: TranscodePlan, subtitle: SubtitleChoice) -> FilterG
 
 
 def build_transcode_command(
-    source, destination, *, plan: TranscodePlan, subtitle: SubtitleChoice
+    source,
+    destination,
+    *,
+    plan: TranscodePlan,
+    subtitle: SubtitleChoice,
+    external_audio: str | None = None,
 ) -> list[str]:
     """The command the worker runs on the card. Decodes on NVDEC only when
     `plan.hwaccel` is set by the caller (the decision of whether the
@@ -379,6 +384,21 @@ def build_transcode_command(
     would keep decoded frames on the card, since `scale`/`subtitles`/
     `overlay` all run on the processor and one filter chain has to serve
     both this command and the preview.
+
+    `external_audio` (D-180) mirrors `remux.build_remux_command`'s own
+    parameter of the same name: a second input added right after the
+    source, mapped by its own first audio stream (`1:a:0`) instead of
+    `plan.audio_stream_index`, always encoded to AAC at
+    `aac_bitrate_for(plan.audio_channels)` -- the caller sets
+    `audio_channels` to the *external* file's own probed channel count in
+    that case, not the source's. `-hwaccel`, stated once before the
+    source's own `-i`, is a per-input option and never applies to this
+    second input, which is exactly right -- an audio-only file needs no
+    hardware decode. Never emits the flag that would end the output at
+    whichever stream finishes first (Pitfall 4), the same reasoning
+    `build_remux_command`'s own docstring states in full. With no
+    `external_audio`, every emitted argument is unchanged from before this
+    parameter existed.
     """
     graph = build_filter_chain(plan, subtitle)
 
@@ -386,8 +406,11 @@ def build_transcode_command(
     if plan.hwaccel:
         cmd += ["-hwaccel", plan.hwaccel]
     cmd += ["-i", str(source)]
+    if external_audio:
+        cmd += ["-i", str(external_audio)]
     cmd += [graph.flag, graph.value]
-    cmd += ["-map", graph.video_map, "-map", f"0:{plan.audio_stream_index}"]
+    audio_map = "1:a:0" if external_audio else f"0:{plan.audio_stream_index}"
+    cmd += ["-map", graph.video_map, "-map", audio_map]
     cmd += ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr"]
 
     maxrate = round(plan.video_bitrate_bps * MAXRATE_RATIO)
@@ -404,10 +427,13 @@ def build_transcode_command(
     cmd += ["-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.1"]
     cmd += ["-g", str(plan.gop), "-keyint_min", str(plan.gop)]
 
-    if plan.reencode_audio:
+    if external_audio or plan.reencode_audio:
         # D-135: one formula for both the as-is and the transcode branch,
         # the channel count preserved (no `-ac` downmix, same discipline
-        # as `remux.build_remux_command`).
+        # as `remux.build_remux_command`). An external track is always
+        # encoded, regardless of `plan.reencode_audio` -- D-180 treats it
+        # as a source that is never already inside the destination
+        # container.
         bitrate = aac_bitrate_for(plan.audio_channels)
         cmd += ["-c:a", "aac", "-b:a", f"{bitrate}k"]
     else:

@@ -70,6 +70,7 @@ def build_remux_command(
     audio_stream_index: int,
     reencode_audio: bool,
     channels: int,
+    external_audio: str | None = None,
 ) -> list[str]:
     """Video is always `-c:v copy`. Audio is `-c:a copy` when the source
     audio is already AAC (`reencode_audio=False`) and `-c:a aac` otherwise,
@@ -83,21 +84,47 @@ def build_remux_command(
     relative form would pick the wrong track on any file whose streams
     are not in the obvious video-then-audio order (D-42: only the
     selected track is ever muxed in).
+
+    `external_audio` (D-180), when given, is a second input added right
+    after the source: the audio map then points at that input's own first
+    audio stream (`1:a:0`) instead of any stream on the source, and the
+    track is always encoded to AAC at `aac_bitrate_for(channels)` --
+    `channels` is then the *external* file's own probed channel count, not
+    the source's, and `reencode_audio` plays no part, since an external
+    file is never a candidate for a plain stream copy here. The video map
+    and codec are untouched either way: the video stream is copied exactly
+    as it is today, which is the whole reason the quick-copy path can
+    carry a dub at all. No flag that ends the output at whichever stream
+    finishes first is ever added -- measured against a real build (a 10s
+    video, a 7s dub), that flag truncates the *video* down to the shorter
+    dub, exactly backwards for a stream this module never touches; leaving
+    it out is what makes the output carry the full video while the dub
+    simply ends early (`tests/test_external_audio.py`, Pitfall 4). With no
+    `external_audio`, the emitted argv is byte-identical to what this
+    function produced before this parameter existed.
     """
-    audio_codec_args = (
-        ["-c:a", "aac", "-b:a", f"{aac_bitrate_for(channels)}k"]
-        if reencode_audio
-        else ["-c:a", "copy"]
-    )
+    if external_audio:
+        extra_input = ["-i", str(external_audio)]
+        audio_map = "1:a:0"
+        audio_codec_args = ["-c:a", "aac", "-b:a", f"{aac_bitrate_for(channels)}k"]
+    else:
+        extra_input = []
+        audio_map = f"0:{audio_stream_index}"
+        audio_codec_args = (
+            ["-c:a", "aac", "-b:a", f"{aac_bitrate_for(channels)}k"]
+            if reencode_audio
+            else ["-c:a", "copy"]
+        )
     return [
         "ffmpeg",
         "-y",
         "-i",
         str(source),
+        *extra_input,
         "-map",
         "0:v:0",
         "-map",
-        f"0:{audio_stream_index}",
+        audio_map,
         "-c:v",
         "copy",
         *audio_codec_args,
