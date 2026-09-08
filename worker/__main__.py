@@ -329,6 +329,15 @@ async def _process_job(
                 )
             subtitle_share_path = safe_join(root, subtitle_rel_path)
 
+        # Resolved the same way every other operator-supplied path in this
+        # program is (T-05-09) -- contained against this converter's own
+        # read-only share mount, exactly as the subtitle path above already
+        # is.
+        external_audio_rel_path = job.get("external_audio_path")
+        external_audio_source = None
+        if external_audio_rel_path:
+            external_audio_source = safe_join(root, external_audio_rel_path)
+
         probe_json = await asyncio.to_thread(compat.probe, source)
 
         if subtitle_kind == "embedded":
@@ -345,19 +354,38 @@ async def _process_job(
                 )
             subtitle_kind = resolved_kind
 
-        verdict = compat.analyze(
-            probe_json,
-            selected_audio_index=job["audio_stream_index"],
-            filename=Path(job["source_path"]).name,
-        )
-
-        selected_track = next(
-            (t for t in verdict.tracks if t.index == job["audio_stream_index"]), None
-        )
-        if selected_track is None:
-            raise _ProbeMismatchError(
-                f"audio stream {job['audio_stream_index']} is no longer present"
+        if external_audio_source is not None:
+            # A job carrying an external audio path has a null embedded
+            # index by construction -- the audio is not in this file at
+            # all -- so the embedded-index lookup below (and its
+            # probe-mismatch guard) would fail every one of the owner's
+            # own primary jobs before a single frame is encoded. Skipped
+            # entirely: `compat.analyze` runs with no selected embedded
+            # track, and the external file is probed instead. Its own
+            # channel count is what feeds the per-channel bitrate formula,
+            # in place of the embedded track's.
+            verdict = compat.analyze(
+                probe_json,
+                selected_audio_index=None,
+                filename=Path(job["source_path"]).name,
             )
+            selected_audio_channels = (
+                await asyncio.to_thread(compat.external_audio_track, external_audio_source)
+            ).channels
+        else:
+            verdict = compat.analyze(
+                probe_json,
+                selected_audio_index=job["audio_stream_index"],
+                filename=Path(job["source_path"]).name,
+            )
+            selected_track = next(
+                (t for t in verdict.tracks if t.index == job["audio_stream_index"]), None
+            )
+            if selected_track is None:
+                raise _ProbeMismatchError(
+                    f"audio stream {job['audio_stream_index']} is no longer present"
+                )
+            selected_audio_channels = selected_track.channels
 
         # The layout is the operator's own choice, carried in the job --
         # not re-detected here. It was already confirmed against the file
@@ -389,8 +417,10 @@ async def _process_job(
             gop=gop,
             hwaccel="cuda" if source_codec in transcode.NVDEC_SUPPORTED_CODECS else None,
             audio_stream_index=job["audio_stream_index"],
-            audio_channels=selected_track.channels,
-            reencode_audio=verdict.audio_needs_reencode,
+            audio_channels=selected_audio_channels,
+            reencode_audio=(
+                True if external_audio_source is not None else verdict.audio_needs_reencode
+            ),
             stereo_layout=stereo_layout,
         )
 
@@ -460,7 +490,13 @@ async def _process_job(
         )
 
         destination = job_scratch / "output.mp4"
-        cmd = build_transcode_command(source, destination, plan=plan, subtitle=subtitle)
+        cmd = build_transcode_command(
+            source,
+            destination,
+            plan=plan,
+            subtitle=subtitle,
+            external_audio=str(external_audio_source) if external_audio_source else None,
+        )
 
         # Not the source's size -- the source is read over the share and
         # never copied. What needs room is the encoder's own output plus

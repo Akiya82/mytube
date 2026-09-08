@@ -34,7 +34,14 @@ from orchestrator.storage import delete_object
 logger = logging.getLogger(__name__)
 
 WORKER_PREFIX = "/worker/"
-WORKER_PROTOCOL_VERSION = 2
+# Raised to 3 in this change: the claim response grew `external_audio_path`
+# (D-180), a field an older converter does not read and a newer one
+# requires. The two images are non-interoperable across this bump -- the
+# converter is built from source on the GPU host by
+# `docker-compose.worker.yml`, not pulled from the registry alongside the
+# interface, so until it is rebuilt from the same commit it exits at its
+# first claim rather than silently ignoring the new field.
+WORKER_PROTOCOL_VERSION = 3
 
 # The dotted catalog keys a converter is allowed to report on
 # POST .../failed. Anything else is refused (T-04-07) -- this is what keeps
@@ -221,9 +228,10 @@ async def claim_route(request: Request, body: ClaimBody):
 
     Carries only the operator's own choices (D-119): the job id, the
     attempt, the kind, the catalog identifiers, the destination object
-    key, the source path, the chosen audio stream, the subtitle choice and
-    the stereo layout. Nothing derived -- no encoder flags, no filter
-    string, no built command. The converter re-reads the source file at
+    key, the source path, the chosen audio stream, the external audio
+    choice (D-180), the subtitle choice and the stereo layout. Nothing
+    derived -- no encoder flags, no filter string, no built command. The
+    converter re-reads the source file at
     the moment it starts and builds its own command with the same shared
     code the add form used; a command built here from an earlier read of
     the same file is a disagreement waiting to happen.
@@ -283,6 +291,7 @@ async def claim_route(request: Request, body: ClaimBody):
         "subtitle_stream_index": claimed["subtitle_stream_index"],
         "subtitle_path": claimed["subtitle_path"],
         "stereo_layout": claimed["stereo_layout"],
+        "external_audio_path": claimed["external_audio_path"],
     }
 
 

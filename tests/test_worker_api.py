@@ -10,6 +10,7 @@ in this file. `ALLOWED_FAILURE_REASONS` is still imported inline, in the
 one test that needs it -- everything else is driven through the
 application, never a second, independent route import.
 """
+import asyncio
 import json
 import uuid
 
@@ -430,6 +431,7 @@ async def test_a_claim_carries_only_the_operator_s_choices(monkeypatch, client):
         "subtitle_stream_index": 2,
         "subtitle_path": None,
         "stereo_layout": None,
+        "external_audio_path": None,
     }
 
     async def _fake_record_worker_seen(conn, *, worker_name, status):
@@ -466,6 +468,7 @@ async def test_a_claim_carries_only_the_operator_s_choices(monkeypatch, client):
         "subtitle_stream_index",
         "subtitle_path",
         "stereo_layout",
+        "external_audio_path",
     }
     assert set(payload.keys()) == expected_keys
 
@@ -979,3 +982,172 @@ async def _title_and_edition_for_claim(conn) -> tuple:
         conn, "Atomic Claim Route", slug, edition_id, f"{edition_id}.mp4", status="preparing"
     )
     return title_id, edition_id
+
+
+# --- the converter's own probe-mismatch guard branches around a null
+# embedded index (D-180) ---------------------------------------------------
+#
+# The two tests below drive `worker.__main__._process_job` directly, the
+# same layer `test_worker_job.py` exercises -- placed here rather than
+# there because this plan's own file list names this module, and the
+# claim response this file already pins (`external_audio_path`) is the
+# field that makes the job below reachable at all.
+
+
+def _external_audio_job_probe_json():
+    """One video stream plus one embedded Japanese track -- the embedded
+    track the operator is replacing, not using, when the job also carries
+    an external audio choice.
+    """
+    return {
+        "streams": [
+            {
+                "index": 0, "codec_type": "video", "codec_name": "h264",
+                "profile": "High", "level": 40, "pix_fmt": "yuv420p",
+                "width": 1920, "height": 1080, "avg_frame_rate": "24/1",
+            },
+            {
+                "index": 1, "codec_type": "audio", "codec_name": "aac",
+                "channels": 2, "sample_rate": "48000", "channel_layout": "stereo",
+                "tags": {"language": "jpn"},
+            },
+        ],
+        "format": {"duration": "60.0", "format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
+    }
+
+
+def _external_audio_dub_probe_json():
+    """The external `.mka`'s own probe -- a different channel count and
+    language than the embedded track, so a report reading the wrong one
+    is easy to catch.
+    """
+    return {
+        "streams": [
+            {
+                "index": 0, "codec_type": "audio", "codec_name": "flac",
+                "channels": 6, "sample_rate": "48000", "channel_layout": "5.1",
+                "tags": {"language": "rus"},
+            },
+        ],
+        "format": {"duration": "60.5"},
+    }
+
+
+class _FakeConverterClient:
+    """The minimal `WorkerClient` surface `_process_job` calls -- enough
+    to record the outcome, nothing that touches the network.
+    """
+
+    def __init__(self):
+        self.done_calls = []
+        self.failed_calls = []
+
+    async def heartbeat(self, job_id, **kwargs):
+        return False
+
+    async def done(self, job_id, **kwargs):
+        self.done_calls.append(kwargs)
+
+    async def failed(self, job_id, *, attempt, reason_key):
+        self.failed_calls.append(reason_key)
+
+    async def cancelled(self, job_id, **kwargs):
+        pass
+
+
+def _external_audio_job(**overrides) -> dict:
+    job = {
+        "job_id": str(uuid.uuid4()),
+        "attempt": 1,
+        "object_key": "out.mp4",
+        "edition_id": str(uuid.uuid4()),
+        "source_path": "movie.mkv",
+        "audio_stream_index": None,
+        "subtitle_kind": "none",
+        "subtitle_stream_index": None,
+        "subtitle_path": None,
+        "stereo_layout": "2d",
+        "external_audio_path": None,
+    }
+    job.update(overrides)
+    return job
+
+
+def _run_converter_job(monkeypatch, tmp_path, job) -> _FakeConverterClient:
+    import worker.__main__ as worker_main
+    from worker.settings import WorkerSettings
+
+    client = _FakeConverterClient()
+
+    def fake_probe(path):
+        text = str(path)
+        if text.endswith("output.mp4"):
+            return _external_audio_job_probe_json()
+        if text.endswith(".mka"):
+            return _external_audio_dub_probe_json()
+        return _external_audio_job_probe_json()
+
+    async def fake_run(cmd, *, should_cancel=lambda: False, on_progress=None, **kwargs):
+        from pathlib import Path
+
+        Path(cmd[-1]).write_bytes(b"stub-output-bytes")
+        return type("FakeResult", (), {"cancelled": False})()
+
+    monkeypatch.setattr(worker_main.compat, "probe", fake_probe)
+    monkeypatch.setattr(worker_main.compat, "moov_before_mdat", lambda path: True)
+    monkeypatch.setattr(worker_main, "run_ffmpeg_with_progress", fake_run)
+    monkeypatch.setattr(worker_main.worker_storage, "upload_file", lambda *a, **k: None)
+    monkeypatch.setattr(worker_main.worker_storage, "abort_multipart", lambda *a, **k: None)
+    monkeypatch.setattr(worker_main.remux, "run_ffmpeg", lambda *a, **k: None)
+
+    share = tmp_path / "share"
+    work = tmp_path / "work"
+    share.mkdir()
+    work.mkdir()
+    settings = WorkerSettings(
+        orchestrator_url="http://orchestrator.local",
+        worker_token=WORKER_TOKEN,
+        s3_endpoint="http://storage:8333",
+        s3_bucket="mytube",
+        worker_s3_key="worker-key",
+        worker_s3_secret="worker-secret",
+        share_root=str(share),
+        work_dir=str(work),
+    )
+
+    asyncio.run(
+        worker_main._process_job(
+            client, object(), settings, job, tmp_path / "scratch", asyncio.Event()
+        )
+    )
+    return client
+
+
+def test_a_convert_job_with_external_audio_and_a_null_index_reaches_a_done_report(
+    monkeypatch, tmp_path
+):
+    """The owner's own primary case (D-180): the embedded track is never
+    consulted, the external file is probed instead, and the job finishes
+    rather than tripping the guard built for an embedded index.
+    """
+    job = _external_audio_job(external_audio_path="RUS Sound/AniStar/dub.mka")
+
+    client = _run_converter_job(monkeypatch, tmp_path, job)
+
+    assert client.failed_calls == []
+    assert client.done_calls
+
+
+def test_a_missing_embedded_index_with_no_external_audio_still_raises_probe_mismatch(
+    monkeypatch, tmp_path
+):
+    """The embedded guard was branched around for an external-audio job,
+    not weakened or removed -- a job naming an embedded index that is no
+    longer on the file still fails exactly as it did before this plan.
+    """
+    job = _external_audio_job(audio_stream_index=99, external_audio_path=None)
+
+    client = _run_converter_job(monkeypatch, tmp_path, job)
+
+    assert client.done_calls == []
+    assert client.failed_calls == ["failed.reason.probe_mismatch"]

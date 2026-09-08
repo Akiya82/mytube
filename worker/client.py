@@ -24,7 +24,11 @@ import asyncio
 
 import httpx
 
-WORKER_PROTOCOL_VERSION = 2
+# Raised to 3 alongside the service's own constant in the same change: the
+# claim response widened to carry `external_audio_path` (D-180), which
+# this converter now reads. See `orchestrator/web/routes_worker.py`'s own
+# copy of this constant for why the two images cannot be rolled apart.
+WORKER_PROTOCOL_VERSION = 3
 
 # D-116: "retries the heartbeat and the final report for a bounded time".
 # No existing precedent in this codebase names a duration -- this is this

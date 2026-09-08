@@ -2241,11 +2241,13 @@ async def enqueue_job(
     subtitle_stream_index: int | None = None,
     subtitle_path: str | None = None,
     stereo_layout: str | None = None,
+    external_audio_path: str | None = None,
 ):
     """Insert a queued job of `kind` and return its id.
 
     Carries only what the operator chose (D-119) -- source path, audio
-    track, subtitle choice, 3D layout. The worker re-probes the file and
+    track, subtitle choice, 3D layout, and now an external audio choice
+    (D-180) beside the embedded one. The worker re-probes the file and
     builds its own ffmpeg command at claim time with the same shared code
     the add form used, so shipping a command across the network here would
     only guarantee the two disagree.
@@ -2255,9 +2257,9 @@ async def enqueue_job(
         INSERT INTO jobs (
             kind, title_id, playlist_id, edition_id, source_path,
             audio_stream_index, subtitle_kind, subtitle_stream_index,
-            subtitle_path, stereo_layout
+            subtitle_path, stereo_layout, external_audio_path
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id
         """,
         kind,
@@ -2270,6 +2272,7 @@ async def enqueue_job(
         subtitle_stream_index,
         subtitle_path,
         stereo_layout,
+        external_audio_path,
     )
 
 

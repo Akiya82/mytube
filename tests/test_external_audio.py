@@ -438,3 +438,79 @@ def test_a_real_mux_carries_the_full_video_with_the_shorter_dub_ending_early(tmp
     assert format_duration == pytest.approx(10.0, abs=0.5)
     assert audio_duration == pytest.approx(7.0, abs=0.5)
     assert audio_duration < format_duration - 1.0
+
+
+# --- the choice is contained again on the converter (T-05-09, D-180) -----
+
+
+def test_a_worker_job_whose_external_audio_choice_escapes_the_share_fails_the_job(
+    monkeypatch, tmp_path
+):
+    """The converter re-resolves the choice against its own share mount
+    exactly as the subtitle path already is -- a path that escapes fails
+    the job with the existing reason key rather than raising past the
+    converter's own handler.
+    """
+    import asyncio
+    import uuid
+
+    import worker.__main__ as worker_main
+    from worker.settings import WorkerSettings
+
+    class _FakeClient:
+        def __init__(self):
+            self.done_calls = []
+            self.failed_calls = []
+
+        async def heartbeat(self, job_id, **kwargs):
+            return False
+
+        async def done(self, job_id, **kwargs):
+            self.done_calls.append(kwargs)
+
+        async def failed(self, job_id, *, attempt, reason_key):
+            self.failed_calls.append(reason_key)
+
+        async def cancelled(self, job_id, **kwargs):
+            pass
+
+    share = tmp_path / "share"
+    work = tmp_path / "work"
+    share.mkdir()
+    work.mkdir()
+    settings = WorkerSettings(
+        orchestrator_url="http://orchestrator.local",
+        worker_token="test-worker-token-do-not-use-in-prod",
+        s3_endpoint="http://storage:8333",
+        s3_bucket="mytube",
+        worker_s3_key="worker-key",
+        worker_s3_secret="worker-secret",
+        share_root=str(share),
+        work_dir=str(work),
+    )
+
+    job = {
+        "job_id": str(uuid.uuid4()),
+        "attempt": 1,
+        "object_key": "out.mp4",
+        "edition_id": str(uuid.uuid4()),
+        "source_path": "movie.mkv",
+        "audio_stream_index": None,
+        "subtitle_kind": "none",
+        "subtitle_stream_index": None,
+        "subtitle_path": None,
+        "stereo_layout": "2d",
+        # Escapes the share root the same way a crafted subtitle path
+        # would -- never reachable through safe_join.
+        "external_audio_path": "../outside/dub.mka",
+    }
+
+    client = _FakeClient()
+    asyncio.run(
+        worker_main._process_job(
+            client, object(), settings, job, tmp_path / "scratch", asyncio.Event()
+        )
+    )
+
+    assert client.done_calls == []
+    assert client.failed_calls == ["failed.reason.unreadable_source"]

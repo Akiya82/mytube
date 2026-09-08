@@ -256,6 +256,7 @@ class AddJob:
     source_rel_path: str
     audio_stream_index: int
     channels: int
+    external_audio_rel_path: str | None = None
 
     @classmethod
     def from_row(cls, job_row: asyncpg.Record, edition_row: asyncpg.Record) -> "AddJob":
@@ -268,6 +269,7 @@ class AddJob:
             source_rel_path=job_row["source_path"],
             audio_stream_index=job_row["audio_stream_index"],
             channels=edition_row["audio_channels"],
+            external_audio_rel_path=job_row["external_audio_path"],
         )
 
 
@@ -339,19 +341,27 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
        one that had not begun.
     2. Resolve the source through `safe_join` against the share root
        again -- a path validated on a previous request is not
-       automatically the path arriving on this one. Inside the failure
-       handler's `try`, so a rejected path fails the row rather than
-       stranding it.
+       automatically the path arriving on this one. A job carrying an
+       external audio choice (D-180) resolves that path the same way,
+       right beside it, and fails the same way when it escapes or no
+       longer exists on disk -- never a silent fall back to the embedded
+       track. Inside the failure handler's `try`, so a rejected path fails
+       the row rather than stranding it.
     3. Probe and analyze the resolved source, using the job's own
        `audio_stream_index` as the selected track, from the file as it is
        right now rather than as it was when the form was drawn.
     4. Free-space precheck against the work directory ffmpeg actually
        writes into, before any ffmpeg process starts -- branched on
        `already_correct` through the one shared `required_free_bytes`
-       formula (D-52), never a restated threshold.
-    5. If already correct (D-44), upload the source file straight from
-       the share -- ffmpeg never touches the video at all. Otherwise
-       build the remux command, run it through the shared progress
+       formula (D-52), never a restated threshold. An external audio
+       choice forces this branch closed even when the source itself is
+       already correct: a dub still has to be muxed in by ffmpeg, so the
+       as-is upload can never apply to it.
+    5. If already correct (D-44) and no external audio was chosen, upload
+       the source file straight from the share -- ffmpeg never touches the
+       video at all. Otherwise build the remux command -- with a second
+       input and its own channel-count probe when an external dub was
+       chosen (D-180, D-181) -- run it through the shared progress
        runner, upload the result, and remove the scratch file whether the
        upload succeeded or not. Either way the size recorded on the
        edition is stat'ed from the artifact that was actually uploaded,
@@ -410,6 +420,19 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         root = Path(settings.share_root)
         source = safe_join(root, job.source_rel_path)
 
+        # Resolved here, next to the source, so a job carrying an external
+        # dub goes through the same containment check every other
+        # operator-supplied path in this consumer goes through -- an
+        # escaping or vanished choice fails the job with the existing
+        # unreadable reason (T-05-09), never a silent fall back to the
+        # embedded track: the operator asked for the dub and would
+        # otherwise get a Japanese episode they think is Russian.
+        external_audio_source: Path | None = None
+        if job.external_audio_rel_path:
+            external_audio_source = safe_join(root, job.external_audio_rel_path)
+            if not external_audio_source.is_file():
+                raise OSError(f"{external_audio_source}: external audio choice not found")
+
         work_dir = Path(settings.work_dir)
         scratch_video = work_dir / f"{job.edition_id}.mp4"
         scratch_poster = work_dir / f"{job.edition_id}.jpg"
@@ -422,6 +445,12 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
             moov_first=moov_first,
         )
 
+        # A dub has to be muxed in by ffmpeg -- the as-is upload-the-source
+        # fast path never runs a command at all, so it cannot carry one
+        # in (D-180 still holds ASIS-01: the video stream itself is never
+        # touched either way).
+        effective_already_correct = verdict.already_correct and external_audio_source is None
+
         source_size = verdict.size_bytes
         if not source_size:
             source_size = await asyncio.to_thread(lambda: os.stat(source).st_size)
@@ -429,7 +458,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         free_bytes = await asyncio.to_thread(
             lambda: shutil.disk_usage(settings.work_dir).free
         )
-        required = required_free_bytes(source_size, already_correct=verdict.already_correct)
+        required = required_free_bytes(source_size, already_correct=effective_already_correct)
         if free_bytes < required:
             raise _InsufficientSpaceError(
                 f"{free_bytes} free bytes < {required} required in {settings.work_dir}"
@@ -437,17 +466,35 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
 
         started_at = time.monotonic()
         try:
-            if verdict.already_correct:
+            if effective_already_correct:
                 uploaded_path = source
                 await _upload(source, job.object_key, heartbeat=_heartbeat)
             else:
-                cmd = remux.build_remux_command(
-                    source,
-                    scratch_video,
-                    audio_stream_index=job.audio_stream_index,
-                    reencode_audio=verdict.audio_needs_reencode,
-                    channels=job.channels,
-                )
+                if external_audio_source is not None:
+                    # The probed channel count of the external track feeds
+                    # the same per-channel bitrate formula the embedded
+                    # path already uses -- never the edition's own stored
+                    # channel count, which describes the embedded track
+                    # this job is no longer muxing in.
+                    external_track = await asyncio.to_thread(
+                        compat.external_audio_track, external_audio_source
+                    )
+                    cmd = remux.build_remux_command(
+                        source,
+                        scratch_video,
+                        audio_stream_index=job.audio_stream_index,
+                        reencode_audio=True,
+                        channels=external_track.channels,
+                        external_audio=str(external_audio_source),
+                    )
+                else:
+                    cmd = remux.build_remux_command(
+                        source,
+                        scratch_video,
+                        audio_stream_index=job.audio_stream_index,
+                        reencode_audio=verdict.audio_needs_reencode,
+                        channels=job.channels,
+                    )
                 # `-progress pipe:1` is what the shared runner reads its
                 # blocks from -- `build_remux_command` stays a pure
                 # function with no knowledge of the runner, so this is
