@@ -32,7 +32,14 @@ from orchestrator.media.add import (
     plan_slug,
     suggest_edition_slug,
 )
-from orchestrator.slugs import EditionSlugRefused, SlugError, normalize_slug, pick_unique_slug
+from orchestrator.slugs import (
+    AddressRefused,
+    EditionSlugRefused,
+    SlugError,
+    normalize_slug,
+    parse_public_address,
+    pick_unique_slug,
+)
 from orchestrator.storage import delete_object, put_object_from_file
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
@@ -368,16 +375,39 @@ async def _add_edition_to_existing_episode(
 
 @app.command()
 def rename(
-    slug: str = typer.Argument(..., help="The title's current slug"),
+    slug: str = typer.Argument(
+        ..., help="The title's current address (a bare title only -- see --help)"
+    ),
     to: str = typer.Option(..., "--to", help="New name or slug"),
 ) -> None:
-    """Give a title a new address, leaving the old one working."""
+    """Give a title a new address, leaving the old one working.
+
+    Only a bare title address can be renamed. A numbered or an edition
+    address is refused -- an episode's own number is changed by the
+    renumber form, and an edition's slug is fixed once the edition exists.
+    """
     asyncio.run(_rename(slug, to))
 
 
-async def _rename(old_slug: str, new_name: str) -> None:
+async def _rename(address_text: str, new_name: str) -> None:
     conn = await _connect()
     try:
+        try:
+            address = parse_public_address(address_text)
+        except AddressRefused as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1)
+
+        if address.number is not None or address.edition_slug is not None:
+            typer.echo(
+                "Only a title address can be renamed. An episode's own number "
+                "is changed by the renumber form, not by renaming it, and an "
+                "edition's slug is fixed once the edition exists.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        old_slug = address.slug
+
         candidate = _candidate_slug(None, new_name)
 
         # Same lock, same reason, same shape as the web rename route: the
@@ -409,35 +439,177 @@ async def _rename(old_slug: str, new_name: str) -> None:
 
 
 @app.command()
-def remove(slug: str = typer.Argument(..., help="Slug of the title to remove")) -> None:
-    """Delete an already-published title after its grace window."""
+def remove(
+    slug: str = typer.Argument(
+        ..., help="Address to remove: a bare title, a numbered episode, or an edition"
+    )
+) -> None:
+    """Delete an already-published title, episode or edition after its
+    grace window.
+
+    A bare title address removes the whole title. A numbered address
+    removes that one episode with all its editions. An edition address
+    removes that one edition, or the whole episode when it was the only
+    one left.
+    """
     asyncio.run(_remove(slug))
 
 
-async def _remove(slug: str) -> None:
+async def _remove(address_text: str) -> None:
     settings = get_settings()
     conn = await _connect()
     try:
-        row = await queries.resolve_slug(conn, slug)
-        if row is None or row["status"] != "active":
-            typer.echo(f"Slug {slug!r} not found among active titles", err=True)
+        try:
+            address = parse_public_address(address_text)
+        except AddressRefused as exc:
+            typer.echo(str(exc), err=True)
             raise typer.Exit(1)
 
-        await queries.mark_for_delete(conn, row["title_id"], settings.delete_grace_seconds)
-        _audit("remove", f"marked {slug!r} for delete")
-
-        # The grace window is now reachable from both ends through the web
-        # interface's library screen: undo restores the title, and delete
-        # now skips the wait. The CLI itself still offers neither -- both
-        # live in the interface, not as a fifth CLI command.
-        typer.echo(
-            f"/v/{slug} already answers 410. In {settings.delete_grace_seconds} "
-            "seconds the object will be physically deleted and the space "
-            "freed. Undo the deletion or delete it immediately from the "
-            "web interface's library page."
-        )
+        if address.edition_slug is not None:
+            await _remove_edition(conn, settings, address)
+        elif address.number is not None:
+            await _remove_episode(conn, settings, address)
+        else:
+            await _remove_title(conn, settings, address.slug)
     finally:
         await conn.close()
+
+
+async def _remove_title(conn: asyncpg.Connection, settings, slug: str) -> None:
+    """A bare title address: exactly today's whole-title removal,
+    unchanged.
+    """
+    row = await queries.resolve_slug(conn, slug)
+    if row is None or row["status"] != "active":
+        typer.echo(f"Slug {slug!r} not found among active titles", err=True)
+        raise typer.Exit(1)
+
+    await queries.mark_for_delete(conn, row["title_id"], settings.delete_grace_seconds)
+    _audit("remove", f"marked {slug!r} for delete")
+
+    # The grace window is now reachable from both ends through the web
+    # interface's library screen: undo restores the title, and delete
+    # now skips the wait. The CLI itself still offers neither -- both
+    # live in the interface, not as a fifth CLI command.
+    typer.echo(
+        f"/v/{slug} already answers 410. In {settings.delete_grace_seconds} "
+        "seconds the object will be physically deleted and the space "
+        "freed. Undo the deletion or delete it immediately from the "
+        "web interface's library page."
+    )
+
+
+async def _episode_for_removal(conn: asyncpg.Connection, address) -> tuple:
+    """The title id and the target episode row a numbered or an edition
+    address names -- shared by `_remove_episode` and `_remove_edition`,
+    since both start by resolving exactly the same thing: an active title,
+    then the episode `address` actually points at (by number when it gave
+    one, the title's own lowest episode otherwise -- D-156's two-segment
+    edition address).
+    """
+    title_row = await queries.resolve_slug(conn, address.slug)
+    if title_row is None or title_row["status"] != "active":
+        typer.echo(f"Slug {address.slug!r} not found among active titles", err=True)
+        raise typer.Exit(1)
+
+    if address.number is not None:
+        episode_row = await queries.episode_by_number(
+            conn, title_row["title_id"], address.number
+        )
+    else:
+        episode_row = await queries.lowest_episode_of_title(conn, title_row["title_id"])
+
+    if episode_row is None or episode_row["episode_status"] != "active":
+        typer.echo(f"No active episode found at /v/{address.slug}", err=True)
+        raise typer.Exit(1)
+
+    return title_row["title_id"], episode_row
+
+
+def _canonical_address(address) -> str:
+    parts = [f"/v/{address.slug}"]
+    if address.number is not None:
+        parts.append(f"{address.number:02d}")
+    if address.edition_slug is not None:
+        parts.append(address.edition_slug)
+    return "/".join(parts)
+
+
+async def _remove_episode(conn: asyncpg.Connection, settings, address) -> None:
+    """A numbered address: that one episode, with every edition it holds,
+    on the episode-scoped countdown (D-187) -- the exact twin of
+    `_remove_title`, one level down.
+    """
+    _title_id, episode_row = await _episode_for_removal(conn, address)
+    canonical = _canonical_address(address)
+    typer.echo(canonical)
+
+    await queries.mark_episode_for_delete(
+        conn, episode_row["episode_id"], settings.delete_grace_seconds
+    )
+    _audit("remove", f"marked episode at {canonical} for delete")
+
+    typer.echo(
+        f"{canonical} already answers 410. In {settings.delete_grace_seconds} "
+        "seconds its objects will be physically deleted and the space "
+        "freed. Undo the deletion or delete it immediately from the web "
+        "interface's library page."
+    )
+
+
+async def _remove_edition(conn: asyncpg.Connection, settings, address) -> None:
+    """An edition address: that one edition, refusing when it is the
+    episode's default and other editions exist, and removing the whole
+    episode along with it when it was the only edition left -- the same
+    thing the interface does (D-178).
+    """
+    _title_id, episode_row = await _episode_for_removal(conn, address)
+    edition_row = await queries.edition_by_slug(
+        conn, episode_row["episode_id"], address.edition_slug
+    )
+    if edition_row is None:
+        typer.echo(f"No edition {address.edition_slug!r} found on that episode", err=True)
+        raise typer.Exit(1)
+
+    canonical = _canonical_address(address)
+    typer.echo(canonical)
+
+    if edition_row["is_default"] and edition_row["edition_count"] > 1:
+        typer.echo(
+            f"{canonical} is the episode's default edition -- make another "
+            "edition the default first.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if edition_row["edition_count"] <= 1:
+        # The only edition left: remove the whole episode with it, on the
+        # same episode-scoped countdown a numbered address's own removal
+        # already uses -- no address of this episode should keep answering
+        # once its one and only edition is gone.
+        await queries.mark_episode_for_delete(
+            conn, episode_row["episode_id"], settings.delete_grace_seconds
+        )
+        _audit("remove", f"marked the only edition at {canonical} for delete, with its episode")
+        typer.echo(
+            f"{canonical} was the only edition -- its episode is now scheduled for "
+            f"delete too. In {settings.delete_grace_seconds} seconds its objects "
+            "will be physically deleted and the space freed. Undo the deletion or "
+            "delete it immediately from the web interface's library page."
+        )
+        return
+
+    # A non-default edition with a sibling still standing: no grace window
+    # exists for a single edition (the schema carries no per-edition
+    # delete_at, unlike a whole title or episode) -- removed immediately.
+    if edition_row["object_key"]:
+        delete_object(edition_row["object_key"])
+    if edition_row["poster_key"]:
+        delete_object(edition_row["poster_key"])
+    await queries.delete_edition(conn, edition_row["edition_id"])
+    _audit("remove", f"deleted edition at {canonical}")
+
+    typer.echo(f"{canonical} deleted -- its episode's other editions are unaffected.")
 
 
 @app.command("cache-warm")

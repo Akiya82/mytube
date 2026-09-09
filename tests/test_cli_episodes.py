@@ -297,3 +297,209 @@ async def test_add_refuses_a_new_title_with_no_name(source_file, uploaded_object
     err = capsys.readouterr().err
     assert "--name" in err
     assert len(uploaded_objects) == 0
+
+
+# --- rename reads its target through the shared grammar --------------------
+
+
+async def test_rename_still_renames_a_bare_title_address(
+    source_file, uploaded_objects, capsys, raw_conn
+):
+    title_slug = await _add_standalone_title(source_file, _unique("CLI Rename Bare"))
+    capsys.readouterr()
+
+    await cli._rename(title_slug, "CLI Rename Bare Target")
+    out = capsys.readouterr().out
+    assert "still works" in out
+
+    old = await queries.resolve_slug(raw_conn, title_slug)
+    assert old is not None
+
+
+async def test_rename_refuses_a_numbered_address(source_file, uploaded_objects, capsys):
+    title_slug = await _add_standalone_title(source_file, _unique("CLI Rename Numbered"))
+    capsys.readouterr()
+
+    with pytest.raises(typer.Exit):
+        await cli._rename(f"{title_slug}/1", "Whatever")
+
+    err = capsys.readouterr().err
+    assert "Only a title address can be renamed" in err
+    assert "renumber" in err
+
+
+async def test_rename_refuses_an_edition_address(source_file, uploaded_objects, capsys):
+    title_slug = await _add_standalone_title(source_file, _unique("CLI Rename Edition"))
+    capsys.readouterr()
+    await cli._add(source_file, None, None, False, title_slug, 1, "dub-ru", False)
+    capsys.readouterr()
+
+    with pytest.raises(typer.Exit):
+        await cli._rename(f"{title_slug}/1/dub-ru", "Whatever")
+
+    err = capsys.readouterr().err
+    assert "Only a title address can be renamed" in err
+    assert "fixed once the edition exists" in err
+
+
+# --- remove reads its target through the shared grammar ---------------------
+
+
+async def test_remove_bare_title_address_is_unchanged(
+    source_file, uploaded_objects, capsys, raw_conn
+):
+    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Bare"))
+    capsys.readouterr()
+
+    await cli._remove(title_slug)
+    out = capsys.readouterr().out
+    assert "freed" in out
+
+    row = await queries.resolve_slug(raw_conn, title_slug)
+    assert row["status"] == "pending_delete"
+
+
+async def test_remove_numbered_address_removes_that_episode_only(
+    source_file, uploaded_objects, capsys, raw_conn
+):
+    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Numbered"))
+    capsys.readouterr()
+    await cli._add(source_file, None, None, False, title_slug, 2, None, False)
+    capsys.readouterr()
+
+    await cli._remove(f"{title_slug}/2")
+    out = capsys.readouterr().out
+    assert f"/v/{title_slug}/02" in out.splitlines()[0]
+
+    episode_2 = await queries.episode_by_number(
+        raw_conn, (await queries.resolve_slug(raw_conn, title_slug))["title_id"], 2
+    )
+    assert episode_2["episode_status"] == "pending_delete"
+    # Episode 1 (the title's own original episode) is unaffected.
+    row = await queries.resolve_slug(raw_conn, title_slug)
+    assert row["status"] == "active"
+    assert row["episode_status"] == "active"
+
+
+async def test_remove_episode_accepts_a_leading_zero_numbered_address(
+    source_file, uploaded_objects, capsys, raw_conn
+):
+    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Leading Zero"))
+    capsys.readouterr()
+    await cli._add(source_file, None, None, False, title_slug, 9, None, False)
+    capsys.readouterr()
+
+    await cli._remove(f"{title_slug}/09")
+
+    episode_9 = await queries.episode_by_number(
+        raw_conn, (await queries.resolve_slug(raw_conn, title_slug))["title_id"], 9
+    )
+    assert episode_9["episode_status"] == "pending_delete"
+
+
+async def test_remove_episode_uses_the_same_countdown_as_title_level_remove(
+    source_file, uploaded_objects, capsys, raw_conn
+):
+    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Countdown"))
+    capsys.readouterr()
+    await cli._add(source_file, None, None, False, title_slug, 4, None, False)
+    capsys.readouterr()
+
+    await cli._remove(f"{title_slug}/4")
+
+    title_id = (await queries.resolve_slug(raw_conn, title_slug))["title_id"]
+    episode_4 = await queries.episode_by_number(raw_conn, title_id, 4)
+    delete_at = await raw_conn.fetchval(
+        "SELECT delete_at FROM episodes WHERE id = $1", episode_4["episode_id"]
+    )
+    assert delete_at is not None
+
+    # Undo works exactly the same way the title-level countdown does.
+    await queries.cancel_delete_episode(raw_conn, episode_4["episode_id"])
+    restored = await queries.episode_by_number(raw_conn, title_id, 4)
+    assert restored["episode_status"] == "active"
+
+
+async def test_remove_edition_refuses_when_it_is_the_default_and_a_sibling_exists(
+    source_file, uploaded_objects, capsys, raw_conn
+):
+    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Real Default"))
+    capsys.readouterr()
+    await cli._add(source_file, None, None, False, title_slug, 1, "dub-ru", True)
+    capsys.readouterr()
+
+    row = await queries.resolve_slug(raw_conn, title_slug)
+    episode_id = row["episode_id"]
+    default_edition_id = await raw_conn.fetchval(
+        "SELECT default_edition_id FROM episodes WHERE id = $1", episode_id
+    )
+    default_slug = await raw_conn.fetchval(
+        "SELECT slug FROM editions WHERE id = $1", default_edition_id
+    )
+    assert default_slug == "dub-ru"
+
+    with pytest.raises(typer.Exit):
+        await cli._remove(f"{title_slug}/1/dub-ru")
+
+    err = capsys.readouterr().err
+    assert "default edition" in err
+    assert "make another" in err.lower()
+
+
+async def test_remove_edition_deletes_a_non_default_edition_with_a_sibling(
+    source_file, uploaded_objects, capsys, raw_conn
+):
+    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Sibling Edition"))
+    capsys.readouterr()
+    await cli._add(source_file, None, None, False, title_slug, 1, "dub-ru", False)
+    capsys.readouterr()
+
+    await cli._remove(f"{title_slug}/1/dub-ru")
+    out = capsys.readouterr().out
+    assert "deleted" in out
+
+    row = await queries.resolve_episode_slug(raw_conn, title_slug, 1, edition_slug="dub-ru")
+    assert row is None or row["edition_id"] is None
+    # The episode itself is unaffected.
+    still_there = await queries.resolve_slug(raw_conn, title_slug)
+    assert still_there["status"] == "active"
+
+
+async def test_remove_edition_last_edition_removes_the_episode_too(
+    source_file, uploaded_objects, capsys, raw_conn
+):
+    """The episode's own first edition is always slug-less (D-177), so no
+    public address ever names it directly -- the only way this codebase
+    reaches "one edition left, and it has a real slug" is the original
+    slug-less edition already being gone by some other means. Simulated
+    here with a direct row deletion (test-only) so `_remove_edition`'s own
+    last-edition branch (D-178) is exercised end to end through the real
+    CLI entry point.
+    """
+    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Last Edition"))
+    capsys.readouterr()
+    await cli._add(source_file, None, None, False, title_slug, 1, "dub-ru", False)
+    capsys.readouterr()
+
+    row = await queries.resolve_slug(raw_conn, title_slug)
+    episode_id = row["episode_id"]
+    original_default_edition_id = row["default_edition_id"]
+
+    await raw_conn.execute(
+        """
+        UPDATE episodes SET default_edition_id =
+            (SELECT id FROM editions WHERE episode_id = $1 AND slug = 'dub-ru')
+        WHERE id = $1
+        """,
+        episode_id,
+    )
+    await raw_conn.execute("DELETE FROM editions WHERE id = $1", original_default_edition_id)
+
+    await cli._remove(f"{title_slug}/1/dub-ru")
+    out = capsys.readouterr().out
+    assert "only edition" in out
+
+    updated_status = await raw_conn.fetchval(
+        "SELECT status FROM episodes WHERE id = $1", episode_id
+    )
+    assert updated_status == "pending_delete"

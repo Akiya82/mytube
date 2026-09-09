@@ -1726,6 +1726,71 @@ async def sync_title_status(
             await mark_title_failed(conn, title_id, reason_key or "failed.reason.unknown")
 
 
+async def lowest_episode_of_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
+    """The title's own lowest episode -- the exact lateral
+    `resolve_title_edition_slug` already runs, exposed as its own reader
+    for a caller that needs to act on that episode rather than resolve
+    through it. A film-shaped title (one episode, addressed as
+    GET /v/{slug}/{edition_slug} with no number segment, D-156) has only
+    this one episode; a series has one per number, and this is the one a
+    two-segment edition address always means.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT ep.id AS episode_id, ep.status AS episode_status,
+               ep.default_edition_id AS default_edition_id
+        FROM episodes ep
+        JOIN seasons s ON s.id = ep.season_id
+        WHERE s.title_id = $1
+        ORDER BY s.number, ep.number
+        LIMIT 1
+        """,
+        title_id,
+    )
+
+
+async def edition_by_slug(
+    conn: asyncpg.Connection, episode_id, slug: str | None
+) -> asyncpg.Record | None:
+    """The one edition of `episode_id` whose slug is exactly `slug` (`None`
+    matches the episode's own slug-less first edition, D-177) -- its own
+    id, object/poster keys, whether it is the episode's current default,
+    and how many editions the episode holds in total. A caller removing an
+    edition (D-178) reads all three facts in one round trip to decide
+    whether to refuse, remove just this edition, or remove the whole
+    episode along with its only one.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT
+            e.id AS edition_id,
+            e.object_key AS object_key,
+            e.poster_key AS poster_key,
+            (e.id = ep.default_edition_id) AS is_default,
+            (SELECT COUNT(*) FROM editions WHERE episode_id = ep.id) AS edition_count
+        FROM editions e
+        JOIN episodes ep ON ep.id = e.episode_id
+        WHERE e.episode_id = $1 AND e.slug IS NOT DISTINCT FROM $2
+        """,
+        episode_id,
+        slug,
+    )
+
+
+async def delete_edition(conn: asyncpg.Connection, edition_id) -> None:
+    """Hard-delete one edition's row immediately -- the only edition-
+    removal shape with no grace window (a non-default edition removed
+    while a sibling edition still exists, D-178): the schema carries no
+    per-edition `delete_at` the way a title or an episode does. The caller
+    must have already removed the objects `edition_by_slug` named for this
+    id from storage, and must never call this for an episode's only or its
+    default edition -- both of those go through `mark_episode_for_delete`
+    instead, at the episode level, on the same countdown a whole episode's
+    removal already uses.
+    """
+    await conn.execute("DELETE FROM editions WHERE id = $1", edition_id)
+
+
 # --- Playlist queries (0004_playlists.py) ---------------------------------
 
 
