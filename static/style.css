@@ -173,15 +173,22 @@ button.site-nav__link {
   font-weight: var(--text-heading-weight);
 }
 
-/* The page is fluid (05-UI-SPEC.md Design System, page width): no maximum
-   width, the viewport minus one --space-lg on each side, at 1024px,
-   1920px and 3440px alike. The 960px cap that lived here from the first
-   library screen on was never part of any contract; it left half of a
-   1080p monitor empty and, once the library row grew a fourth action,
-   crushed the row's text column to a sliver. The only surfaces that cap
-   their own width are reading surfaces: .page--narrow below and the check
+/* The page is centered and sized to its content (05-UI-SPEC.md Design
+   System, page width): as wide as its widest line needs, never narrower
+   than 960px -- the width every screen was designed at -- and never wider
+   than the viewport. A library whose widest row needs 1780px gets 1780px
+   in the middle of a 1920px or a 3440px monitor; one whose rows fit in
+   960px stays at 960px. The 960px cap that lived here from the first
+   library screen on was never part of any contract (it crushed the row's
+   text column to a sliver once the row grew a fourth action), and the
+   full-width page that briefly replaced it ran the actions to the far
+   edge of a wide monitor for nothing. The only surfaces that cap their
+   own width are reading surfaces: .page--narrow below and the check
    page's player and captions. */
 .page {
+  width: fit-content;
+  min-width: min(960px, 100%);
+  max-width: 100%;
   margin: 0 auto;
   padding: var(--space-xl) var(--space-lg) var(--space-3xl);
 }
@@ -192,7 +199,11 @@ button.site-nav__link {
    axes, reading as a broken layout rather than a chosen one. One class
    puts the heading, the banner and the card in one 400px column. */
 .page--narrow {
-  max-width: 400px;
+  /* An explicit width, not a cap: sized-to-content would shrink the card
+     to its inputs' intrinsic width. */
+  width: 400px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* .auth-card is `.add-form` reused verbatim (02.1-UI-SPEC.md Component
