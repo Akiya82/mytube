@@ -17,6 +17,7 @@ from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.signing import blob_path, sign_blob_url
+from orchestrator.slugs import AddressRefused, parse_public_address
 
 router = APIRouter()
 
@@ -78,13 +79,6 @@ def _sign_redirect(request: Request, edition_id, extra_query: str = "") -> Redir
 # stub clips; reusing one of them here would tell a viewer their still-
 # converting episode was deleted, or that the address never existed.
 EDITION_PREPARING_STATUS = 423
-
-# A digit run longer than this is refused before int() ever sees it (T-05-05):
-# Postgres's own `episode_number_history.number` column is a 32-bit integer,
-# so no real episode number is ever more than ten digits, and refusing well
-# above that bound still leaves no room for a pathologically long string to
-# cost anything before the address answers not found.
-MAX_NUMERIC_SEGMENT_LENGTH = 15
 
 
 def _readiness_status_code(row) -> int | None:
@@ -179,28 +173,31 @@ async def resolve_slug_route(slug: str, request: Request):
 @router.get("/v/{slug}/{segment}")
 async def resolve_episode_or_edition_route(slug: str, segment: str, request: Request):
     """A numbered episode (GET /v/{slug}/{number}), or a film's alternative
-    edition (GET /v/{slug}/{edition_slug}) -- decided from `segment`'s own
-    shape, in Python, before either resolver runs: a segment made only of
-    digits is an episode number, parsed to an integer, which is what
+    edition (GET /v/{slug}/{edition_slug}) -- decided by
+    `orchestrator.slugs.parse_public_address` (D-156, T-05-23) from
+    `segment`'s own shape, before either resolver runs: a segment made only
+    of digits is an episode number, parsed to an integer, which is what
     collapses every leading-zero form onto the same episode; anything else
     is an edition slug of whatever the bare address plays. This is exactly
     why an edition slug may never be made only of digits (see
     orchestrator.slugs.normalize_edition_slug) -- the two address forms
-    would otherwise compete for the same segment shape.
-
-    A digit run longer than MAX_NUMERIC_SEGMENT_LENGTH answers not found
-    outright rather than reaching `int()` (T-05-05, T-05-03): the segment
-    is untrusted, and nothing this route does needs a number that long.
+    would otherwise compete for the same segment shape. A refusal from the
+    grammar (an absurdly long digit run, an edition slug that fails the
+    edition rule) answers not found, the same as before this moved.
     """
     pool = request.app.state.db_pool
 
-    if segment.isdigit():
-        if len(segment) > MAX_NUMERIC_SEGMENT_LENGTH:
-            return Response(status_code=404)
-        number = int(segment)
-        resolver = lambda conn: queries.resolve_episode_slug(conn, slug, number)
+    try:
+        address = parse_public_address(f"{slug}/{segment}")
+    except AddressRefused:
+        return Response(status_code=404)
+
+    if address.number is not None:
+        resolver = lambda conn: queries.resolve_episode_slug(conn, address.slug, address.number)
     else:
-        resolver = lambda conn: queries.resolve_title_edition_slug(conn, slug, segment)
+        resolver = lambda conn: queries.resolve_title_edition_slug(
+            conn, address.slug, address.edition_slug
+        )
 
     try:
         row = await asyncio.wait_for(
@@ -224,12 +221,14 @@ async def resolve_episode_edition_route(
 ):
     """An episode's own alternative edition -- the three-segment address a
     series' numbered episode gets when it, too, carries more than one
-    edition. `number` is always digits here (the route pattern only
-    matches a third segment when there is one, and a two-segment edition
-    address is `resolve_episode_or_edition_route`'s job), but is still
-    guarded the same way against an absurd length before parsing.
+    edition. Read through `parse_public_address` (D-156, T-05-23) exactly
+    as the two-segment route is; a refusal (the second segment is not a
+    number, an absurdly long digit run, an edition slug that fails the
+    edition rule) answers not found, the same as before this moved.
     """
-    if not number.isdigit() or len(number) > MAX_NUMERIC_SEGMENT_LENGTH:
+    try:
+        address = parse_public_address(f"{slug}/{number}/{edition_slug}")
+    except AddressRefused:
         return Response(status_code=404)
 
     pool = request.app.state.db_pool
@@ -238,7 +237,7 @@ async def resolve_episode_edition_route(
             _acquire_and(
                 pool,
                 lambda conn: queries.resolve_episode_slug(
-                    conn, slug, int(number), edition_slug=edition_slug
+                    conn, address.slug, address.number, edition_slug=address.edition_slug
                 ),
             ),
             timeout=auth.ACQUIRE_TIMEOUT_SECONDS,

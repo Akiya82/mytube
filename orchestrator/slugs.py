@@ -13,11 +13,22 @@ detection is this module's job (`similar_key`), not the library's -- the
 library only guarantees a valid slug shape, not semantic uniqueness.
 """
 import re
+from dataclasses import dataclass
 
 from slugify import slugify
 
 _SLUG_SHAPE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_SLUG_LENGTH = 80
+
+# A digit run longer than this is refused before int() ever sees it
+# (T-05-05, T-05-23): Postgres's own `episode_number_history.number` column
+# is a 32-bit integer, so no real episode number is ever more than ten
+# digits, and refusing well above that bound still leaves no room for a
+# pathologically long string to cost anything before the address answers
+# not found. Read by `parse_public_address` below and by
+# `orchestrator.resolve`, which used to define its own copy of this same
+# number before the grammar moved here.
+MAX_NUMERIC_SEGMENT_LENGTH = 15
 
 
 class SlugError(Exception):
@@ -104,3 +115,112 @@ def pick_unique_slug(candidate: str, taken: set[str]) -> tuple[str, list[str]]:
     while f"{candidate}-{suffix}" in taken:
         suffix += 1
     return f"{candidate}-{suffix}", similar
+
+
+# --- The public address grammar (D-156, D-187, T-05-23) --------------------
+#
+# What a second (and third) path segment of GET /v/{slug}/... means used to
+# be decided twice: once inline in orchestrator.resolve's own routes, and
+# a second time -- the plan was -- inline in the command line. One pasted
+# or typed address deciding what gets read or written on the command line
+# and what a browser redirects to are the exact same trust boundary, so
+# this is one function instead of two: the route and the command line both
+# call it and can no longer disagree about what a segment means.
+
+
+class AddressRefused(Exception):
+    """Raised when a path cannot be read as one of the four shapes the
+    public address grammar accepts.
+    """
+
+
+@dataclass(frozen=True)
+class PublicAddress:
+    """One parsed public address: a title slug alone, a title slug and an
+    episode number, a title slug and an edition slug (a film's alternative
+    edition), or all three at once. `number` and `edition_slug` are `None`
+    when the address did not carry them. Resolving this into a real row is
+    entirely the caller's job -- this function never touches a database.
+    """
+
+    slug: str
+    number: int | None = None
+    edition_slug: str | None = None
+
+
+def _parse_number_segment(segment: str) -> int | None:
+    """`None` when `segment` is not made only of digits; the parsed integer
+    otherwise, refusing an absurdly long digit run before it ever reaches
+    `int()`.
+    """
+    if not segment.isdigit():
+        return None
+    if len(segment) > MAX_NUMERIC_SEGMENT_LENGTH:
+        raise AddressRefused(f"numeric segment {segment!r} is too long")
+    return int(segment)
+
+
+def _parse_edition_segment(segment: str) -> str:
+    """An edition slug segment, refused when it fails the same shape rule
+    `normalize_edition_slug` enforces at save time (valid slug shape, never
+    all digits) -- a segment reaching here is meant to already be a stored
+    slug, not a name to transliterate, so this validates rather than
+    normalizes.
+    """
+    if segment.isdigit() or not _SLUG_SHAPE.match(segment):
+        raise AddressRefused(f"{segment!r} cannot be an edition slug")
+    return segment
+
+
+def parse_public_address(path: str) -> PublicAddress:
+    """Parse a public address -- GET /v/{slug}[/{segment}[/{edition_slug}]]
+    -- into a `PublicAddress`, or raise `AddressRefused`.
+
+    Accepts the four shapes the product promises: a bare title slug; a
+    title slug and a number; a title slug and an edition slug; a title
+    slug, a number and an edition slug. Refuses everything else: a fourth
+    segment, an empty segment, or an edition slug that fails the edition
+    rule.
+
+    A second segment made only of digits is an episode number -- every
+    leading-zero form (`"05"`, `"5"`, `"005"`) collapses onto the same
+    integer, which is the whole reason a number dictated aloud works. A
+    segment that is not all digits is an edition slug. In the three-segment
+    shape the second segment must be a number (an edition of an episode
+    always answers at `/v/{slug}/{number}/{edition}`, never
+    `/v/{slug}/{edition}/{number}`) and the third is always an edition
+    slug, refused if it is made only of digits.
+
+    Takes a path with or without a leading `v` marker segment, so an
+    operator can paste the exact address a browser shows
+    (`/v/horimiya/05`) or type the bare form (`horimiya/05`) -- both parse
+    identically. Never touches a database.
+    """
+    trimmed = path.strip("/")
+    if not trimmed:
+        raise AddressRefused("empty address")
+
+    segments = trimmed.split("/")
+    if segments[0] == "v":
+        segments = segments[1:]
+
+    if not segments or any(not segment for segment in segments):
+        raise AddressRefused(f"empty path segment in {path!r}")
+    if len(segments) > 3:
+        raise AddressRefused(f"too many path segments in {path!r}")
+
+    slug = segments[0]
+    if len(segments) == 1:
+        return PublicAddress(slug=slug)
+
+    if len(segments) == 2:
+        number = _parse_number_segment(segments[1])
+        if number is not None:
+            return PublicAddress(slug=slug, number=number)
+        return PublicAddress(slug=slug, edition_slug=_parse_edition_segment(segments[1]))
+
+    number = _parse_number_segment(segments[1])
+    if number is None:
+        raise AddressRefused(f"second segment of {path!r} is not a number")
+    edition_slug = _parse_edition_segment(segments[2])
+    return PublicAddress(slug=slug, number=number, edition_slug=edition_slug)

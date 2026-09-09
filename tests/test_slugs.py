@@ -3,10 +3,13 @@ import re
 import pytest
 
 from orchestrator.slugs import (
+    AddressRefused,
     EditionSlugRefused,
+    PublicAddress,
     SlugError,
     normalize_edition_slug,
     normalize_slug,
+    parse_public_address,
     pick_unique_slug,
     similar_key,
 )
@@ -99,3 +102,68 @@ def test_normalize_edition_slug_refuses_a_slug_that_normalises_to_digits_only():
 def test_normalize_edition_slug_refuses_an_empty_result():
     with pytest.raises(SlugError):
         normalize_edition_slug("???")
+
+
+# --- parse_public_address (D-156, D-187, T-05-23) ---------------------------
+
+
+def test_parse_public_address_bare_title():
+    assert parse_public_address("horimiya") == PublicAddress(slug="horimiya")
+
+
+def test_parse_public_address_title_and_number():
+    assert parse_public_address("horimiya/5") == PublicAddress(slug="horimiya", number=5)
+
+
+def test_parse_public_address_title_and_edition_slug():
+    assert parse_public_address("some-film/directors-cut") == PublicAddress(
+        slug="some-film", edition_slug="directors-cut"
+    )
+
+
+def test_parse_public_address_title_number_and_edition_slug():
+    assert parse_public_address("horimiya/5/dub-ru") == PublicAddress(
+        slug="horimiya", number=5, edition_slug="dub-ru"
+    )
+
+
+def test_parse_public_address_every_leading_zero_form_gives_the_same_result():
+    assert (
+        parse_public_address("horimiya/05")
+        == parse_public_address("horimiya/5")
+        == parse_public_address("/v/horimiya/005")
+    )
+
+
+def test_parse_public_address_accepts_a_pasted_address_with_the_leading_marker():
+    assert parse_public_address("/v/horimiya/5") == parse_public_address("horimiya/5")
+
+
+def test_parse_public_address_refuses_a_four_segment_address():
+    with pytest.raises(AddressRefused):
+        parse_public_address("a/b/c/d")
+
+
+def test_parse_public_address_refuses_an_empty_segment():
+    with pytest.raises(AddressRefused):
+        parse_public_address("a//b")
+
+
+def test_parse_public_address_refuses_an_all_digit_edition_slug():
+    with pytest.raises(AddressRefused):
+        parse_public_address("a/1/2")
+
+
+def test_parse_public_address_refuses_an_absurdly_long_numeric_segment():
+    with pytest.raises(AddressRefused):
+        parse_public_address(f"horimiya/{'9' * 40}")
+
+
+def test_parse_public_address_refuses_an_empty_address():
+    with pytest.raises(AddressRefused):
+        parse_public_address("")
+
+
+def test_parse_public_address_refuses_a_non_slug_shaped_edition_segment():
+    with pytest.raises(AddressRefused):
+        parse_public_address("horimiya/Not A Slug!")
