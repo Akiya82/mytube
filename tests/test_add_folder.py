@@ -43,8 +43,27 @@ def _probe_raising():
     return _probe
 
 
+class _DummyTxCtx:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
 class _DummyConn:
-    pass
+    """A stand-in `asyncpg.Connection` for the save route's own
+    transaction/advisory-lock statements, the identical shape
+    `test_add_form.py` already uses for the single-file save -- every
+    `queries.*` call the write path makes is stubbed by `db_stub` below,
+    so nothing here ever reaches real SQL.
+    """
+
+    def transaction(self):
+        return _DummyTxCtx()
+
+    async def execute(self, *args, **kwargs):
+        return None
 
 
 class _DummyAcquireCtx:
@@ -116,17 +135,31 @@ def _web_env(folder_share_root, tmp_path, monkeypatch):
 
 @pytest.fixture
 def db_stub(monkeypatch):
+    import uuid as _uuid
+
     class _Stub:
         already_added_rows: list[dict] = []
         resolve_slug_result = None
         taken_slugs_result: set = set()
         title_by_current_slug_result = None
         taken_episode_numbers_result: set = set()
+        create_title_with_episodes_title_id = None
+        create_title_with_episodes_calls: list[dict] = []
+        attach_episodes_to_title_calls: list[dict] = []
+        reparent_edition_to_episode_calls: list[dict] = []
+        enqueue_job_calls: list[dict] = []
+        touch_title_changed_calls: list = []
 
     stub = _Stub()
     stub.already_added_rows = []
     stub.taken_slugs_result = set()
     stub.taken_episode_numbers_result = set()
+    stub.create_title_with_episodes_title_id = _uuid.uuid4()
+    stub.create_title_with_episodes_calls = []
+    stub.attach_episodes_to_title_calls = []
+    stub.reparent_edition_to_episode_calls = []
+    stub.enqueue_job_calls = []
+    stub.touch_title_changed_calls = []
 
     async def _editions_by_source_paths(conn, paths):
         return [row for row in stub.already_added_rows if row["source_path"] in paths]
@@ -143,11 +176,39 @@ def db_stub(monkeypatch):
     async def _taken_episode_numbers(conn, title_id):
         return stub.taken_episode_numbers_result
 
+    async def _create_title_with_episodes(conn, name, slug, episodes, **kwargs):
+        stub.create_title_with_episodes_calls.append(
+            {"name": name, "slug": slug, "episodes": episodes, **kwargs}
+        )
+        return stub.create_title_with_episodes_title_id, [_uuid.uuid4() for _ in episodes]
+
+    async def _attach_episodes_to_title(conn, title_id, episodes, **kwargs):
+        stub.attach_episodes_to_title_calls.append(
+            {"title_id": title_id, "episodes": episodes, **kwargs}
+        )
+        return [_uuid.uuid4() for _ in episodes]
+
+    async def _reparent_edition_to_episode(conn, **kwargs):
+        stub.reparent_edition_to_episode_calls.append(kwargs)
+        return _uuid.uuid4()
+
+    async def _enqueue_job(conn, **kwargs):
+        stub.enqueue_job_calls.append(kwargs)
+        return _uuid.uuid4()
+
+    async def _touch_title_changed(conn, title_id):
+        stub.touch_title_changed_calls.append(title_id)
+
     monkeypatch.setattr(queries, "editions_by_source_paths", _editions_by_source_paths)
     monkeypatch.setattr(queries, "resolve_slug", _resolve_slug)
     monkeypatch.setattr(queries, "taken_slugs", _taken_slugs)
     monkeypatch.setattr(queries, "title_by_current_slug", _title_by_current_slug)
     monkeypatch.setattr(queries, "taken_episode_numbers", _taken_episode_numbers)
+    monkeypatch.setattr(queries, "create_title_with_episodes", _create_title_with_episodes)
+    monkeypatch.setattr(queries, "attach_episodes_to_title", _attach_episodes_to_title)
+    monkeypatch.setattr(queries, "reparent_edition_to_episode", _reparent_edition_to_episode)
+    monkeypatch.setattr(queries, "enqueue_job", _enqueue_job)
+    monkeypatch.setattr(queries, "touch_title_changed", _touch_title_changed)
     return stub
 
 
@@ -915,3 +976,449 @@ async def test_not_predisabled_no_button_is_disabled_for_a_reason_a_box_could_ch
     convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
     assert "disabled" not in add_tag
     assert "disabled" not in convert_tag
+
+
+# --- The save: POST /add-folder/{path} (plan 08) ---------------------------
+
+
+def _horimiya_form(**overrides) -> dict:
+    """A minimal, otherwise-valid submission for the three-file Horimiya
+    fixture folder -- new title, all three files ticked and numbered, the
+    folder's own single audio track chosen, no subtitle burn, 2D. Each
+    test overrides only the fields its own scenario cares about.
+
+    A real browser never submits an unchecked checkbox's name at all; an
+    override of `""` for an `include_N`/`move_N` field reproduces that
+    (the key is dropped from the posted form) rather than sending an
+    empty value the route would still read as present.
+    """
+    form = {
+        "group": "0",
+        "title_mode": "new",
+        "name": "Horimiya",
+        "slug": "horimiya",
+        "audio_choice": "embedded:0",
+        "subtitle_choice": "none",
+        "stereo_layout": "2d",
+        "include_0": "1",
+        "episode_number_0": "1",
+        "include_1": "1",
+        "episode_number_1": "2",
+        "include_2": "1",
+        "episode_number_2": "3",
+        "add": "1",
+    }
+    form.update(overrides)
+    for key, value in list(form.items()):
+        if value == "" and (key.startswith("include_") or key.startswith("move_")):
+            del form[key]
+    return form
+
+
+async def test_refusal_when_no_file_is_ticked(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    form = _horimiya_form(include_0="", include_1="", include_2="")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    assert "No files selected." in resp.text
+
+
+async def test_refusal_when_a_ticked_row_has_no_number(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    form = _horimiya_form(episode_number_0="")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    assert "Fix the highlighted rows before saving" in resp.text
+    assert "No episode number recognized" in resp.text
+
+
+async def test_refusal_when_two_ticked_rows_share_a_number(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    form = _horimiya_form(episode_number_1="1")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    assert "Fix the highlighted rows before saving" in resp.text
+    assert "Episode 1 is used by another checked file." in resp.text
+
+
+async def test_refusal_when_a_ticked_rows_number_is_already_taken_in_existing_mode(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.title_by_current_slug_result = {
+        "title_id": "t1", "title_name": "Horimiya", "title_status": "active",
+    }
+    db_stub.taken_episode_numbers_result = {1}
+    form = _horimiya_form(title_mode="existing", target_title_id="t1")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    assert "Fix the highlighted rows before saving" in resp.text
+    assert "Episode 1 already exists in this title." in resp.text
+    assert db_stub.attach_episodes_to_title_calls == []
+
+
+async def test_refusal_when_existing_mode_names_a_target_that_no_longer_matches(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    # No title_by_current_slug_result configured -- the fresh read finds no
+    # match at all, so a submission still claiming "existing" mode names a
+    # target this request cannot confirm.
+    form = _horimiya_form(title_mode="existing", target_title_id="stale-id")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    assert "Fix the highlighted rows before saving" in resp.text
+    assert db_stub.attach_episodes_to_title_calls == []
+    assert db_stub.create_title_with_episodes_calls == []
+
+
+async def test_refusal_when_a_highlighted_row_has_no_track_choice(
+    monkeypatch, db_stub, folder_share_root, _web_env, signed_in
+):
+    monkeypatch.setattr(
+        routes_folder,
+        "probe",
+        _probe_dispatch({"Mixed - 01.mkv": "compatible.json", "Mixed - 02.mkv": "multitrack.json"}),
+    )
+    app.state.db_pool = _DummyPool()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    ) as client:
+        form = {
+            "group": "0",
+            "title_mode": "new",
+            "name": "Mixed",
+            "slug": "mixed",
+            "audio_choice": "embedded:0",
+            "subtitle_choice": "none",
+            "stereo_layout": "2d",
+            "include_0": "1", "episode_number_0": "1",
+            "include_1": "1", "episode_number_1": "2",
+            "add": "1",
+        }
+        resp = await client.post("/add-folder/Mixed", data=form)
+    assert resp.status_code == 200
+    assert "Fix the highlighted rows before saving" in resp.text
+    assert 'name="audio_fallback_1"' in resp.text
+
+
+async def test_refusal_when_add_as_is_is_clicked_with_an_incompatible_file_ticked(
+    monkeypatch, db_stub, folder_share_root, _web_env, signed_in
+):
+    monkeypatch.setattr(
+        routes_folder,
+        "probe",
+        _probe_dispatch({"Mixed - 01.mkv": "compatible.json", "Mixed - 02.mkv": "hevc.json"}),
+    )
+    app.state.db_pool = _DummyPool()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    ) as client:
+        form = {
+            "group": "0",
+            "title_mode": "new",
+            "name": "Mixed",
+            "slug": "mixed",
+            "audio_choice": "embedded:0",
+            "subtitle_choice": "none",
+            "stereo_layout": "2d",
+            "include_0": "1", "episode_number_0": "1",
+            "include_1": "1", "episode_number_1": "2",
+            "add": "1",
+        }
+        resp = await client.post("/add-folder/Mixed", data=form)
+    assert resp.status_code == 200
+    assert "can&#39;t be added as-is" in resp.text or "can't be added as-is" in resp.text
+    assert db_stub.create_title_with_episodes_calls == []
+
+
+async def test_a_refused_folder_save_writes_no_rows_written_to_the_catalog(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    form = _horimiya_form(episode_number_0="")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    assert db_stub.create_title_with_episodes_calls == []
+    assert db_stub.attach_episodes_to_title_calls == []
+    assert db_stub.reparent_edition_to_episode_calls == []
+
+
+async def test_a_refused_folder_save_enqueues_no_job(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    form = _horimiya_form(episode_number_1="1")  # duplicate -> refused
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    assert db_stub.enqueue_job_calls == []
+
+
+async def test_a_refusal_preserves_every_ticked_box(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    form = _horimiya_form(include_1="", episode_number_0="")  # row 0 refuses the save
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    # Row 1 was unticked by the operator -- it must come back unticked,
+    # not reset to whatever _build_rows freshly recognised (which would
+    # tick it, since its own filename carries a number).
+    assert "checked" not in resp.text.split('name="include_1"')[1].split(">")[0]
+    assert "checked" in resp.text.split('name="include_2"')[1].split(">")[0]
+
+
+async def test_a_refusal_preserves_typed_numbers(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    form = _horimiya_form(episode_number_2="99", episode_number_0="")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    assert 'value="99"' in resp.text.split('name="episode_number_2"')[1].split(">")[0]
+
+
+async def test_a_refusal_preserves_the_title_mode_and_name(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    form = _horimiya_form(name="My Own Name", slug="my-own-slug", episode_number_0="")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    assert 'value="My Own Name"' in resp.text
+    assert 'value="my-own-slug"' in resp.text
+
+
+async def test_the_buttons_are_enabled_again_after_a_refusal(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    form = _horimiya_form(episode_number_0="")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "disabled" not in add_tag
+    assert "disabled" not in convert_tag
+
+
+async def test_whole_folder_save_creates_one_title_with_the_right_episodes_and_numbers(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=_horimiya_form())
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/library"
+    assert len(db_stub.create_title_with_episodes_calls) == 1
+    call = db_stub.create_title_with_episodes_calls[0]
+    assert call["name"] == "Horimiya"
+    assert call["slug"] == "horimiya"
+    assert sorted(spec["number"] for spec in call["episodes"]) == [1, 2, 3]
+    assert db_stub.touch_title_changed_calls == [db_stub.create_title_with_episodes_title_id]
+
+
+async def test_one_job_per_edition_carries_the_right_kind_and_payload(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        await web_client.post("/add-folder/Horimiya", data=_horimiya_form())
+    assert len(db_stub.enqueue_job_calls) == 3
+    for job in db_stub.enqueue_job_calls:
+        assert job["kind"] == "remux"
+        assert job["title_id"] == db_stub.create_title_with_episodes_title_id
+    sources = {job["source_path"] for job in db_stub.enqueue_job_calls}
+    assert sources == {
+        "Horimiya/Horimiya - 01.mkv",
+        "Horimiya/Horimiya - 02.mkv",
+        "Horimiya/Horimiya - 03.mkv",
+    }
+
+
+async def test_convert_action_enqueues_transcode_jobs(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    form = _horimiya_form()
+    del form["add"]
+    form["convert"] = "1"
+    async with web_client:
+        await web_client.post("/add-folder/Horimiya", data=form)
+    assert len(db_stub.enqueue_job_calls) == 3
+    for job in db_stub.enqueue_job_calls:
+        assert job["kind"] == "transcode"
+        assert job["subtitle_kind"] == "none"
+
+
+async def test_whole_folder_attach_to_an_existing_title_does_not_touch_its_own_address(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.title_by_current_slug_result = {
+        "title_id": "existing-t1", "title_name": "Horimiya", "title_status": "active",
+    }
+    form = _horimiya_form(title_mode="existing", target_title_id="existing-t1")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 302
+    assert db_stub.create_title_with_episodes_calls == []
+    assert len(db_stub.attach_episodes_to_title_calls) == 1
+    assert db_stub.attach_episodes_to_title_calls[0]["title_id"] == "existing-t1"
+    assert db_stub.touch_title_changed_calls == ["existing-t1"]
+
+
+async def test_the_save_redirects_to_the_library(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=_horimiya_form())
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/library"
+
+
+# --- The move: an already-added row joins the series (plan 08, Task 3) -----
+
+
+def _already_added_row(rel_path: str, *, number: int) -> dict:
+    return {
+        "source_path": rel_path,
+        "title_id": f"old-title-{number}",
+        "title_name": "Old Standalone",
+        "status": "active",
+        "slug": f"old-standalone-{number}",
+        "episode_id": f"old-episode-{number}",
+        "edition_id": f"old-edition-{number}",
+        "number": number,
+        "edition_kind": "remux",
+    }
+
+
+async def test_move_ticked_row_calls_reparent_with_the_existing_edition_id(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row("Horimiya/Horimiya - 01.mkv", number=1)]
+    form = _horimiya_form(move_0="1")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 302
+    assert len(db_stub.reparent_edition_to_episode_calls) == 1
+    call = db_stub.reparent_edition_to_episode_calls[0]
+    assert call["edition_id"] == "old-edition-1"
+
+
+async def test_move_object_key_unchanged_since_reparent_reuses_the_existing_edition(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row("Horimiya/Horimiya - 01.mkv", number=1)]
+    form = _horimiya_form(move_0="1")
+    async with web_client:
+        await web_client.post("/add-folder/Horimiya", data=form)
+    call = db_stub.reparent_edition_to_episode_calls[0]
+    # No object_key argument exists on this call at all -- the move never
+    # constructs one, proving structurally that no fresh object is ever
+    # named for a moved row.
+    assert "object_key" not in call
+
+
+async def test_move_old_address_argument_matches_the_already_added_slug(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row("Horimiya/Horimiya - 01.mkv", number=1)]
+    form = _horimiya_form(move_0="1")
+    async with web_client:
+        await web_client.post("/add-folder/Horimiya", data=form)
+    call = db_stub.reparent_edition_to_episode_calls[0]
+    assert call["old_slug"] == "old-standalone-1"
+    assert call["old_title_id"] == "old-title-1"
+    assert call["old_episode_id"] == "old-episode-1"
+
+
+async def test_move_enqueues_no_job_for_a_moved_row(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row("Horimiya/Horimiya - 01.mkv", number=1)]
+    form = _horimiya_form(move_0="1")
+    async with web_client:
+        await web_client.post("/add-folder/Horimiya", data=form)
+    sources = {job["source_path"] for job in db_stub.enqueue_job_calls}
+    assert "Horimiya/Horimiya - 01.mkv" not in sources
+    assert len(db_stub.enqueue_job_calls) == 2  # rows 1 and 2 only
+
+
+async def test_move_leaves_an_unticked_already_added_row_untouched(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row("Horimiya/Horimiya - 01.mkv", number=1)]
+    form = _horimiya_form(move_0="")  # explicitly unticked
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 302
+    assert db_stub.reparent_edition_to_episode_calls == []
+
+
+async def test_move_uses_the_submitted_number_for_the_target_episode(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row("Horimiya/Horimiya - 01.mkv", number=1)]
+    form = _horimiya_form(move_0="1", episode_number_0="11")
+    async with web_client:
+        await web_client.post("/add-folder/Horimiya", data=form)
+    call = db_stub.reparent_edition_to_episode_calls[0]
+    assert call["number"] == 11
+
+
+async def test_move_only_folder_creates_the_target_title_with_zero_new_episodes(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [
+        _already_added_row("Horimiya/Horimiya - 01.mkv", number=1),
+    ]
+    form = _horimiya_form(move_0="1", include_1="", include_2="")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 302
+    assert len(db_stub.create_title_with_episodes_calls) == 1
+    assert db_stub.create_title_with_episodes_calls[0]["episodes"] == []
+    assert len(db_stub.reparent_edition_to_episode_calls) == 1
+    assert db_stub.reparent_edition_to_episode_calls[0]["target_title_id"] == (
+        db_stub.create_title_with_episodes_title_id
+    )
+
+
+async def test_move_and_new_files_together_is_one_atomic_transaction(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row("Horimiya/Horimiya - 01.mkv", number=1)]
+    form = _horimiya_form(move_0="1")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 302
+    # One title created (carrying the two new files), one reparent for the
+    # moved file, two jobs (never three) -- new and moved rows land
+    # together, from one save.
+    assert len(db_stub.create_title_with_episodes_calls) == 1
+    assert len(db_stub.create_title_with_episodes_calls[0]["episodes"]) == 2
+    assert len(db_stub.reparent_edition_to_episode_calls) == 1
+    assert len(db_stub.enqueue_job_calls) == 2
+
+
+async def test_atomic_refusal_leaves_both_new_and_moved_rows_unwritten(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row("Horimiya/Horimiya - 01.mkv", number=1)]
+    # Row 1 and the move both ticked, but row 1's own number collides with
+    # the move's -- one bad row refuses the whole save, mixed or not.
+    form = _horimiya_form(move_0="1", episode_number_1="1")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    assert db_stub.create_title_with_episodes_calls == []
+    assert db_stub.reparent_edition_to_episode_calls == []
+    assert db_stub.enqueue_job_calls == []

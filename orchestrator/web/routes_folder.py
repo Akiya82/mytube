@@ -651,3 +651,609 @@ async def folder_confirm_route(request: Request, path: str, group: str = ""):
         default_preview_path=rows[0]["rel_path"] if rows else "",
         refusal_message_key=None,
     )
+
+
+# --- The save (Task 1/2/3): validation, the write, and the move -----------
+
+
+def _parse_option_choice(value: str) -> tuple[str, int] | None:
+    """`(kind, index)` from a compound `"embedded:0"`/`"external:2"` form
+    value -- the folder screen's own grammar for the folder-wide
+    `audio_choice`/`subtitle_choice` fields and every per-row
+    `audio_fallback_N`/`subtitle_fallback_N` field, all of which name a
+    position in a list this same request just rebuilt (`audio_options`,
+    `subtitle_options`, or one row's own `audio_fallback`/
+    `subtitle_fallback`) rather than an absolute ffprobe stream index --
+    unlike the single-file form's `audio_choice`/`subtitle_choice`
+    (`orchestrator.media.add.parse_audio_choice`/`parse_subtitle_choice`),
+    which this screen does not use, since one file's embedded index can
+    differ from another's for the identical language/title signature
+    (D-171). `None` for anything malformed; the caller answers its own
+    refusal shape.
+    """
+    if ":" not in value:
+        return None
+    kind, _, idx_raw = value.partition(":")
+    if kind not in ("embedded", "external"):
+        return None
+    if not idx_raw.isdigit():
+        return None
+    return kind, int(idx_raw)
+
+
+def _row_number(form, index: int) -> int | None:
+    """The submitted `episode_number_{index}` field, parsed exactly the
+    way `routes_titles._parse_episode_number` already parses the single-
+    file form's identical field: `None` for blank, negative, or anything
+    that is not a plain whole number -- never a guess, never a raise. A
+    negative number never reaches this far as a plain string (`"-1"` is
+    not `.isdigit()`), so "below zero" and "not a whole number" collapse
+    onto the identical `None` outcome the "no number" refusal already
+    covers.
+    """
+    raw = (form.get(f"episode_number_{index}") or "").strip()
+    if not raw.isdigit():
+        return None
+    return int(raw)
+
+
+def _resolve_audio_selection(
+    result: dict, signature: tuple | None
+) -> tuple[str, int | None, str | None, int | None] | None:
+    """`(kind, stream_index, external_path, channels)` for `signature` as
+    it exists in *this one file's* own probe result -- the write-time twin
+    of `_file_audio_signatures`/`_build_audio_options`: the same
+    (`"embedded"`, language, title) or (`"external"`, folder_label)
+    identity that matches across files by D-171's own rule can sit at a
+    different absolute stream index, or in a different sidecar file,
+    file to file, so resolving "which track" always happens against this
+    file's own probe, never the folder-wide option list directly.
+
+    `external_path` is the absolute, already-contained path
+    `mytube_media.subtitles.external_audio_tracks`/`walk_sidecars` already
+    resolved (T-04-01) -- the caller still turns it into a share-relative
+    string via `relative_to_root` before it reaches a job row. Returns
+    `None` when `signature` is `None` (no folder-wide choice at all) or
+    cannot be found in this file's own tracks/candidates at all -- the
+    caller falls back to the file's own first embedded track in that case,
+    the same "something must be selected" floor the single-file form's own
+    `audio_choice` gives (D-42: never optional).
+    """
+    if signature is None:
+        return None
+    kind = signature[0]
+    if kind == "embedded":
+        _, language, title = signature
+        verdict = result["verdict"]
+        if verdict is not None:
+            for track in verdict.tracks:
+                if (track.language, track.title) == (language, title):
+                    return "embedded", track.index, None, track.channels
+    else:
+        _, folder_label = signature
+        for _candidate, probed in result["audio_candidates"]:
+            if (probed.folder_label or "") == folder_label:
+                return "external", None, probed.external_path, probed.channels
+    return None
+
+
+def _fallback_audio_selection(result: dict) -> tuple[str, int | None, str | None, int | None]:
+    """The floor `_resolve_audio_selection` falls back to when a
+    signature cannot be found in this file at all: this file's own first
+    embedded track, since an audio choice is never optional (D-42) and a
+    file with no embedded track at all could never have been marked
+    compatible to begin with.
+    """
+    verdict = result["verdict"]
+    if verdict is not None and verdict.tracks:
+        track = verdict.tracks[0]
+        return "embedded", track.index, None, track.channels
+    return "embedded", 0, None, None
+
+
+def _resolve_subtitle_selection(
+    result: dict, signature: tuple | None
+) -> tuple[str, int | None, str | None]:
+    """The subtitle twin of `_resolve_audio_selection`: `(kind,
+    stream_index, external_path)`, `("none", None, None)` when `signature`
+    is `None` (no burn-in chosen, D-140's own default) or cannot be found
+    in this file's own embedded/sidecar candidates at all.
+    """
+    if signature is None:
+        return "none", None, None
+    kind = signature[0]
+    if kind == "embedded":
+        _, language, title = signature
+        verdict = result["verdict"]
+        if verdict is not None:
+            for track in verdict.subtitle_tracks:
+                if (track.language, track.title) == (language, title):
+                    return "embedded", track.stream_index, None
+    else:
+        _, folder_label = signature
+        for candidate in result["subtitle_candidates"]:
+            if "/".join(candidate.folder_segments) == folder_label:
+                return "external", None, str(candidate.path)
+    return "none", None, None
+
+
+def _render_refused_folder_screen(
+    request: Request,
+    *,
+    rel_path: str,
+    built: dict,
+    resolved_rows: list[dict],
+    mode: str,
+    submitted_name: str,
+    submitted_slug: str,
+    audio_choice_index: int | None,
+    subtitle_choice_index: int | None,
+    stereo_layout: str,
+    validation: FolderValidation,
+    active_index: int,
+    group_summaries: list[dict],
+):
+    """The refusal half of Screen B item 10: the identical screen the GET
+    route renders, with every value the operator actually submitted --
+    every tick, every typed number, every folder-wide and per-row track
+    choice -- carried back in place of what `_build_rows` freshly
+    recognised, plus the one save-blocked sentence naming what to fix.
+    Nothing here is re-probed a second time within this same request; only
+    the render-time captions (`number_missing`/`number_duplicate`/
+    `number_taken`) are recomputed, against the submission rather than the
+    recognised defaults, exactly as they already render unconditionally
+    (not gated on `highlighted`) in `partials/folder_file_row.html`.
+    """
+    # A submitted "existing" mode naming a target this fresh read no
+    # longer confirms (a stale page, or a crafted target) has nothing
+    # left to show as the matched title -- the screen falls back to "new
+    # title" mode for rendering only, the same state a title-match-free
+    # folder already renders in, rather than a template reaching through
+    # a None.
+    if mode == "existing" and built["title_match"] is None:
+        mode = "new"
+
+    ticked_numbers = Counter(r["number"] for r in resolved_rows if r["ticked"])
+
+    rows = []
+    for original, resolved in zip(built["rows"], resolved_rows):
+        row = dict(original)
+        moved = row["moved"]
+        row["checked"] = resolved["ticked"] if not moved else row["checked"]
+        row["move_checked"] = resolved["ticked"] if moved else row["move_checked"]
+        row["number"] = resolved["number"]
+        row["number_missing"] = resolved["ticked"] and resolved["number"] is None
+        row["number_duplicate"] = (
+            resolved["ticked"]
+            and resolved["number"] is not None
+            and ticked_numbers[resolved["number"]] > 1
+        )
+        row["number_taken"] = resolved["number_taken"]
+        row["selected_audio_fallback_index"] = resolved.get("selected_audio_fallback_index")
+        row["selected_subtitle_fallback_index"] = resolved.get("selected_subtitle_fallback_index")
+        rows.append(row)
+
+    unmoved_rows = [row for row in rows if not row["moved"]]
+    all_added = bool(rows) and not unmoved_rows
+    nothing_recognized = bool(unmoved_rows) and all(row["number"] is None for row in unmoved_rows)
+    checked_unmoved = [row for row in unmoved_rows if row["checked"]]
+    incompatible_checked = [row for row in checked_unmoved if not row["compatible"]]
+    all_probes_failed = bool(unmoved_rows) and all(row["probe_failed"] for row in unmoved_rows)
+
+    return render(
+        request,
+        "folder_confirm.html",
+        rel_path=rel_path,
+        breadcrumb=_breadcrumb(rel_path),
+        group_summaries=group_summaries,
+        active_index=active_index,
+        rows=rows,
+        mode=mode,
+        title_name=submitted_name or built["title_name"],
+        slug_plan=type(built["slug_plan"])(
+            candidate=built["slug_plan"].candidate,
+            chosen=submitted_slug or built["slug_plan"].chosen,
+            similar=built["slug_plan"].similar,
+            is_tombstone=built["slug_plan"].is_tombstone,
+        ),
+        title_match=built["title_match"],
+        season=built["season"],
+        season_provenance_key="folder.season." + built["season_provenance"],
+        audio_options=built["audio_options"],
+        subtitle_options=built["subtitle_options"],
+        audio_choice_index=audio_choice_index,
+        subtitle_choice_index=subtitle_choice_index,
+        default_stereo_layout=stereo_layout,
+        all_added=all_added,
+        nothing_recognized=nothing_recognized,
+        incompatible_count=len(incompatible_checked),
+        all_probes_failed=all_probes_failed,
+        not_enough_space=validation.message_key == "reason.storage_full",
+        estimate_size_bytes=sum(row["size_bytes"] for row in rows if row["checked"]),
+        as_is_is_primary=not incompatible_checked,
+        estimate_seconds=0.0,
+        form_action=_folder_href(rel_path),
+        default_preview_path=rows[0]["rel_path"] if rows else "",
+        refusal_message_key=validation.message_key,
+    )
+
+
+@router.post("/add-folder/{path:path}")
+async def folder_confirm_submit_route(request: Request, path: str):
+    """The write this whole screen exists for (Task 2/3): validate the
+    operator's submission against the folder's own state read fresh
+    inside this request (T-05-33 -- never against what the GET route
+    computed minutes ago), then either write the whole folder -- every new
+    episode, every moved episode, and one ordinary job per new edition --
+    in a single transaction under the address-claim lock, or refuse and
+    re-render the identical screen with every choice preserved
+    (`_render_refused_folder_screen`).
+
+    Re-derives the containment check, the video listing, the recognition
+    pass, the grouping, and the whole of `_build_rows` exactly as the GET
+    route does -- nothing about the folder is trusted from a page that may
+    have been open for minutes; only the operator's own ticks, numbers and
+    track choices come from this request's own form body.
+    """
+    settings = get_settings()
+    root = Path(settings.share_root)
+
+    try:
+        target, rel_path, is_file = await _resolve_share_path(root, path)
+    except ShareEscape:
+        return _unreachable_response(request, status_code=400)
+    if is_file:
+        return _unreachable_response(request, status_code=400)
+
+    try:
+        entries = await asyncio.to_thread(list_dir, target, root)
+    except ShareUnavailable:
+        return _unreachable_response(request, status_code=503)
+
+    video_entries = sorted(
+        (e for e in entries if not e.is_dir and _is_video_file(e.name)),
+        key=lambda e: e.name.casefold(),
+    )
+    if len(video_entries) < MIN_VIDEO_FILES_FOR_FOLDER_ADD:
+        return _unreachable_response(request, status_code=400)
+
+    recognised_by_path = {e.rel_path: recognize_filename(e.name) for e in video_entries}
+    groups_list = _group_files(video_entries, recognised_by_path)
+
+    form = await request.form()
+
+    group_raw = form.get("group", "0")
+    try:
+        active_index = int(group_raw)
+    except ValueError:
+        return _unreachable_response(request, status_code=400)
+    if not (0 <= active_index < len(groups_list)):
+        return _unreachable_response(request, status_code=400)
+    active_entries = groups_list[active_index]
+
+    group_summaries = [
+        {
+            "index": i,
+            "title": recognised_by_path[items[0].rel_path].name,
+            "count": len(items),
+        }
+        for i, items in enumerate(groups_list)
+    ]
+
+    action = "convert" if form.get("convert") is not None else "add"
+    is_convert = action == "convert"
+
+    stereo_layout = form.get("stereo_layout", "2d")
+    if stereo_layout not in STEREO_LAYOUTS:
+        return _unreachable_response(request, status_code=400)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        try:
+            built = await _build_rows(conn, root, active_entries, recognised_by_path)
+        except SlugError:
+            return _unreachable_response(request, status_code=400)
+
+        submitted_title_mode = form.get("title_mode", "")
+        mode = (
+            submitted_title_mode
+            if submitted_title_mode in ("new", "existing")
+            else ("existing" if built["title_match"] is not None else "new")
+        )
+        # T-05-36: a crafted (or stale) existing-title mode naming a title
+        # that is no longer real or no longer active refuses -- checked
+        # against what was just read, not what the operator's page showed.
+        submitted_target_title_id = form.get("target_title_id", "")
+        target_ok = True
+        if mode == "existing":
+            target_ok = (
+                built["title_match"] is not None
+                and str(built["title_match"]["title_id"]) == submitted_target_title_id
+            )
+
+        submitted_name = form.get("name", "").strip()
+        submitted_slug = form.get("slug", "").strip()
+
+        # T-05-33: the folder-wide audio/subtitle choice is re-derived from
+        # the submission and re-checked against the option list this same
+        # request just rebuilt -- an index out of range only ever comes
+        # from a crafted request, refused outright rather than clamped.
+        audio_choice_raw = form.get("audio_choice", "")
+        default_audio_signature = built["default_audio_signature"]
+        audio_choice_index: int | None = 0 if built["audio_options"] else None
+        if audio_choice_raw:
+            parsed = _parse_option_choice(audio_choice_raw)
+            if (
+                parsed is None
+                or not (0 <= parsed[1] < len(built["audio_options"]))
+                or built["audio_options"][parsed[1]]["kind"] != parsed[0]
+            ):
+                return _unreachable_response(request, status_code=400)
+            audio_choice_index = parsed[1]
+            default_audio_signature = built["audio_options"][audio_choice_index]["signature"]
+
+        subtitle_choice_raw = form.get("subtitle_choice", "none")
+        default_subtitle_signature = None
+        subtitle_choice_index: int | None = None
+        if subtitle_choice_raw not in ("none", ""):
+            parsed = _parse_option_choice(subtitle_choice_raw)
+            if (
+                parsed is None
+                or not (0 <= parsed[1] < len(built["subtitle_options"]))
+                or built["subtitle_options"][parsed[1]]["kind"] != parsed[0]
+            ):
+                return _unreachable_response(request, status_code=400)
+            subtitle_choice_index = parsed[1]
+            default_subtitle_signature = built["subtitle_options"][subtitle_choice_index][
+                "signature"
+            ]
+
+        # D-140: a stereo source refuses a burn-in outright, the identical
+        # check the single-file form already makes, folder-wide here.
+        if stereo_layout != "2d" and default_subtitle_signature is not None:
+            return _unreachable_response(request, status_code=400)
+
+        results_by_path = built["results_by_path"]
+        resolved_rows = []
+        for i, row in enumerate(built["rows"]):
+            rel = row["rel_path"]
+            moved = row["moved"]
+            if moved:
+                ticked = form.get(f"move_{i}") is not None
+            else:
+                ticked = form.get(f"include_{i}") is not None
+
+            number = _row_number(form, i)
+            number_taken = (
+                not moved
+                and number is not None
+                and mode == "existing"
+                and number in built["taken_numbers"]
+            )
+
+            chosen_audio_signature = default_audio_signature
+            audio_resolved = True
+            selected_audio_fallback_index = None
+            if not moved and row["audio_mismatch"]:
+                raw = form.get(f"audio_fallback_{i}")
+                if not raw:
+                    audio_resolved = not ticked
+                else:
+                    parsed = _parse_option_choice(raw)
+                    fallback = row["audio_fallback"]
+                    if (
+                        parsed is None
+                        or not (0 <= parsed[1] < len(fallback))
+                        or fallback[parsed[1]]["kind"] != parsed[0]
+                    ):
+                        return _unreachable_response(request, status_code=400)
+                    selected_audio_fallback_index = parsed[1]
+                    chosen_audio_signature = fallback[parsed[1]]["signature"]
+
+            chosen_subtitle_signature = default_subtitle_signature
+            subtitle_resolved = True
+            selected_subtitle_fallback_index = None
+            if not moved and row["subtitle_mismatch"]:
+                raw = form.get(f"subtitle_fallback_{i}")
+                if not raw:
+                    subtitle_resolved = not ticked
+                elif raw == "none":
+                    chosen_subtitle_signature = None
+                    selected_subtitle_fallback_index = "none"
+                else:
+                    parsed = _parse_option_choice(raw)
+                    fallback = row["subtitle_fallback"]
+                    if (
+                        parsed is None
+                        or not (0 <= parsed[1] < len(fallback))
+                        or fallback[parsed[1]]["kind"] != parsed[0]
+                    ):
+                        return _unreachable_response(request, status_code=400)
+                    selected_subtitle_fallback_index = parsed[1]
+                    chosen_subtitle_signature = fallback[parsed[1]]["signature"]
+
+            resolved_rows.append(
+                {
+                    "index": i,
+                    "rel_path": rel,
+                    "moved": moved,
+                    "ticked": ticked,
+                    "number": number,
+                    "number_taken": number_taken,
+                    "compatible": row["compatible"],
+                    "highlighted": row["highlighted"],
+                    "audio_resolved": audio_resolved,
+                    "subtitle_resolved": subtitle_resolved,
+                    "audio_signature": chosen_audio_signature,
+                    "subtitle_signature": chosen_subtitle_signature,
+                    "selected_audio_fallback_index": selected_audio_fallback_index,
+                    "selected_subtitle_fallback_index": selected_subtitle_fallback_index,
+                    "already_added": row["already_added"],
+                    "size_bytes": row["size_bytes"],
+                    "verdict": row["verdict"],
+                }
+            )
+
+        validation = validate_folder_submission(
+            mode=mode,
+            target_ok=target_ok,
+            action=action,
+            rows=[
+                {
+                    "index": r["index"],
+                    "ticked": r["ticked"],
+                    "number": r["number"],
+                    "moved": r["moved"],
+                    "compatible": r["compatible"],
+                    "highlighted": r["highlighted"],
+                    "audio_resolved": r["audio_resolved"],
+                    "subtitle_resolved": r["subtitle_resolved"],
+                    "number_taken": r["number_taken"],
+                }
+                for r in resolved_rows
+            ],
+        )
+
+        if not validation.ok:
+            return _render_refused_folder_screen(
+                request,
+                rel_path=rel_path,
+                built=built,
+                resolved_rows=resolved_rows,
+                mode=mode,
+                submitted_name=submitted_name,
+                submitted_slug=submitted_slug,
+                audio_choice_index=audio_choice_index,
+                subtitle_choice_index=subtitle_choice_index,
+                stereo_layout=stereo_layout,
+                validation=validation,
+                active_index=active_index,
+                group_summaries=group_summaries,
+            )
+
+        new_rows = [r for r in resolved_rows if r["ticked"] and not r["moved"]]
+        move_rows = [r for r in resolved_rows if r["ticked"] and r["moved"]]
+
+        # The as-is free-space precheck, applied once over the whole
+        # ticked-and-new set (D-52) -- unchanged by 04-22's own decision
+        # that conversion carries no interface-side precheck of its own.
+        # Reachable here only by a request bypassing the already-disabled
+        # button the GET render shows for the identical condition, so a
+        # plain refusal is answered rather than a friendly re-render.
+        if action == "add":
+            required_total = 0
+            for r in new_rows:
+                verdict = r["verdict"]
+                already_correct = bool(verdict is not None and verdict.already_correct)
+                selection = _resolve_audio_selection(
+                    results_by_path[r["rel_path"]], r["audio_signature"]
+                )
+                if selection is not None and selection[0] == "external":
+                    already_correct = False
+                required_total += required_free_bytes(
+                    r["size_bytes"], already_correct=already_correct
+                )
+            if required_total:
+                free_bytes = await asyncio.to_thread(
+                    lambda: shutil.disk_usage(settings.work_dir).free
+                )
+                if free_bytes < required_total:
+                    return _unreachable_response(request, status_code=400)
+
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1)", queries.SLUG_CLAIM_LOCK_KEY
+            )
+
+            edition_specs = []
+            for r in new_rows:
+                result = results_by_path[r["rel_path"]]
+                edition_id = uuid.uuid4()
+                object_key = f"{edition_id}.mp4"
+                selection = _resolve_audio_selection(result, r["audio_signature"])
+                if selection is None:
+                    selection = _fallback_audio_selection(result)
+                audio_kind, audio_index, audio_external, audio_channels = selection
+                external_audio_rel_path = (
+                    relative_to_root(root, Path(audio_external))
+                    if audio_kind == "external" and audio_external
+                    else None
+                )
+                r["audio_stream_index"] = audio_index if audio_kind == "embedded" else None
+                r["external_audio_rel_path"] = external_audio_rel_path
+                edition_specs.append(
+                    {
+                        "number": r["number"],
+                        "edition_id": edition_id,
+                        "object_key": object_key,
+                        "source_path": r["rel_path"],
+                        "audio_stream_index": r["audio_stream_index"],
+                        "audio_channels": audio_channels,
+                        "stereo_layout": None if is_convert else stereo_layout,
+                    }
+                )
+
+            if mode == "new":
+                title_id, _episode_ids = await queries.create_title_with_episodes(
+                    conn,
+                    submitted_name or built["title_name"],
+                    submitted_slug or built["slug_plan"].chosen,
+                    edition_specs,
+                    season_number=built["season"],
+                )
+            else:
+                title_id = built["title_match"]["title_id"]
+                if edition_specs:
+                    await queries.attach_episodes_to_title(conn, title_id, edition_specs)
+
+            for r in move_rows:
+                already_added = r["already_added"]
+                await queries.reparent_edition_to_episode(
+                    conn,
+                    edition_id=already_added["edition_id"],
+                    old_title_id=already_added["title_id"],
+                    old_episode_id=already_added["episode_id"],
+                    old_slug=already_added["slug"],
+                    target_title_id=title_id,
+                    number=r["number"],
+                )
+
+            # One ordinary job per new edition (D-119) -- a moved row
+            # enqueues nothing, nothing is being processed for it, only
+            # repointed.
+            for r, spec in zip(new_rows, edition_specs):
+                if is_convert:
+                    result = results_by_path[r["rel_path"]]
+                    sub_kind, sub_index, sub_path = _resolve_subtitle_selection(
+                        result, r["subtitle_signature"]
+                    )
+                    subtitle_path = (
+                        relative_to_root(root, Path(sub_path)) if sub_path else None
+                    )
+                    await queries.enqueue_job(
+                        conn,
+                        kind="transcode",
+                        title_id=title_id,
+                        edition_id=spec["edition_id"],
+                        source_path=r["rel_path"],
+                        audio_stream_index=r["audio_stream_index"],
+                        subtitle_kind=sub_kind,
+                        subtitle_stream_index=sub_index,
+                        subtitle_path=subtitle_path,
+                        stereo_layout=stereo_layout,
+                        external_audio_path=r["external_audio_rel_path"],
+                    )
+                else:
+                    await queries.enqueue_job(
+                        conn,
+                        kind="remux",
+                        title_id=title_id,
+                        edition_id=spec["edition_id"],
+                        source_path=r["rel_path"],
+                        audio_stream_index=r["audio_stream_index"],
+                        external_audio_path=r["external_audio_rel_path"],
+                    )
+
+            await queries.touch_title_changed(conn, title_id)
+
+    return RedirectResponse("/library", status_code=302)

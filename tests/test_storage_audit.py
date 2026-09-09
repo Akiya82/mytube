@@ -157,6 +157,27 @@ async def test_present_count_excludes_missing_rows(monkeypatch, capsys):
     assert "present and accounted for in the catalog: 1" in out
 
 
+async def test_a_moved_editions_object_counts_present_exactly_once(monkeypatch, capsys):
+    """T-05-38: after `queries.reparent_edition_to_episode` moves an
+    edition, `referenced_objects` reports its object key through exactly
+    one row -- the moved edition under the target title, never a second
+    row still naming the tombstoned old title (whose own rows this same
+    move already unwound). The object is counted present once, not twice
+    and not zero times.
+    """
+    referenced = [
+        {"key": "moved.mp4", "kind": "video", "title_name": "Target Series", "slug": "target-series"},
+    ]
+    _stub(monkeypatch, referenced, {"moved.mp4": 1234})
+
+    code = await storage_audit.storage_audit()
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "present and accounted for in the catalog: 1" in out
+    assert out.count("moved.mp4") == 0  # never printed as unreferenced or missing
+
+
 async def test_no_slug_reports_address_unknown_instead_of_a_bare_key(monkeypatch, capsys):
     referenced = [{"key": "gone.mp4", "kind": "video", "title_name": "Gone", "slug": None}]
     _stub(monkeypatch, referenced, {})

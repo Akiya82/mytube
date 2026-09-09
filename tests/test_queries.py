@@ -1015,3 +1015,380 @@ async def test_concurrent_add_edition_same_slug_one_wins_one_raises(migrated_db_
 
     results = await asyncio.gather(worker(), worker())
     assert sorted(results) == ["EditionSlugTaken", "ok"]
+
+
+# --- The folder confirmation screen's save (0006, plan 08) -----------------
+
+
+def _edition_spec(number: int, *, source_path: str | None = None, **overrides) -> dict:
+    edition_id = uuid.uuid4()
+    spec = {
+        "number": number,
+        "edition_id": edition_id,
+        "object_key": f"{edition_id}.mp4",
+        "source_path": source_path,
+        "audio_stream_index": None,
+        "audio_channels": None,
+        "stereo_layout": None,
+    }
+    spec.update(overrides)
+    return spec
+
+
+async def test_create_title_with_episodes_writes_one_title_one_season_and_the_right_episodes(
+    raw_conn,
+):
+    specs = [
+        _edition_spec(1, source_path="Horimiya/01.mkv"),
+        _edition_spec(2, source_path="Horimiya/02.mkv"),
+        _edition_spec(3, source_path="Horimiya/03.mkv"),
+    ]
+
+    title_id, episode_ids = await queries.create_title_with_episodes(
+        raw_conn, "Horimiya", "horimiya-folder-test", specs, season_number=1
+    )
+
+    assert len(episode_ids) == 3
+    seasons = await raw_conn.fetch("SELECT number FROM seasons WHERE title_id = $1", title_id)
+    assert [row["number"] for row in seasons] == [1]
+
+    for spec, episode_id in zip(specs, episode_ids):
+        row = await queries.episode_by_number(raw_conn, title_id, spec["number"])
+        assert row["episode_id"] == episode_id
+        edition = await raw_conn.fetchrow(
+            "SELECT source_path, status FROM editions WHERE id = $1", spec["edition_id"]
+        )
+        assert edition["source_path"] == spec["source_path"]
+        assert edition["status"] == "preparing"
+
+
+async def test_create_title_with_episodes_claims_every_number_in_history(raw_conn):
+    specs = [_edition_spec(5), _edition_spec(6)]
+    title_id, _episode_ids = await queries.create_title_with_episodes(
+        raw_conn, "Numbered Show", "numbered-show-folder-test", specs
+    )
+    assert await queries.taken_episode_numbers(raw_conn, title_id) == {5, 6}
+
+
+async def test_create_title_with_episodes_season_number_is_stored(raw_conn):
+    title_id, _episode_ids = await queries.create_title_with_episodes(
+        raw_conn, "Season Three Show", "season-three-show-folder-test",
+        [_edition_spec(1)], season_number=3,
+    )
+    row = await raw_conn.fetchrow("SELECT number FROM seasons WHERE title_id = $1", title_id)
+    assert row["number"] == 3
+
+
+async def test_attach_episodes_to_title_adds_several_episodes_without_touching_the_address(
+    raw_conn,
+):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Folder Attach Show", "folder-attach-show", edition_id, f"{edition_id}.mp4"
+    )
+    slug_before = await raw_conn.fetchval(
+        "SELECT slug FROM slug_history WHERE title_id = $1 AND is_current", title_id
+    )
+
+    specs = [_edition_spec(2), _edition_spec(3)]
+    episode_ids = await queries.attach_episodes_to_title(raw_conn, title_id, specs)
+
+    assert len(episode_ids) == 2
+    assert await queries.taken_episode_numbers(raw_conn, title_id) == {1, 2, 3}
+    slug_after = await raw_conn.fetchval(
+        "SELECT slug FROM slug_history WHERE title_id = $1 AND is_current", title_id
+    )
+    assert slug_after == slug_before
+
+
+async def test_attach_episodes_to_title_refuses_a_number_already_taken(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Folder Attach Taken Show", "folder-attach-taken-show", edition_id,
+        f"{edition_id}.mp4",
+    )
+    with pytest.raises(queries.EpisodeNumberTaken):
+        await queries.attach_episodes_to_title(raw_conn, title_id, [_edition_spec(1)])
+
+
+async def test_attach_episodes_to_title_refuses_a_duplicate_number_within_the_same_batch(
+    raw_conn,
+):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Folder Attach Batch Show", "folder-attach-batch-show", edition_id,
+        f"{edition_id}.mp4",
+    )
+    with pytest.raises(queries.EpisodeNumberTaken):
+        await queries.attach_episodes_to_title(
+            raw_conn, title_id, [_edition_spec(9), _edition_spec(9)]
+        )
+
+
+async def test_attach_episodes_to_title_refuses_a_title_that_does_not_exist(raw_conn):
+    with pytest.raises(LookupError):
+        await queries.attach_episodes_to_title(raw_conn, uuid.uuid4(), [_edition_spec(1)])
+
+
+async def test_concurrent_create_title_with_episodes_and_folder_attach_one_wins_one_raises(
+    migrated_db_url,
+):
+    """The folder save's own claim-lock race, one level up from a single
+    attach: two folder saves both trying to attach episode 4 of the same
+    title at once -- the identical discipline
+    `test_concurrent_attach_same_number_one_wins_one_raises` already
+    proves for the single-episode attach, exercised here for the batch
+    entry point a folder save actually calls.
+    """
+    setup_conn = await asyncpg.connect(migrated_db_url)
+    try:
+        edition_id = uuid.uuid4()
+        title_id = await queries.create_title_with_edition(
+            setup_conn, "Concurrent Folder Attach Show", "concurrent-folder-attach-show",
+            edition_id, f"{edition_id}.mp4",
+        )
+    finally:
+        await setup_conn.close()
+
+    async def worker():
+        conn = await asyncpg.connect(migrated_db_url)
+        try:
+            await queries.attach_episodes_to_title(conn, title_id, [_edition_spec(4)])
+            return "ok"
+        except queries.EpisodeNumberTaken:
+            return "taken"
+        finally:
+            await conn.close()
+
+    results = await asyncio.gather(worker(), worker())
+    assert sorted(results) == ["ok", "taken"]
+
+
+async def _seed_standalone_title(conn, name: str, slug: str, source_path: str):
+    """One standalone one-episode title, the exact shape the seven live
+    hand-added episodes this move path will eventually be pointed at
+    already have -- a plain `create_title_with_edition` call, active by
+    default.
+    """
+    edition_id = uuid.uuid4()
+    object_key = f"{edition_id}.mp4"
+    title_id = await queries.create_title_with_edition(
+        conn, name, slug, edition_id, object_key, source_path=source_path
+    )
+    episode = await queries.lowest_episode_of_title(conn, title_id)
+    return {
+        "title_id": title_id,
+        "episode_id": episode["episode_id"],
+        "edition_id": edition_id,
+        "object_key": object_key,
+        "slug": slug,
+    }
+
+
+async def test_reparent_edition_to_episode_moves_the_edition_under_the_target_title(raw_conn):
+    target_edition_id = uuid.uuid4()
+    target_title_id = await queries.create_title_with_edition(
+        raw_conn, "Reparent Target Show", "reparent-target-show", target_edition_id,
+        f"{target_edition_id}.mp4",
+    )
+    standalone = await _seed_standalone_title(
+        raw_conn, "Reparent Standalone", "reparent-standalone", "Folder/standalone.mkv"
+    )
+
+    new_episode_id = await queries.reparent_edition_to_episode(
+        raw_conn,
+        edition_id=standalone["edition_id"],
+        old_title_id=standalone["title_id"],
+        old_episode_id=standalone["episode_id"],
+        old_slug=standalone["slug"],
+        target_title_id=target_title_id,
+        number=7,
+    )
+
+    row = await queries.episode_by_number(raw_conn, target_title_id, 7)
+    assert row["episode_id"] == new_episode_id
+    assert row["default_edition_id"] == standalone["edition_id"]
+
+
+async def test_reparent_edition_to_episode_never_touches_the_object_key(raw_conn):
+    target_edition_id = uuid.uuid4()
+    target_title_id = await queries.create_title_with_edition(
+        raw_conn, "Object Key Target Show", "object-key-target-show", target_edition_id,
+        f"{target_edition_id}.mp4",
+    )
+    standalone = await _seed_standalone_title(
+        raw_conn, "Object Key Standalone", "object-key-standalone", "Folder/keeps-key.mkv"
+    )
+
+    await queries.reparent_edition_to_episode(
+        raw_conn,
+        edition_id=standalone["edition_id"],
+        old_title_id=standalone["title_id"],
+        old_episode_id=standalone["episode_id"],
+        old_slug=standalone["slug"],
+        target_title_id=target_title_id,
+        number=2,
+    )
+
+    object_key_after = await raw_conn.fetchval(
+        "SELECT object_key FROM editions WHERE id = $1", standalone["edition_id"]
+    )
+    assert object_key_after == standalone["object_key"]
+
+
+async def test_reparent_edition_to_episode_old_address_resolves_to_the_moved_episode(raw_conn):
+    target_edition_id = uuid.uuid4()
+    target_title_id = await queries.create_title_with_edition(
+        raw_conn, "Old Address Target Show", "old-address-target-show", target_edition_id,
+        f"{target_edition_id}.mp4",
+    )
+    standalone = await _seed_standalone_title(
+        raw_conn, "Old Address Standalone", "old-address-standalone", "Folder/old-address.mkv"
+    )
+
+    new_episode_id = await queries.reparent_edition_to_episode(
+        raw_conn,
+        edition_id=standalone["edition_id"],
+        old_title_id=standalone["title_id"],
+        old_episode_id=standalone["episode_id"],
+        old_slug=standalone["slug"],
+        target_title_id=target_title_id,
+        number=2,
+    )
+
+    resolved = await queries.resolve_slug(raw_conn, standalone["slug"])
+    assert resolved["title_id"] == target_title_id
+    assert resolved["episode_id"] == new_episode_id
+    # And not the target's own lowest episode -- resolve_slug's episode
+    # pointer branch, not its title-lowest-episode fallback.
+    lowest = await queries.lowest_episode_of_title(raw_conn, target_title_id)
+    assert resolved["episode_id"] != lowest["episode_id"]
+
+
+async def test_reparent_edition_to_episode_tombstones_the_old_title(raw_conn):
+    target_edition_id = uuid.uuid4()
+    target_title_id = await queries.create_title_with_edition(
+        raw_conn, "Tombstone Target Show", "tombstone-target-show", target_edition_id,
+        f"{target_edition_id}.mp4",
+    )
+    standalone = await _seed_standalone_title(
+        raw_conn, "Tombstone Standalone", "tombstone-standalone", "Folder/tombstone.mkv"
+    )
+
+    await queries.reparent_edition_to_episode(
+        raw_conn,
+        edition_id=standalone["edition_id"],
+        old_title_id=standalone["title_id"],
+        old_episode_id=standalone["episode_id"],
+        old_slug=standalone["slug"],
+        target_title_id=target_title_id,
+        number=2,
+    )
+
+    status = await raw_conn.fetchval(
+        "SELECT status FROM titles WHERE id = $1", standalone["title_id"]
+    )
+    assert status == "deleted"
+    # The old title's own slug_history row survives untouched.
+    old_row_count = await raw_conn.fetchval(
+        "SELECT count(*) FROM slug_history WHERE title_id = $1", standalone["title_id"]
+    )
+    assert old_row_count == 1
+    # Its now-empty season/episode rows are unwound.
+    seasons_left = await raw_conn.fetchval(
+        "SELECT count(*) FROM seasons WHERE title_id = $1", standalone["title_id"]
+    )
+    assert seasons_left == 0
+
+
+async def test_reparent_edition_to_episode_refuses_a_number_already_taken(raw_conn):
+    target_edition_id = uuid.uuid4()
+    target_title_id = await queries.create_title_with_edition(
+        raw_conn, "Taken Number Target Show", "taken-number-target-show", target_edition_id,
+        f"{target_edition_id}.mp4",
+    )
+    standalone = await _seed_standalone_title(
+        raw_conn, "Taken Number Standalone", "taken-number-standalone", "Folder/taken.mkv"
+    )
+    with pytest.raises(queries.EpisodeNumberTaken):
+        await queries.reparent_edition_to_episode(
+            raw_conn,
+            edition_id=standalone["edition_id"],
+            old_title_id=standalone["title_id"],
+            old_episode_id=standalone["episode_id"],
+            old_slug=standalone["slug"],
+            target_title_id=target_title_id,
+            number=1,  # the target's own existing episode already holds it
+        )
+
+
+async def test_reparent_edition_to_episode_refuses_a_title_that_does_not_exist(raw_conn):
+    standalone = await _seed_standalone_title(
+        raw_conn, "No Target Standalone", "no-target-standalone", "Folder/no-target.mkv"
+    )
+    with pytest.raises(LookupError):
+        await queries.reparent_edition_to_episode(
+            raw_conn,
+            edition_id=standalone["edition_id"],
+            old_title_id=standalone["title_id"],
+            old_episode_id=standalone["episode_id"],
+            old_slug=standalone["slug"],
+            target_title_id=uuid.uuid4(),
+            number=1,
+        )
+
+
+async def test_reparent_edition_to_episode_referenced_objects_counts_the_object_once(raw_conn):
+    target_edition_id = uuid.uuid4()
+    target_title_id = await queries.create_title_with_edition(
+        raw_conn, "Reconcile Target Show", "reconcile-target-show", target_edition_id,
+        f"{target_edition_id}.mp4",
+    )
+    standalone = await _seed_standalone_title(
+        raw_conn, "Reconcile Standalone", "reconcile-standalone", "Folder/reconcile.mkv"
+    )
+
+    await queries.reparent_edition_to_episode(
+        raw_conn,
+        edition_id=standalone["edition_id"],
+        old_title_id=standalone["title_id"],
+        old_episode_id=standalone["episode_id"],
+        old_slug=standalone["slug"],
+        target_title_id=target_title_id,
+        number=9,
+    )
+
+    rows = await queries.referenced_objects(raw_conn)
+    matches = [r for r in rows if r["key"] == standalone["object_key"] and r["kind"] == "video"]
+    assert len(matches) == 1
+
+
+async def test_reparent_edition_to_episode_touches_the_target_titles_changed_at(raw_conn):
+    target_edition_id = uuid.uuid4()
+    target_title_id = await queries.create_title_with_edition(
+        raw_conn, "Changed At Target Show", "changed-at-target-show", target_edition_id,
+        f"{target_edition_id}.mp4",
+    )
+    await raw_conn.execute(
+        "UPDATE titles SET changed_at = now() - interval '1 hour' WHERE id = $1",
+        target_title_id,
+    )
+    before = await raw_conn.fetchval(
+        "SELECT changed_at FROM titles WHERE id = $1", target_title_id
+    )
+    standalone = await _seed_standalone_title(
+        raw_conn, "Changed At Standalone", "changed-at-standalone", "Folder/changed-at.mkv"
+    )
+
+    await queries.reparent_edition_to_episode(
+        raw_conn,
+        edition_id=standalone["edition_id"],
+        old_title_id=standalone["title_id"],
+        old_episode_id=standalone["episode_id"],
+        old_slug=standalone["slug"],
+        target_title_id=target_title_id,
+        number=8,
+    )
+
+    after = await raw_conn.fetchval("SELECT changed_at FROM titles WHERE id = $1", target_title_id)
+    assert after > before

@@ -509,9 +509,11 @@ async def editions_by_source_paths(
     being rendered and get back only the matches: one query per rendered
     folder, never one query per row.
 
-    Each row carries the edition's source_path, the title's name and
-    status, and the title's *current* slug (via slug_history) -- the
-    listing links to /v/{slug}, not to the edition id.
+    Each row carries the edition's own id, its source_path, the title's
+    name and status, and the title's *current* slug (via slug_history) --
+    the listing links to /v/{slug}, not to the edition id -- except for
+    `reparent_edition_to_episode` (plan 08), which needs the id itself to
+    move the row.
 
     `edition_kind` (CONV-01/D-147) is the `kind` of the earliest `jobs` row
     ever created for this title -- `'remux'` for an as-is addition,
@@ -530,6 +532,7 @@ async def editions_by_source_paths(
     return await conn.fetch(
         """
         SELECT
+            e.id AS edition_id,
             e.source_path AS source_path,
             t.id AS title_id,
             t.name AS title_name,
@@ -1789,6 +1792,284 @@ async def delete_edition(conn: asyncpg.Connection, edition_id) -> None:
     removal already uses.
     """
     await conn.execute("DELETE FROM editions WHERE id = $1", edition_id)
+
+
+# --- The folder confirmation screen's save (0006, plan 08) -----------------
+
+
+async def create_title_with_episodes(
+    conn: asyncpg.Connection,
+    name: str,
+    slug: str,
+    episodes: list[dict],
+    *,
+    season_number: int = 1,
+    edition_status: str = "preparing",
+) -> tuple["uuid.UUID", list["uuid.UUID"]]:
+    """The folder-wide twin of `create_title_with_edition`: one title, one
+    season carrying `season_number` (D-149/D-150 -- a season is a title,
+    so the number this row carries is the one the address suffix and the
+    display name both derive from), and one episode-plus-edition per entry
+    in `episodes`, each claiming its own number in the same transaction
+    `claim_episode_number` already backs every other creation path with.
+
+    Each `episodes` entry is a plain dict carrying `number` (required) and
+    whatever `edition_id`/`object_key`/`source_path`/`audio_stream_index`/
+    `audio_channels`/`stereo_layout` the caller already resolved for that
+    row (all but the first two are optional, `None` when absent, mirroring
+    `create_title_with_edition`'s own keyword shape one row at a time).
+    Unlike `create_title_with_edition` (whose edition is left at the
+    schema's own default status for every existing caller, CLI included),
+    every edition created here is written `edition_status` (default
+    'preparing') explicitly: the whole point of this function is the web
+    add flow's D-49 shape, where the row must exist and be reserved before
+    any ffmpeg/upload work starts.
+
+    **Concurrent slug and number claims.** The first statement inside this
+    transaction takes `SLUG_CLAIM_LOCK_KEY`, exactly as
+    `create_title_with_edition`'s own docstring documents at length -- read
+    that docstring for the race this closes and what a caller must do
+    (open the transaction and take the lock before this call, or accept
+    this call's own lock as the whole transaction) for the protection to
+    actually hold. Numbers within `episodes` are claimed one at a time
+    through `claim_episode_number`, under the same lock, so two folder
+    saves racing for the same title name can never produce two seasons
+    both claiming episode 1.
+
+    Returns `(title_id, [episode_id, ...])`, the second list in the same
+    order as `episodes`, for the caller to zip against the jobs it still
+    has to enqueue -- this function enqueues nothing, mirroring every
+    other creation path in this module.
+    """
+    async with conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
+        title_id = await conn.fetchval(
+            "INSERT INTO titles (name, status) VALUES ($1, $2) RETURNING id",
+            name,
+            "preparing",
+        )
+        season_id = await conn.fetchval(
+            "INSERT INTO seasons (title_id, number) VALUES ($1, $2) RETURNING id",
+            title_id,
+            season_number,
+        )
+        episode_ids: list["uuid.UUID"] = []
+        for spec in episodes:
+            episode_id = await conn.fetchval(
+                "INSERT INTO episodes (season_id) VALUES ($1) RETURNING id", season_id
+            )
+            await conn.execute(
+                """
+                INSERT INTO editions (
+                    id, episode_id, object_key, source_path,
+                    audio_stream_index, audio_channels, stereo_layout, status
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                spec["edition_id"],
+                episode_id,
+                spec["object_key"],
+                spec.get("source_path"),
+                spec.get("audio_stream_index"),
+                spec.get("audio_channels"),
+                spec.get("stereo_layout"),
+                edition_status,
+            )
+            await conn.execute(
+                "UPDATE episodes SET default_edition_id = $1 WHERE id = $2",
+                spec["edition_id"],
+                episode_id,
+            )
+            await claim_episode_number(conn, title_id, episode_id, spec["number"])
+            episode_ids.append(episode_id)
+        await reuse_slug(conn, slug, title_id)
+    return title_id, episode_ids
+
+
+async def attach_episodes_to_title(
+    conn: asyncpg.Connection,
+    title_id,
+    episodes: list[dict],
+    *,
+    edition_status: str = "preparing",
+) -> list["uuid.UUID"]:
+    """The many-episode twin of `attach_episode_to_title`, for a folder
+    save adding several episodes to one existing title in a single
+    transaction -- the identical claim-lock discipline that function's own
+    docstring documents, taken once here rather than once per episode.
+
+    Raises `LookupError` when `title_id` names no title with a season.
+    Raises `EpisodeNumberTaken` the moment any entry in `episodes` names a
+    number already held by a *different* episode's current claim --
+    checked against the numbers taken before this call started, plus every
+    number this same call has already claimed for an earlier entry in the
+    same list, so two rows within one submission can never silently
+    overwrite each other's number either. `episodes` and `edition_status`
+    take the same shape `create_title_with_episodes` documents.
+
+    Touches `touch_title_changed` once at the end, not once per episode --
+    the library only needs to know the title changed, not how many times.
+    """
+    async with conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
+
+        season_id = await conn.fetchval(
+            "SELECT id FROM seasons WHERE title_id = $1 ORDER BY number LIMIT 1",
+            title_id,
+        )
+        if season_id is None:
+            raise LookupError(f"no title {title_id!r} to attach episodes to")
+
+        taken = await taken_episode_numbers(conn, title_id)
+        episode_ids: list["uuid.UUID"] = []
+        for spec in episodes:
+            number = spec["number"]
+            if number in taken:
+                raise EpisodeNumberTaken(number)
+            taken.add(number)
+
+            episode_id = await conn.fetchval(
+                "INSERT INTO episodes (season_id) VALUES ($1) RETURNING id", season_id
+            )
+            await conn.execute(
+                """
+                INSERT INTO editions (
+                    id, episode_id, object_key, source_path,
+                    audio_stream_index, audio_channels, stereo_layout, status
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                spec["edition_id"],
+                episode_id,
+                spec["object_key"],
+                spec.get("source_path"),
+                spec.get("audio_stream_index"),
+                spec.get("audio_channels"),
+                spec.get("stereo_layout"),
+                edition_status,
+            )
+            await conn.execute(
+                "UPDATE episodes SET default_edition_id = $1 WHERE id = $2",
+                spec["edition_id"],
+                episode_id,
+            )
+            await claim_episode_number(conn, title_id, episode_id, number)
+            episode_ids.append(episode_id)
+
+        await touch_title_changed(conn, title_id)
+    return episode_ids
+
+
+async def reparent_edition_to_episode(
+    conn: asyncpg.Connection,
+    *,
+    edition_id,
+    old_title_id,
+    old_episode_id,
+    old_slug: str,
+    target_title_id,
+    number: int,
+) -> "uuid.UUID":
+    """A file already added as its own standalone title joins a series
+    without its bytes being touched (D-160/D-161, T-05-37): a new episode
+    under `target_title_id` at `number`, the existing `edition_id` moved
+    onto it, and `old_slug` written a fresh, permanent alias so the
+    address handed out for the standalone file keeps answering with this
+    exact episode forever, never the series' own lowest one.
+
+    **The object key is never rewritten, re-read or re-uploaded.** This
+    function issues no S3 call and touches no `object_key` column; the
+    edition row that already names the object is the one row that moves.
+
+    Same claim-lock discipline as `create_title_with_episodes`/
+    `attach_episodes_to_title`: the first statement takes
+    `SLUG_CLAIM_LOCK_KEY`. Raises `LookupError` when `target_title_id`
+    names no title with a season, `EpisodeNumberTaken` when `number` is
+    already held by a different episode of that title.
+
+    **Write order, and why it is fixed.** The old episode's own
+    `default_edition_id` is cleared *before* the edition's own `episode_id`
+    is repointed -- the pointer this column names is about to belong to a
+    different episode, and clearing it first means no row anywhere ever
+    names an edition that has already left. Only once the edition has
+    moved is the old episode (now genuinely empty) safe to drop, in the
+    same foreign-key unwind order `delete_failed_title` already establishes
+    (`editions_episode_id_fkey` carries no `ON DELETE` clause, so a season/
+    episode row cannot be dropped while an edition still names it).
+
+    **The new `slug_history` row is deliberately not `is_current`.** The
+    partial unique index `slug_history_one_current_per_title` allows at
+    most one current row per title, and `target_title_id` already has its
+    own -- this row is not the series' own address anyway, it is a
+    permanent alias for one episode, and `resolve_slug`'s newest-`created_
+    at`-wins rule (with no `is_current` filter) is what makes an alias with
+    `is_current = false` outrank the standalone title's own now-superseded
+    current row without touching it.
+
+    **The old title is tombstoned, not hard-deleted.** Its own
+    `slug_history` rows (including the current one this alias outranks)
+    survive untouched -- the old address depending on `slug_history`
+    surviving is the entire mechanism above -- and `finish_delete_episode`'s
+    own docstring is the reason an address that was ever live is
+    tombstoned rather than erased: `titles.status` flips to 'deleted', the
+    row itself stays. Its now-empty season/episode/edition rows are
+    unwound first so nothing orphaned is left pointing at a tombstoned
+    title.
+    """
+    async with conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
+
+        season_id = await conn.fetchval(
+            "SELECT id FROM seasons WHERE title_id = $1 ORDER BY number LIMIT 1",
+            target_title_id,
+        )
+        if season_id is None:
+            raise LookupError(f"no title {target_title_id!r} to move an episode into")
+
+        taken = await taken_episode_numbers(conn, target_title_id)
+        if number in taken:
+            raise EpisodeNumberTaken(number)
+
+        new_episode_id = await conn.fetchval(
+            "INSERT INTO episodes (season_id) VALUES ($1) RETURNING id", season_id
+        )
+        await claim_episode_number(conn, target_title_id, new_episode_id, number)
+
+        # Clear the old episode's default pointer before the edition's own
+        # reference moves -- see the docstring above for why this order is
+        # fixed rather than incidental.
+        await conn.execute(
+            "UPDATE episodes SET default_edition_id = NULL WHERE id = $1", old_episode_id
+        )
+        await conn.execute(
+            "UPDATE editions SET episode_id = $1 WHERE id = $2", new_episode_id, edition_id
+        )
+        await conn.execute(
+            "UPDATE episodes SET default_edition_id = $1 WHERE id = $2",
+            edition_id,
+            new_episode_id,
+        )
+
+        # The permanent alias -- see the docstring above for why
+        # is_current is false here.
+        await conn.execute(
+            """
+            INSERT INTO slug_history (slug, title_id, episode_id, is_current, created_at)
+            VALUES ($1, $2, $3, false, clock_timestamp())
+            """,
+            old_slug,
+            target_title_id,
+            new_episode_id,
+        )
+
+        # Unwind the old title's now-empty rows, the same FK order
+        # delete_failed_title already establishes -- the title row and its
+        # slug_history survive, tombstoned rather than erased.
+        await conn.execute("DELETE FROM editions WHERE episode_id = $1", old_episode_id)
+        await conn.execute("DELETE FROM episodes WHERE id = $1", old_episode_id)
+        await conn.execute("DELETE FROM seasons WHERE title_id = $1", old_title_id)
+        await conn.execute("UPDATE titles SET status = 'deleted' WHERE id = $1", old_title_id)
+
+        await touch_title_changed(conn, target_title_id)
+    return new_episode_id
 
 
 # --- Playlist queries (0004_playlists.py) ---------------------------------
