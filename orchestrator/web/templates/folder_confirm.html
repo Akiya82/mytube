@@ -90,7 +90,7 @@
       <legend class="form-field__label">{{ t("add.field.audio") }}</legend>
       {% for opt in audio_options %}
         <label class="radio-group__option{% if opt.kind == 'external' %} radio-group__option--stacked{% endif %}">
-          <input type="radio" name="audio_choice" value="{{ opt.kind }}:{{ loop.index0 }}"{% if loop.first %} checked{% endif %}>
+          <input type="radio" name="audio_choice" value="{{ opt.kind }}:{{ loop.index0 }}"{% if loop.index0 == audio_choice_index %} checked{% endif %}>
           {% if opt.kind == "embedded" %}
             <span>{{ opt.language or t("add.track.language_unknown") }}{% if opt.title %} - {{ opt.title }}{% endif %}</span>
           {% else %}
@@ -107,12 +107,12 @@
   <fieldset class="form-field radio-group">
     <legend class="form-field__label">{{ t("subtitle.field.heading") }}</legend>
     <label class="radio-group__option">
-      <input type="radio" name="subtitle_choice" value="none" checked>
+      <input type="radio" name="subtitle_choice" value="none"{% if subtitle_choice_index is none %} checked{% endif %}>
       <span>{{ t("subtitle.option.none") }}</span>
     </label>
     {% for opt in subtitle_options %}
       <label class="radio-group__option radio-group__option--stacked">
-        <input type="radio" name="subtitle_choice" value="{{ opt.kind }}:{{ loop.index0 }}">
+        <input type="radio" name="subtitle_choice" value="{{ opt.kind }}:{{ loop.index0 }}"{% if loop.index0 == subtitle_choice_index %} checked{% endif %}>
         <span class="radio-group__option-text">
           {% if opt.kind == "embedded" %}
             <span>{{ opt.language or t("add.track.language_unknown") }}{% if opt.title %} - {{ opt.title }}{% endif %}</span>
@@ -196,23 +196,43 @@
     <p class="cost-line">{{ t("add.estimate").format(size=estimate_size_bytes | filesizeformat_binary, time=estimate_seconds | humanize_seconds) }}</p>
   {% endif %}
 
-  {# --- 10/12. The action row. Disabled-with-reason stays only for a
+  {# --- 10/12. The save-blocked banner, rendered by the server only on a
+     refused POST -- this same screen re-rendered from the submission,
+     never a fresh GET, with every choice the operator made still in
+     place and the offending rows' own captions (number_missing/
+     number_duplicate/number_taken, already unconditional in
+     partials/folder_file_row.html) speaking for themselves. --- #}
+  {% if refusal_message_key and refusal_message_key != "folder.incompatible.hint" %}
+    {# folder.incompatible.hint takes an {n} parameter and is already shown
+       by item 9's own hint banner above, with the right count -- shown
+       here only for the two parameterless keys. #}
+    <div class="banner banner--warning" role="alert">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t(refusal_message_key) }}</p>
+      </div>
+    </div>
+  {% endif %}
+
+  {# --- The action row. Disabled-with-reason stays only for a
      server-known condition no checkbox can change (every probe having
-     failed) -- never for a reason that depends on which boxes the
-     operator has ticked, since nothing on this page recomputes and a
-     button greyed out at render would stay grey after the row was
-     fixed. The save-blocked validation sentence itself only ever renders
-     on a refused POST, which is the next plan's own route. --- #}
+     failed, or free space below the as-is requirement) -- never for a
+     reason that depends on which boxes the operator has ticked, since
+     nothing on this page recomputes and a button greyed out at render
+     would stay grey after the row was fixed. --- #}
   <div class="add-form__actions">
+    {% set add_disabled = all_probes_failed or not_enough_space %}
     {% if as_is_is_primary %}
-      <button type="submit" name="add" value="1" class="btn btn--primary"{% if all_probes_failed %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.primary") }}</button>
+      <button type="submit" name="add" value="1" class="btn btn--primary"{% if add_disabled %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.primary") }}</button>
       <button type="submit" name="convert" value="1" class="btn btn--secondary"{% if all_probes_failed %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.convert") }}</button>
     {% else %}
-      <button type="submit" name="add" value="1" class="btn btn--secondary"{% if all_probes_failed %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.primary") }}</button>
+      <button type="submit" name="add" value="1" class="btn btn--secondary"{% if add_disabled %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.primary") }}</button>
       <button type="submit" name="convert" value="1" class="btn btn--primary"{% if all_probes_failed %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.convert") }}</button>
     {% endif %}
     {% if all_probes_failed %}
       <span class="add-form__convert-caption">{{ t("reason.unreadable") }}</span>
+    {% elif not_enough_space %}
+      <span class="add-form__convert-caption">{{ t("reason.storage_full") }}</span>
     {% endif %}
   </div>
 </form>

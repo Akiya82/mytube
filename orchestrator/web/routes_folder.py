@@ -18,10 +18,13 @@ per-file work below (`_process_file`) is additionally bounded by
 carries every viewer's playback, and a folder can hold two dozen files.
 """
 import asyncio
+import shutil
+import uuid
 from collections import Counter
 from pathlib import Path
 
 from fastapi import APIRouter, Request
+from fastapi.responses import RedirectResponse
 
 from mytube_media.compat import (
     ProbeError,
@@ -30,7 +33,8 @@ from mytube_media.compat import (
     moov_before_mdat,
     probe,
 )
-from mytube_media.share import ShareEscape, ShareUnavailable, list_dir
+from mytube_media.share import ShareEscape, ShareUnavailable, list_dir, relative_to_root
+from mytube_media.stereo3d import LAYOUTS as STEREO_LAYOUTS
 from mytube_media.subtitles import (
     SUBTITLE_EXTENSIONS,
     external_audio_tracks,
@@ -39,7 +43,7 @@ from mytube_media.subtitles import (
 )
 from orchestrator.config import get_settings
 from orchestrator.db import queries
-from orchestrator.media.add import plan_slug
+from orchestrator.media.add import FolderValidation, plan_slug, required_free_bytes, validate_folder_submission
 from orchestrator.recognize import Recognised, normalize_season, recognize_filename
 from orchestrator.slugs import SlugError, normalize_slug
 from orchestrator.web.routes_share import (
@@ -449,6 +453,15 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
                 "number_missing": not moved and number is None,
                 "number_taken": (not moved and number is not None and number in taken_numbers),
                 "size_bytes": verdict.size_bytes if verdict and verdict.size_bytes else 0,
+                # The write side's own submission-preserving state (Task 1,
+                # plan 08): defaults here are exactly what the template
+                # already rendered before a refusal existed at all --
+                # "move" ticked by default (D-160), no fallback pre-picked.
+                # A refused POST overrides all three from what the
+                # operator actually sent; nothing else here changes.
+                "move_checked": True,
+                "selected_audio_fallback_index": None,
+                "selected_subtitle_fallback_index": None,
             }
         )
 
@@ -471,12 +484,24 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
         "rows": draft_rows,
         "audio_options": audio_options,
         "subtitle_options": subtitle_options,
+        "default_audio_signature": default_audio_signature,
+        "default_subtitle_signature": default_subtitle_signature,
         "title_name": title_name,
         "slug_plan": slug_plan,
         "title_match": title_match,
         "season": group_season,
         "season_provenance": season_provenance,
         "estimate_size_bytes": estimate_size,
+        # The write side's own state (Task 2/3): the per-file probe result
+        # each row's own audio/subtitle choice is resolved against at save
+        # time (`_resolve_audio_selection`/`_resolve_subtitle_selection`),
+        # and the numbers already claimed on the target title, read inside
+        # the same fetch `row["number_taken"]` above already used -- so a
+        # POST re-validates a submitted (possibly hand-edited) number
+        # against this same set rather than only the one the GET route
+        # happened to recognise.
+        "results_by_path": results_by_path,
+        "taken_numbers": taken_numbers,
     }
 
 
@@ -577,6 +602,24 @@ async def folder_confirm_route(request: Request, path: str, group: str = ""):
         "2d",
     )
 
+    # T-05-27-adjacent, deferred here by 05-07: the as-is button's own
+    # disabled-with-reason state (05-UI-SPEC.md's folder-wide action row
+    # table), server-known and unchanged by any checkbox -- the required
+    # bytes summed once over the *initially checked* unmoved set, the same
+    # `required_free_bytes` formula every other add path shares (D-52). A
+    # moved row costs nothing here: it is a repoint, never a scratch write.
+    not_enough_space = False
+    required_total = sum(
+        required_free_bytes(
+            row["size_bytes"],
+            already_correct=bool(row["verdict"] is not None and row["verdict"].already_correct),
+        )
+        for row in checked_unmoved
+    )
+    if required_total:
+        free_bytes = await asyncio.to_thread(lambda: shutil.disk_usage(settings.work_dir).free)
+        not_enough_space = free_bytes < required_total
+
     return render(
         request,
         "folder_confirm.html",
@@ -593,14 +636,18 @@ async def folder_confirm_route(request: Request, path: str, group: str = ""):
         season_provenance_key="folder.season." + built["season_provenance"],
         audio_options=built["audio_options"],
         subtitle_options=built["subtitle_options"],
+        audio_choice_index=0 if built["audio_options"] else None,
+        subtitle_choice_index=None,
         default_stereo_layout=default_stereo_layout,
         all_added=all_added,
         nothing_recognized=nothing_recognized,
         incompatible_count=len(incompatible_checked),
         all_probes_failed=all_probes_failed,
+        not_enough_space=not_enough_space,
         estimate_size_bytes=built["estimate_size_bytes"],
         as_is_is_primary=not incompatible_checked,
         estimate_seconds=estimate_seconds,
         form_action=_folder_href(rel_path),
         default_preview_path=rows[0]["rel_path"] if rows else "",
+        refusal_message_key=None,
     )

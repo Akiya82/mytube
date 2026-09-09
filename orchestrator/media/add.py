@@ -6,6 +6,7 @@ never grow two slightly different ideas of what a submitted subtitle
 choice means). Extracted so every caller shares one implementation instead
 of two that drift.
 """
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -306,6 +307,114 @@ def suggest_edition_slug(
         return candidate["video_codec"]
 
     return ""
+
+
+# --- The folder confirmation screen's save (D-159, D-167, D-171, D-174) ----
+
+
+@dataclass(frozen=True)
+class FolderValidation:
+    """The whole answer `validate_folder_submission` gives: `ok=True`
+    clears the save outright; `ok=False` carries the one catalog key the
+    save-blocked banner shows (`folder.action.none_checked`,
+    `folder.validation.blocked`, or `folder.incompatible.hint`, per
+    05-UI-SPEC.md's own save-blocked table) and the set of row indexes the
+    screen re-renders with their offending caption already showing.
+    """
+
+    ok: bool
+    message_key: str | None = None
+    offending: frozenset[int] = frozenset()
+
+
+def validate_folder_submission(
+    *, mode: str, target_ok: bool, action: str, rows: list[dict]
+) -> FolderValidation:
+    """The folder confirmation screen's whole save-blocked rule (item 10),
+    decided in one place before anything is written. Touches neither the
+    filesystem nor the database -- every fact it needs, the caller (`
+    orchestrator.web.routes_folder`) already read this same request by
+    re-running the read side's own `_build_rows` against the folder as it
+    is right now (T-05-33: never against what the GET route computed
+    minutes ago) and resolving the operator's submission against it.
+
+    `rows` is one plain dict per row in the folder's own listing order --
+    a submission naming a row outside that listing is never built into
+    this list at all (T-05-35), so it cannot be validated into existing
+    either. Each dict carries: `index`; `ticked` (the operator's own tick,
+    whether the generic include box for a new file or the "move into this
+    series" box for an already-added one); `number` (the parsed episode
+    number, or `None` for blank/negative/non-integer -- the three are
+    indistinguishable to a save that needs a whole number to claim); `moved`
+    (whether this row is a repoint rather than a new upload); `compatible`
+    (whether this file can go as-is at all -- meaningless, and never
+    read, for a moved row); `highlighted` (a real audio or subtitle track
+    mismatch against the folder-wide choice); `audio_resolved` /
+    `subtitle_resolved` (True for a row that was never highlighted, or
+    whose mismatch already carries an explicit fallback pick, or that the
+    operator has unticked -- unticking is itself an explicit choice,
+    D-167/D-171); and `number_taken` (D-159: this ticked row's number is
+    already held by an episode of the target title that is not part of
+    this same save).
+
+    Checked in save-blocked order, first violation wins:
+
+    1. Nothing ticked at all -> `folder.action.none_checked`.
+    2. `mode == "existing"` naming a target that is no longer real or no
+       longer active (a stale page, or a submission bypassing the page
+       entirely) -> `folder.validation.blocked`, no row singled out.
+    3. Any ticked row with no number -> `folder.validation.blocked`.
+    4. Two or more ticked rows sharing a number -> same key, every row in
+       the collision named.
+    5. A ticked row's number already held by an existing episode of the
+       target title -> same key (that row also carries
+       `library.renumber.taken` inline, reused from plan 05, in the
+       template rather than here).
+    6. A highlighted row, still ticked, with no explicit track choice yet
+       for either kind -> same key.
+    7. Only for `action == "add"` (D-174): a ticked, unmoved,
+       incompatible row -> `folder.incompatible.hint`, converting the
+       whole folder being the one path that includes it.
+
+    `ok=True` only once every ticked row has cleared every rule above.
+    """
+    ticked = [row for row in rows if row["ticked"]]
+
+    if not ticked:
+        return FolderValidation(False, "folder.action.none_checked", frozenset())
+
+    if mode == "existing" and not target_ok:
+        return FolderValidation(False, "folder.validation.blocked", frozenset())
+
+    missing = frozenset(row["index"] for row in ticked if row["number"] is None)
+    if missing:
+        return FolderValidation(False, "folder.validation.blocked", missing)
+
+    counts = Counter(row["number"] for row in ticked)
+    duplicate = frozenset(row["index"] for row in ticked if counts[row["number"]] > 1)
+    if duplicate:
+        return FolderValidation(False, "folder.validation.blocked", duplicate)
+
+    taken = frozenset(row["index"] for row in ticked if row.get("number_taken"))
+    if taken:
+        return FolderValidation(False, "folder.validation.blocked", taken)
+
+    unresolved = frozenset(
+        row["index"]
+        for row in ticked
+        if row["highlighted"] and not (row["audio_resolved"] and row["subtitle_resolved"])
+    )
+    if unresolved:
+        return FolderValidation(False, "folder.validation.blocked", unresolved)
+
+    if action == "add":
+        incompatible = frozenset(
+            row["index"] for row in ticked if not row["moved"] and not row["compatible"]
+        )
+        if incompatible:
+            return FolderValidation(False, "folder.incompatible.hint", incompatible)
+
+    return FolderValidation(True)
 
 
 async def plan_edition_slug(conn: asyncpg.Connection, episode_id, explicit_slug: str) -> str:

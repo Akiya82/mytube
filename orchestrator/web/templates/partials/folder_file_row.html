@@ -44,7 +44,7 @@
     {% if file.moved %}
       <p class="audio-note">{{ t("folder.file.already_added").format(slug=file.already_added.slug) }}</p>
       <label class="radio-group__option">
-        <input type="checkbox" name="move_{{ index }}" value="1" checked>
+        <input type="checkbox" name="move_{{ index }}" value="1"{% if file.move_checked %} checked{% endif %}>
         <span>{{ t("folder.file.move_into_series") }}</span>
       </label>
       <p class="audio-note">{{ t("library.rename.old_still_works") }}</p>
@@ -60,7 +60,7 @@
         <fieldset class="radio-group folder-file-row__fallback">
           {% for opt in file.audio_fallback %}
             <label class="radio-group__option">
-              <input type="radio" name="audio_fallback_{{ index }}" value="{{ opt.kind }}:{{ loop.index0 }}">
+              <input type="radio" name="audio_fallback_{{ index }}" value="{{ opt.kind }}:{{ loop.index0 }}"{% if loop.index0 == file.selected_audio_fallback_index %} checked{% endif %}>
               <span>{% if opt.kind == "embedded" %}{{ opt.language or t("add.track.language_unknown") }}{% else %}{{ opt.folder_label }}{% endif %}</span>
             </label>
           {% endfor %}
@@ -70,12 +70,12 @@
         <fieldset class="radio-group folder-file-row__fallback">
           {% for opt in file.subtitle_fallback %}
             <label class="radio-group__option">
-              <input type="radio" name="subtitle_fallback_{{ index }}" value="{{ opt.kind }}:{{ loop.index0 }}">
+              <input type="radio" name="subtitle_fallback_{{ index }}" value="{{ opt.kind }}:{{ loop.index0 }}"{% if loop.index0 == file.selected_subtitle_fallback_index %} checked{% endif %}>
               <span>{% if opt.kind == "embedded" %}{{ opt.language or t("add.track.language_unknown") }}{% else %}{{ opt.folder_label }}{% endif %}</span>
             </label>
           {% endfor %}
           <label class="radio-group__option">
-            <input type="radio" name="subtitle_fallback_{{ index }}" value="none">
+            <input type="radio" name="subtitle_fallback_{{ index }}" value="none"{% if file.selected_subtitle_fallback_index == "none" %} checked{% endif %}>
             <span>{{ t("subtitle.option.none") }}</span>
           </label>
         </fieldset>
