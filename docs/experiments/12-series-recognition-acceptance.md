@@ -192,3 +192,21 @@ backfill reached this title without anyone touching it by hand.
 
 Both public hostnames answered after the roll: the operator's own interface
 with a login redirect, and the delivery hostname with a real video response.
+
+### Layout fix rolled during the acceptance walk
+
+While walking the rendered surfaces after the rollout above, the owner found the
+library page pinned to 960px on a 1920x1080 monitor, with each row's text column
+crushed to 77px beside a 641px action cluster. The stylesheet fix (commit `ae76f19`:
+the page spans the viewport, a row's text column grows and never shrinks below
+320px, the action cluster wraps under it when the row is narrow, status chips keep
+their own width) was verified on the live page with an injected style before it
+shipped, then built as `registry.example.com/mytube/mytube:ae76f19` (digest
+`sha256:dfd80162c1fc2462688c838892ae38df3040c1d5db3e882c277e8d36ac372c96`) and
+rolled on 2026-09-09 as an interface-only change; the converter stayed on `5d27962`
+because nothing in its code or in the shared media package changed between the two
+commits. Read back after the roll: pod `mytube-5c46f75cb4-s47tf` 2/2, schema
+revision `0007`, login page 200. Measured on the live library afterwards: the page
+width equals the viewport at 1024, 1920 and 3440px; the text column of a row with
+four actions measures 798, 1209 and 2729px respectively; at 1024px the action
+cluster sits on a line of its own; no horizontal scroll at any width.
