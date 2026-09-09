@@ -37,7 +37,7 @@ from orchestrator.resolve import external_base_url
 from orchestrator.signing import blob_path, sign_object_key
 from orchestrator.slugs import SlugError, normalize_slug, pick_unique_slug
 from orchestrator.web.routes_titles import derive_job_ui
-from orchestrator.web.templates import render
+from orchestrator.web.templates import render, resolve_lang, translator
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -494,7 +494,7 @@ async def playlist_row_fragment_route(playlist_id: str, request: Request):
 
     data = dict(row)
     data["kind"] = "playlist"
-    derive_job_ui(data, settings)
+    derive_job_ui(data, settings, translator(resolve_lang(request)))
     return render(request, "partials/library_row.html", row=data)
 
 

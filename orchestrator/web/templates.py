@@ -46,19 +46,49 @@ def duration_hms(seconds) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-def humanize_seconds(seconds) -> str:
+def humanize_seconds(seconds, t) -> str:
     """Render a second count as the loose phrasing the estimate line and
-    the "working" status use -- "about 7 minutes", never a raw number of
-    seconds.
+    the "working" status use, in the language of the page -- never a raw
+    number of seconds and never an English word dropped into a Russian
+    sentence (`t`, the per-request catalog lookup `render()` builds,
+    threaded down to this call the same way `reason_text_for` already
+    hands a lookup callable to its own helper).
+
+    Built from three catalog keys (`duration.under_a_minute`,
+    `duration.minutes`, `duration.hours`) rather than English literals --
+    the only thing that changed from the version this replaced is where
+    the words come from; the arithmetic (rounding to whole minutes,
+    one-decimal hours) is unchanged.
+
+    **The sub-minute value is a bare comparison** ("<1 min"/"<1 мин"),
+    not a phrase, and this is the one place a doubled hedge is solved:
+    every sentence that interpolates this text already carries its own
+    ("about {remaining} left" / "осталось около {remaining}"), and only
+    this branch used to carry a second one of its own ("under a
+    minute"), producing "about under a minute". A comparison carries no
+    hedge of its own, so the four surrounding catalog values that
+    interpolate a duration stay exactly as they are -- nothing here
+    strips an honest "about" to fix a collision that happens in one
+    branch.
+
+    **The minutes and hours values are deliberately abbreviations** --
+    "мин"/"ч" in Russian, "min"/"h" in English -- and that choice is the
+    whole reason this needs no plural-form machinery: a Russian
+    abbreviation does not decline, so one value reads correctly for one,
+    three and eleven alike. It is also why the one-decimal hours value
+    needs no locale-aware decimal separator; the accepted cost is that
+    Russian typography would prefer a comma in the fractional hour and
+    gets a period instead. Do not "improve" this into an i18n framework
+    over a value this small.
     """
     total_minutes = float(seconds) / 60.0
     if total_minutes < 1:
-        return "under a minute"
+        return t("duration.under_a_minute")
     if total_minutes < 60:
         minutes = round(total_minutes)
-        return f"{minutes} minute" + ("" if minutes == 1 else "s")
+        return t("duration.minutes").format(n=minutes)
     hours = round(total_minutes / 60.0, 1)
-    return f"{hours} hour" + ("" if hours == 1 else "s")
+    return t("duration.hours").format(n=hours)
 
 
 def pad_episode_number(value) -> str:

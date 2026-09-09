@@ -76,7 +76,7 @@ from orchestrator.web.routes_share import (
     _resolve_share_path,
     _unreachable_response,
 )
-from orchestrator.web.templates import humanize_seconds, render
+from orchestrator.web.templates import humanize_seconds, render, resolve_lang, translator
 
 
 def _resolve_signs_only(source: Path, subtitle_target: Path) -> bool | None:
@@ -602,7 +602,7 @@ async def rename_confirm_route(
     )
 
 
-def derive_job_ui(data: dict, settings) -> None:
+def derive_job_ui(data: dict, settings, t) -> None:
     """Turn the raw job/converter columns `queries._LIBRARY_ROW_FROM` and
     `queries._PLAYLIST_ROW_FROM` already joined in into the one value the
     template dispatches on (`job_stage`) plus the small set of pre-
@@ -611,6 +611,11 @@ def derive_job_ui(data: dict, settings) -> None:
     needs already rode in on the one row query -- this only ever
     recombines them, never queries again (the same "one query per screen"
     reasoning that put the job/converter joins in the row query at all).
+
+    `t` is the per-request catalog lookup `render()` builds, threaded
+    down to `humanize_seconds` so the remaining-time and time-since-seen
+    phrases this function pre-formats come out in the language of the
+    page being rendered, not hardcoded English (D-188 gap closure).
 
     Shared by both row kinds (`_row_context` below and
     `routes_playlists._playlist_row_context`) -- one status model, one
@@ -627,7 +632,7 @@ def derive_job_ui(data: dict, settings) -> None:
     progress = data.get("job_progress_pct")
     data["job_percent"] = int(round(progress)) if progress is not None else 0
     eta = data.get("job_eta_seconds")
-    data["job_remaining_text"] = humanize_seconds(eta) if eta is not None else ""
+    data["job_remaining_text"] = humanize_seconds(eta, t) if eta is not None else ""
 
     # A running job with the flag set is shown cancelling regardless of
     # its own `stage` column -- nothing in this codebase writes
@@ -657,7 +662,7 @@ def derive_job_ui(data: dict, settings) -> None:
     if last_seen is not None:
         elapsed = (datetime.now(timezone.utc) - last_seen).total_seconds()
         stale = elapsed > settings.converter_offline_seconds
-        data["worker_ago_text"] = humanize_seconds(elapsed)
+        data["worker_ago_text"] = humanize_seconds(elapsed, t)
 
     if not stale and data.get("worker_status") == "waiting_for_gpu":
         data["job_stage"] = "waiting_for_gpu"
@@ -691,7 +696,7 @@ def derive_series_ui(data: dict) -> None:
     data["is_series"] = data["episode_count"] > 1
 
 
-async def _row_context(conn, settings, row) -> dict:
+async def _row_context(conn, settings, row, t) -> dict:
     """One `library_rows`/`library_row` record, enriched with the one
     fact the row query cannot answer synchronously: the job/converter
     columns it already joined in, recombined into `job_stage` by
@@ -700,7 +705,7 @@ async def _row_context(conn, settings, row) -> dict:
     own docstrings.
     """
     data = dict(row)
-    derive_job_ui(data, settings)
+    derive_job_ui(data, settings, t)
     derive_series_ui(data)
     # The converted-detail line's own bitrate (D-146), formatted the same
     # way every other size on this row already is (`filesizeformat_binary`,
@@ -715,7 +720,7 @@ async def _row_context(conn, settings, row) -> dict:
     return data
 
 
-def _group_episodes_by_title(rows, settings) -> dict:
+def _group_episodes_by_title(rows, settings, t) -> dict:
     """`episodes_for_library`'s flat rows, turned into one list per title
     in the number order that query already sorted them in. Each episode
     gets its own `job_stage` (`derive_job_ui`, reused verbatim -- an
@@ -732,7 +737,7 @@ def _group_episodes_by_title(rows, settings) -> dict:
     by_title: dict = {}
     for row in rows:
         data = dict(row)
-        derive_job_ui(data, settings)
+        derive_job_ui(data, settings, t)
         data["failed"] = data.get("edition_status") == "failed"
         data["add_edition_href"] = (
             _href(data.get("source_path") or "") + f"?target_episode_id={data['episode_id']}"
@@ -758,7 +763,7 @@ def _group_editions_by_episode(rows) -> dict:
 
 
 async def _attach_series_episodes(
-    conn, settings, rows: list[dict], *, apply_default_open: bool
+    conn, settings, rows: list[dict], t, *, apply_default_open: bool
 ) -> None:
     """Fetch and attach `row["episodes"]` for every series row in `rows`
     (`derive_series_ui`'s own `is_series` flag) in the one batched
@@ -783,7 +788,7 @@ async def _attach_series_episodes(
     """
     series_title_ids = [row["title_id"] for row in rows if row.get("is_series")]
     raw_episodes = await queries.episodes_for_library(conn, series_title_ids)
-    episodes_by_title = _group_episodes_by_title(raw_episodes, settings)
+    episodes_by_title = _group_episodes_by_title(raw_episodes, settings, t)
 
     multi_edition_episode_ids = [
         episode["episode_id"]
@@ -819,19 +824,20 @@ async def library_route(request: Request):
     optional technical fields.
     """
     settings = get_settings()
+    t = translator(resolve_lang(request))
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
         raw_rows = await queries.library_rows(conn)
-        video_rows = [await _row_context(conn, settings, row) for row in raw_rows]
+        video_rows = [await _row_context(conn, settings, row, t) for row in raw_rows]
         for row in video_rows:
             row["kind"] = "video"
-        await _attach_series_episodes(conn, settings, video_rows, apply_default_open=True)
+        await _attach_series_episodes(conn, settings, video_rows, t, apply_default_open=True)
 
         raw_playlist_rows = await queries.playlist_rows(conn)
         playlist_rows = [dict(row) for row in raw_playlist_rows]
         for row in playlist_rows:
             row["kind"] = "playlist"
-            derive_job_ui(row, settings)
+            derive_job_ui(row, settings, t)
 
         rows = sorted(
             [*video_rows, *playlist_rows],
@@ -876,13 +882,14 @@ async def library_row_fragment_route(title_id: str, request: Request):
         return Response(status_code=404)
 
     settings = get_settings()
+    t = translator(resolve_lang(request))
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
         row = await queries.library_row(conn, parsed)
         if row is None:
             return Response(status_code=404)
-        data = await _row_context(conn, settings, row)
-        await _attach_series_episodes(conn, settings, [data], apply_default_open=False)
+        data = await _row_context(conn, settings, row, t)
+        await _attach_series_episodes(conn, settings, [data], t, apply_default_open=False)
 
     return render(request, "partials/library_row.html", row=data)
 

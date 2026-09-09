@@ -812,7 +812,74 @@ async def test_stage_working_at_the_very_end_still_carries_a_remaining_time(clie
 
     assert 'data-job-stage="working"' in resp.text
     assert "99%" in resp.text
-    assert "under a minute" in resp.text
+    # Jinja autoescapes the literal "<" in the catalog value -- "&lt;1 min"
+    # on the wire, "<1 min" once a browser parses it.
+    assert "&lt;1 min" in resp.text
+
+
+def test_humanize_seconds_reads_in_the_language_of_the_page():
+    """The builder's own exact-string assertions, in both languages,
+    against the real catalogs -- the phrase every chip and every estimate
+    line reads is built here, and every caller only ever threads a
+    catalog lookup down to this one function.
+    """
+    from orchestrator.web.templates import humanize_seconds, translator
+
+    en, ru = translator("en"), translator("ru")
+    assert humanize_seconds(180, en) == "3 min"
+    assert humanize_seconds(180, ru) == "3 мин"
+    assert humanize_seconds(7200, en) == "2.0 h"
+    assert humanize_seconds(7200, ru) == "2.0 ч"
+    assert humanize_seconds(30, en) == "<1 min"
+    assert humanize_seconds(30, ru) == "<1 мин"
+
+
+def test_no_duration_key_carries_a_hedge_word_of_its_own():
+    """The doubling this task fixes ("about under a minute") came from
+    the sub-minute branch carrying a hedge of its own on top of the one
+    every surrounding sentence already has. Scans the three duration keys
+    directly -- the actual surface of the fix -- rather than every
+    catalog value, since the four sentences that interpolate a duration
+    are asserted byte-identical elsewhere and were never the problem.
+    """
+    import json
+
+    en = json.loads((REPO_ROOT / "orchestrator" / "locales" / "en.json").read_text(encoding="utf-8"))
+    ru = json.loads((REPO_ROOT / "orchestrator" / "locales" / "ru.json").read_text(encoding="utf-8"))
+    for catalog, hedge in ((en, "about"), (ru, "около")):
+        for key in ("duration.under_a_minute", "duration.minutes", "duration.hours"):
+            assert hedge not in catalog[key]
+
+
+async def test_working_chip_on_a_ru_page_has_no_latin_letter(client, queries_stub):
+    """A working chip's remaining-time phrase used to be built in English
+    with no idea what language the page is in -- the Russian sentence
+    would read "...около 3 minutes". Every word in the chip now comes
+    from the catalog of the page's own language.
+    """
+    title_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at="2026-08-22T00:00:00Z",
+            **_job(
+                job_kind="transcode",
+                job_status="running",
+                job_db_stage="working",
+                job_progress_pct=42.0,
+                job_eta_seconds=180,
+            ),
+        )
+    ]
+
+    async with client:
+        client.cookies.set("mytube_lang", "ru")
+        resp = await client.get("/library")
+
+    chip = re.search(r'<span class="chip chip--preparing">([^<]*)</span>', resp.text)
+    assert chip is not None
+    assert not re.search(r"[A-Za-z]", chip.group(1))
 
 
 async def test_stage_uploading_carries_percent(client, queries_stub):

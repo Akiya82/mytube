@@ -220,7 +220,7 @@
   {# --- 11. Cost line -- summed over the checked set as of this render,
      never live (recomputed only on the next request). --- #}
   {% if estimate_seconds %}
-    <p class="cost-line">{{ t("add.estimate").format(size=estimate_size_bytes | filesizeformat_binary, time=estimate_seconds | humanize_seconds) }}</p>
+    <p class="cost-line">{{ t("add.estimate").format(size=estimate_size_bytes | filesizeformat_binary, time=estimate_seconds | humanize_seconds(t)) }}</p>
   {% endif %}
 
   {# --- 10/12. The save-blocked banner, rendered by the server only on a

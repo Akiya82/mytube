@@ -311,7 +311,7 @@
       </div>
 
       {% if convert_estimate_seconds %}
-        <p class="cost-line">{{ t("convert.estimate").format(time=convert_estimate_seconds | humanize_seconds) }}</p>
+        <p class="cost-line">{{ t("convert.estimate").format(time=convert_estimate_seconds | humanize_seconds(t)) }}</p>
       {% endif %}
     </div>
   {% endif %}
@@ -320,7 +320,7 @@
      same predicate the as-is button below renders behind, so neither ever
      describes an action the page is not offering. --- #}
   {% if verdict is not none and verdict.eligible %}
-    <p class="cost-line">{{ t("add.estimate").format(size=size_bytes | filesizeformat_binary, time=estimate_seconds | humanize_seconds) }}</p>
+    <p class="cost-line">{{ t("add.estimate").format(size=size_bytes | filesizeformat_binary, time=estimate_seconds | humanize_seconds(t)) }}</p>
     {% if not_enough_space %}
       <div class="banner banner--error" role="alert">
         {{ warning(cls="banner__icon") }}
