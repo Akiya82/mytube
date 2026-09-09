@@ -408,6 +408,14 @@ button.site-nav__link {
   border-radius: 4px;
 }
 
+/* One numeric-input width variant (05-UI-SPEC.md Spacing Scale): an
+   episode number is at most a few digits, so the field is visually
+   narrow while keeping the same 44px height and border every other
+   .form-field__input has. */
+.form-field__input--narrow {
+  width: 64px;
+}
+
 .radio-group {
   display: flex;
   flex-direction: column;

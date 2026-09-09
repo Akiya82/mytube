@@ -13,7 +13,12 @@ import asyncpg
 
 from mytube_media.subtitles import embedded_subtitle_kind as embedded_subtitle_kind
 from orchestrator.db import queries
-from orchestrator.slugs import SlugError, normalize_slug, pick_unique_slug
+from orchestrator.slugs import (
+    SlugError,
+    normalize_edition_slug,
+    normalize_slug,
+    pick_unique_slug,
+)
 
 # D-52/D-72: the doubled space +faststart's rewrite needs, plus the small,
 # fixed scratch budget a poster frame costs (one JPEG, D-72) -- see
@@ -229,3 +234,96 @@ def parse_audio_choice(value: str) -> tuple[str, int | None, str | None]:
         return "external", None, rel
 
     raise AudioChoiceRefused()
+
+
+# --- the edition slug (D-177, D-178, D-179) ---------------------------------
+
+
+class EditionSlugTaken(Exception):
+    """Raised when the chosen edition slug already names another edition
+    of the same episode -- D-177's uniqueness scope, checked inside the
+    caller's own locked transaction.
+    """
+
+
+def suggest_edition_slug(
+    *,
+    existing: dict,
+    candidate: dict,
+    taken_audio_languages: frozenset[str] = frozenset(),
+) -> str:
+    """D-177: the first real difference between `candidate` (what the add
+    or convert action about to run would produce) and `existing` (the
+    episode's current default edition), checked in this fixed order:
+    audio language, resolution, subtitles, conversion. Both dicts describe
+    one edition each through the same keys -- `audio_language`,
+    `audio_studio_folder` (set only for an external dub), `width`,
+    `height`, `subtitle_language`, `subtitle_signs_only`, `is_transcode`,
+    `video_codec` -- built by the caller from whatever it already knows (a
+    fresh probe, a stored edition row); a key either dict omits is treated
+    as unknown/absent, never as a match. This function performs no lookups
+    of its own and is pure.
+
+    Worked examples (D-177): a Russian dub against a Japanese default ->
+    "dub-ru"; a second Russian dub from a different studio, once
+    `taken_audio_languages` already carries "ru" -> "dub-ru-<studio-slug>"
+    ("dub-ru-dublyazhnaya"); a 720p output against a 1080p default ->
+    "720p"; a Russian subtitle burn against an unsubtitled default ->
+    "sub-ru", or "sub-ru-signs" when it resolved signs-only; a conversion
+    to h264 against an as-is (never-transcoded) default -> "h264".
+    Nothing differing -> "", the "type your own" case D-177 asks for.
+    """
+    candidate_language = candidate.get("audio_language")
+    if candidate_language and candidate_language != existing.get("audio_language"):
+        slug = f"dub-{candidate_language}"
+        studio = candidate.get("audio_studio_folder")
+        if candidate_language in taken_audio_languages and studio:
+            try:
+                slug += f"-{normalize_slug(studio)}"
+            except SlugError:
+                pass
+        return slug
+
+    candidate_height = candidate.get("height")
+    if candidate_height and (candidate.get("width"), candidate_height) != (
+        existing.get("width"),
+        existing.get("height"),
+    ):
+        return f"{candidate_height}p"
+
+    candidate_subtitle = candidate.get("subtitle_language")
+    if candidate_subtitle and candidate_subtitle != existing.get("subtitle_language"):
+        slug = f"sub-{candidate_subtitle}"
+        if candidate.get("subtitle_signs_only"):
+            slug += "-signs"
+        return slug
+
+    if (
+        candidate.get("is_transcode")
+        and not existing.get("is_transcode")
+        and candidate.get("video_codec")
+    ):
+        return candidate["video_codec"]
+
+    return ""
+
+
+async def plan_edition_slug(conn: asyncpg.Connection, episode_id, explicit_slug: str) -> str:
+    """Validate a submitted edition-slug the way `plan_slug` validates a
+    title slug -- through the shape rule (`normalize_edition_slug`, D-177's
+    not-all-digits refusal, which also refuses a blank string exactly as
+    `normalize_slug` already does for an empty title name) -- and, unlike
+    a title slug, a plain uniqueness refusal rather than an auto-suffix:
+    D-179 leaves no room for an edition slug to silently become a
+    different string than the one the operator saw and typed.
+
+    Raises `SlugError`/`EditionSlugRefused` (shape) or `EditionSlugTaken`
+    (collision). Must be called inside the caller's own locked
+    transaction (the same `SLUG_CLAIM_LOCK_KEY` `create_title_with_edition`
+    already documents), since the uniqueness check below is a plain read
+    with nothing else serialising it.
+    """
+    chosen = normalize_edition_slug(explicit_slug)
+    if await queries.edition_slug_taken_on_episode(conn, episode_id, chosen):
+        raise EditionSlugTaken(chosen)
+    return chosen

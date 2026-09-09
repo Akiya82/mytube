@@ -517,10 +517,13 @@ async def editions_by_source_paths(
     ever created for this title -- `'remux'` for an as-is addition,
     `'transcode'` for a conversion, or `None` for a title this phase never
     queued a job for at all (every title the CLI creates directly, from
-    before this phase existed). The add form's second-edition gate (D-147)
-    only ever fires when this is a real, known kind that differs from the
-    action about to be taken -- a `None` here is "unknown", not "same",
-    and is never treated as a mismatch.
+    before this phase existed).
+
+    `episode_id` and `number` (D-176) are this exact edition's own episode
+    and its current number, read the same way `episode_by_number`'s own
+    lookup does -- what the add form's edition-offer banner needs to write
+    `add.edition_offer.body`'s "episode {n} of {title}" sentence and to
+    build the "Add as an edition" link that targets this episode.
     """
     if not paths:
         return []
@@ -532,6 +535,8 @@ async def editions_by_source_paths(
             t.name AS title_name,
             t.status AS title_status,
             sh.slug AS slug,
+            ep.id AS episode_id,
+            enh.number AS number,
             (
                 SELECT j.kind FROM jobs j
                 WHERE j.title_id = t.id
@@ -543,6 +548,8 @@ async def editions_by_source_paths(
         JOIN seasons s ON s.id = ep.season_id
         JOIN titles t ON t.id = s.title_id
         JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
+        LEFT JOIN episode_number_history enh
+            ON enh.episode_id = ep.id AND enh.is_current
         WHERE e.source_path = ANY($1::text[])
         """,
         paths,
@@ -1344,6 +1351,392 @@ async def finish_delete_episode(conn: asyncpg.Connection, episode_id) -> None:
         )
         await conn.execute("DELETE FROM editions WHERE episode_id = $1", episode_id)
         await conn.execute("DELETE FROM episodes WHERE id = $1", episode_id)
+
+
+# --- Growing an existing title, attaching an edition (0006, plan 05) -------
+
+
+class EpisodeNumberTaken(Exception):
+    """Raised by `attach_episode_to_title` when `number` is already held by
+    a *current* claim of this title -- the caller turns this into its own
+    refusal; nothing about the episode is written.
+    """
+
+
+async def title_by_current_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | None:
+    """The title `slug` currently resolves to, restricted to a title an
+    operator could actually add another episode to right now (D-159):
+    'active' or 'preparing'. A title mid-delete or already gone is never
+    offered as an attach target even though its slug_history row survives
+    untouched (neither `mark_for_delete` nor `finish_delete` ever flips
+    `is_current` -- that is what keeps a tombstoned address resolving at
+    all).
+    """
+    return await conn.fetchrow(
+        """
+        SELECT t.id AS title_id, t.name AS title_name, t.status AS title_status
+        FROM slug_history sh
+        JOIN titles t ON t.id = sh.title_id
+        WHERE sh.slug = $1 AND sh.is_current AND t.status IN ('active', 'preparing')
+        """,
+        slug,
+    )
+
+
+async def episode_by_number(
+    conn: asyncpg.Connection, title_id, number: int
+) -> asyncpg.Record | None:
+    """The episode that currently holds `number` within `title_id`, or
+    `None` when no episode currently claims it -- the add form's own
+    read for D-159's "a different file of an episode that already exists"
+    case, scoped to the *current* claim only (unlike `episode_for_number`,
+    which also answers the renumber form's "used to be this episode's
+    number" question and stops at the history table). Joined through to
+    the episode's own row rather than stopping at
+    `episode_number_history`, since the caller needs to know the episode
+    exists and what it is, not merely that some claim of this number
+    exists somewhere in history.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT ep.id AS episode_id, ep.status AS episode_status,
+               ep.default_edition_id AS default_edition_id
+        FROM episode_number_history enh
+        JOIN episodes ep ON ep.id = enh.episode_id
+        WHERE enh.title_id = $1 AND enh.number = $2 AND enh.is_current
+        """,
+        title_id,
+        number,
+    )
+
+
+async def episode_with_title(conn: asyncpg.Connection, episode_id) -> asyncpg.Record | None:
+    """One episode's own title id/name and current number, in one row --
+    what the add form's "opened from the library's Add edition action"
+    entry point needs (D-176) to write `add.editing_edition_of`'s
+    sentence, and what the add route (Task 2) uses to confirm a submitted
+    `target_episode_id` actually names a real episode before it ever
+    reaches `add_edition_to_episode`.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT
+            ep.id AS episode_id, ep.status AS episode_status,
+            t.id AS title_id, t.name AS title_name,
+            enh.number AS number
+        FROM episodes ep
+        JOIN seasons s ON s.id = ep.season_id
+        JOIN titles t ON t.id = s.title_id
+        LEFT JOIN episode_number_history enh
+            ON enh.episode_id = ep.id AND enh.is_current
+        WHERE ep.id = $1
+        """,
+        episode_id,
+    )
+
+
+async def default_edition_technical(
+    conn: asyncpg.Connection, episode_id
+) -> asyncpg.Record | None:
+    """The technical facts of an episode's current default edition that
+    `orchestrator.media.add.suggest_edition_slug` (D-177) compares a new
+    edition's own choices against: its audio language, its resolution,
+    its burned-subtitle language and signs-only attribute, and whether it
+    is itself a conversion rather than a remux -- read through the same
+    "earliest job of this edition" lookup `editions_by_source_paths`
+    already keys a title's own `edition_kind` off of, scoped here to one
+    known edition instead of a source path.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT
+            e.audio_language AS audio_language,
+            e.width AS width, e.height AS height,
+            e.subtitle_burned_language AS subtitle_language,
+            e.subtitle_burned_signs_only AS subtitle_signs_only,
+            (
+                SELECT j.kind FROM jobs j
+                WHERE j.edition_id = e.id
+                ORDER BY j.created_at
+                LIMIT 1
+            ) = 'transcode' AS is_transcode
+        FROM episodes ep
+        JOIN editions e ON e.id = ep.default_edition_id
+        WHERE ep.id = $1
+        """,
+        episode_id,
+    )
+
+
+async def audio_languages_on_episode(conn: asyncpg.Connection, episode_id) -> set[str]:
+    """Every non-null audio language already used by an edition of this
+    episode -- `suggest_edition_slug`'s (D-177) own tie-break for a second
+    dub of the same language, which needs the studio folder appended so
+    two studios do not collide.
+    """
+    rows = await conn.fetch(
+        "SELECT DISTINCT audio_language FROM editions "
+        "WHERE episode_id = $1 AND audio_language IS NOT NULL",
+        episode_id,
+    )
+    return {row["audio_language"] for row in rows}
+
+
+async def edition_slug_taken_on_episode(
+    conn: asyncpg.Connection, episode_id, slug: str
+) -> bool:
+    """Whether `slug` already names an edition of this episode -- D-177's
+    own uniqueness scope (per episode, not global), read inside the
+    caller's own locked transaction exactly as a title slug's uniqueness
+    already is.
+    """
+    return await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM editions WHERE episode_id = $1 AND slug = $2)",
+        episode_id,
+        slug,
+    )
+
+
+async def attach_episode_to_title(
+    conn: asyncpg.Connection,
+    title_id,
+    number: int,
+    edition_id,
+    object_key: str,
+    *,
+    status: str = "active",
+    source_path: str | None = None,
+    audio_stream_index: int | None = None,
+    audio_channels: int | None = None,
+    stereo_layout: str | None = None,
+) -> "uuid.UUID":
+    """Create a new episode of an existing title's first season, at
+    `number`, plus its edition -- the attach-to-an-existing-title twin of
+    `create_title_with_edition` (D-159), sharing the exact claim-lock
+    discipline that function's own docstring documents at length: the
+    first statement inside this transaction takes `SLUG_CLAIM_LOCK_KEY`,
+    and `taken_episode_numbers` is read only after that lock is held,
+    closing the identical race one level down -- for a number instead of
+    a slug. A caller must follow the same rule
+    `create_title_with_edition` states: open the transaction and take
+    this lock before reading anything this function's own refusal below
+    depends on, or nest this call inside a caller that already did (the
+    lock is session-reentrant, so nesting is harmless).
+
+    Raises `LookupError` when `title_id` names no title with a season (a
+    submission naming a stale or crafted id gets exactly this, never a
+    created row). Raises `EpisodeNumberTaken` when `number` is already
+    held by a *different* episode's current claim -- refused rather than
+    silently taking over the address, since claiming it here would need
+    the same care `claim_episode_number`'s own docstring gives a
+    deliberate renumber, and a fresh-episode creation is not that
+    operation.
+
+    `status` sets the *edition's* own status (unlike
+    `create_title_with_edition`'s identically-named parameter, which sets
+    the *title's*, since the title here already exists): 'preparing' when
+    the caller's work has not run yet (the web add form's own D-49
+    shape), 'active' by the schema's own default otherwise (the CLI's
+    shape). Every other keyword mirrors `create_title_with_edition`'s own
+    for the identical reason.
+    """
+    async with conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
+
+        season_id = await conn.fetchval(
+            "SELECT id FROM seasons WHERE title_id = $1 ORDER BY number LIMIT 1",
+            title_id,
+        )
+        if season_id is None:
+            raise LookupError(f"no title {title_id!r} to attach an episode to")
+
+        taken = await taken_episode_numbers(conn, title_id)
+        if number in taken:
+            raise EpisodeNumberTaken(number)
+
+        episode_id = await conn.fetchval(
+            "INSERT INTO episodes (season_id) VALUES ($1) RETURNING id", season_id
+        )
+        await conn.execute(
+            """
+            INSERT INTO editions (
+                id, episode_id, object_key, source_path,
+                audio_stream_index, audio_channels, stereo_layout, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            edition_id,
+            episode_id,
+            object_key,
+            source_path,
+            audio_stream_index,
+            audio_channels,
+            stereo_layout,
+            status,
+        )
+        await conn.execute(
+            "UPDATE episodes SET default_edition_id = $1 WHERE id = $2",
+            edition_id,
+            episode_id,
+        )
+        await claim_episode_number(conn, title_id, episode_id, number)
+        await touch_title_changed(conn, title_id)
+    return episode_id
+
+
+async def add_edition_to_episode(
+    conn: asyncpg.Connection,
+    episode_id,
+    slug: str,
+    edition_id,
+    object_key: str,
+    *,
+    status: str = "active",
+    source_path: str | None = None,
+    audio_stream_index: int | None = None,
+    audio_channels: int | None = None,
+    stereo_layout: str | None = None,
+) -> None:
+    """Create a new edition of an existing episode, under a caller-
+    validated, already-unique `slug` -- the add-an-edition twin of
+    `attach_episode_to_title`, sharing the same claim lock for the same
+    reason: two operators racing to add "the Russian dub" to the same
+    episode must not both insert the same slug and leave one of them
+    silently unaddressable.
+
+    **Never touches `episodes.default_edition_id`.** Adding an edition is
+    never itself what makes it the one an episode's own bare address
+    plays (D-178) -- that only ever happens through `set_default_edition`,
+    called separately once this edition is actually ready and only when
+    the caller's own request asked for it.
+
+    Raises `LookupError` when `episode_id` names no episode. The caller
+    is expected to have already validated and claimed `slug` through
+    `orchestrator.media.add.plan_edition_slug` inside this same locked
+    transaction -- the same discipline `create_title_with_edition`
+    documents for a title slug -- so this function re-checks nothing
+    about the slug itself and simply inserts it.
+
+    An edition slug gets no rename path, ever: it is fixed the moment
+    this INSERT commits, exactly like the object key already is (D-179).
+    A mistake means adding the edition again and deleting the wrong one,
+    never a third kind of alias alongside slug_history and
+    episode_number_history.
+    """
+    async with conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
+
+        title_id = await conn.fetchval(
+            """
+            SELECT t.id FROM episodes ep
+            JOIN seasons s ON s.id = ep.season_id
+            JOIN titles t ON t.id = s.title_id
+            WHERE ep.id = $1
+            """,
+            episode_id,
+        )
+        if title_id is None:
+            raise LookupError(f"no episode {episode_id!r} to add an edition to")
+
+        await conn.execute(
+            """
+            INSERT INTO editions (
+                id, episode_id, slug, object_key, source_path,
+                audio_stream_index, audio_channels, stereo_layout, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            """,
+            edition_id,
+            episode_id,
+            slug,
+            object_key,
+            source_path,
+            audio_stream_index,
+            audio_channels,
+            stereo_layout,
+            status,
+        )
+        await touch_title_changed(conn, title_id)
+
+
+async def set_default_edition(conn: asyncpg.Connection, edition_id) -> None:
+    """Move an episode's default-edition pointer at `edition_id` (D-178) --
+    called from exactly one place in this codebase outside an operator's
+    own explicit "Make default" click: a job's terminal write, when
+    `jobs.make_default_when_ready` was true and the edition it produced
+    just became ready. Takes only `edition_id`, not the episode id
+    alongside it -- the episode is looked up from the edition itself, so
+    a caller that already has the edition on hand (every real caller)
+    never needs a second read first.
+
+    A no-op, not an error, when `edition_id` names no edition (defensive:
+    nothing in this codebase calls this for an edition it has not just
+    confirmed exists). Also touches the owning title's `changed_at`, the
+    same as every other write that changes what an episode's own address
+    plays.
+    """
+    async with conn.transaction():
+        row = await conn.fetchrow(
+            """
+            SELECT ep.id AS episode_id, t.id AS title_id
+            FROM editions e
+            JOIN episodes ep ON ep.id = e.episode_id
+            JOIN seasons s ON s.id = ep.season_id
+            JOIN titles t ON t.id = s.title_id
+            WHERE e.id = $1
+            """,
+            edition_id,
+        )
+        if row is None:
+            return
+        await conn.execute(
+            "UPDATE episodes SET default_edition_id = $1 WHERE id = $2",
+            edition_id,
+            row["episode_id"],
+        )
+        await touch_title_changed(conn, row["title_id"])
+
+
+async def sync_title_status(
+    conn: asyncpg.Connection, title_id, *, reason_key: str | None = None
+) -> None:
+    """The one place the title-level aggregate rule lives (D-157): called
+    by every terminal job write (queue.py's in-process remuxer, and
+    routes_worker.py's done/failed routes) after it has already flipped
+    the *edition* the job produced. A title with any episode whose own
+    default edition is 'active' is itself 'active' -- ready from its
+    first ready episode, exactly as a one-episode title always has been,
+    since for one episode the two facts are the same by construction and
+    this rule reduces to `mark_title_active` unconditionally, byte-
+    identical to before this function existed. A title none of whose
+    episodes has ever had a ready default edition, and whose every
+    episode's default edition has now failed, is 'failed'. Anything in
+    between -- one episode ready or failed, another still preparing --
+    leaves the title's own status untouched: it is not yet failed
+    (something might still finish) and it is not newly ready (nothing
+    new became ready this time).
+
+    `reason_key` is the catalog key this call site's own job just failed
+    with -- only read when every episode really has failed, since that is
+    the only branch that can write `titles.failure_reason`.
+    """
+    async with conn.transaction():
+        agg = await conn.fetchrow(
+            """
+            SELECT
+                bool_or(de.status = 'active') AS any_ready,
+                bool_and(de.status = 'failed') AS all_failed
+            FROM episodes ep
+            JOIN seasons s ON s.id = ep.season_id
+            LEFT JOIN editions de ON de.id = ep.default_edition_id
+            WHERE s.title_id = $1
+            """,
+            title_id,
+        )
+        if agg is None:
+            return
+        if agg["any_ready"]:
+            await mark_title_active(conn, title_id)
+        elif agg["all_failed"]:
+            await mark_title_failed(conn, title_id, reason_key or "failed.reason.unknown")
 
 
 # --- Playlist queries (0004_playlists.py) ---------------------------------

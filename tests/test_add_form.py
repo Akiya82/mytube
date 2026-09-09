@@ -107,6 +107,11 @@ def db_stub(monkeypatch):
         create_title_calls: list[dict] = []
         enqueue_job_calls: list[dict] = []
         create_title_id = "11111111-1111-1111-1111-111111111111"
+        title_by_current_slug_result = None
+        episode_by_number_result = None
+        episode_with_title_result = None
+        default_edition_technical_result = None
+        audio_languages_on_episode_result: set[str] = set()
 
     stub = _Stub()
     stub.create_title_calls = []
@@ -138,6 +143,21 @@ def db_stub(monkeypatch):
     async def _set_edition_subtitle_signs_only(conn, edition_id, signs_only):
         stub.set_edition_subtitle_signs_only_calls.append(signs_only)
 
+    async def _title_by_current_slug(conn, slug):
+        return stub.title_by_current_slug_result
+
+    async def _episode_by_number(conn, title_id, number):
+        return stub.episode_by_number_result
+
+    async def _episode_with_title(conn, episode_id):
+        return stub.episode_with_title_result
+
+    async def _default_edition_technical(conn, episode_id):
+        return stub.default_edition_technical_result
+
+    async def _audio_languages_on_episode(conn, episode_id):
+        return stub.audio_languages_on_episode_result
+
     monkeypatch.setattr(queries, "resolve_slug", _resolve_slug)
     monkeypatch.setattr(queries, "taken_slugs", _taken_slugs)
     monkeypatch.setattr(queries, "editions_by_source_paths", _editions_by_source_paths)
@@ -147,6 +167,11 @@ def db_stub(monkeypatch):
     monkeypatch.setattr(
         queries, "set_edition_subtitle_signs_only", _set_edition_subtitle_signs_only
     )
+    monkeypatch.setattr(queries, "title_by_current_slug", _title_by_current_slug)
+    monkeypatch.setattr(queries, "episode_by_number", _episode_by_number)
+    monkeypatch.setattr(queries, "episode_with_title", _episode_with_title)
+    monkeypatch.setattr(queries, "default_edition_technical", _default_edition_technical)
+    monkeypatch.setattr(queries, "audio_languages_on_episode", _audio_languages_on_episode)
     return stub
 
 
@@ -257,13 +282,21 @@ async def test_unreadable_file_renders_unreadable_reason_not_traceback(
 # --- the name field ------------------------------------------------------
 
 
-async def test_name_field_value_is_raw_filename_unmodified(web_client, monkeypatch):
+async def test_name_field_value_is_the_recognised_name_not_the_raw_filename(
+    web_client, monkeypatch
+):
+    """D-169: the name field is prefilled with what the recogniser read,
+    not the raw filename -- "a-video.mp4" recognises as "a-video" (the
+    extension stripped), and the raw filename still renders, verbatim, in
+    its own caption beneath the episode-number field.
+    """
     monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
 
     async with web_client:
         resp = await web_client.get("/add/a-video.mp4")
 
-    assert 'value="a-video.mp4"' in resp.text
+    assert 'value="a-video"' in resp.text
+    assert "File: a-video.mp4" in resp.text
 
 
 async def test_script_tag_filename_renders_escaped_everywhere(web_client, monkeypatch):
@@ -380,22 +413,24 @@ async def test_slug_field_shows_the_planned_slug(web_client, monkeypatch):
         resp = await web_client.get("/add/a-video.mp4")
 
     assert 'id="add-slug"' in resp.text
-    assert 'value="a-video-mp4"' in resp.text
+    # D-169: the slug is now planned from the recognised name ("a-video",
+    # the extension stripped), not the raw filename.
+    assert 'value="a-video"' in resp.text
 
 
 async def test_similar_slug_warning_names_the_taken_slug(web_client, monkeypatch, db_stub):
     monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
-    # "a-video.mp4" normalizes to candidate "a-video-mp4"; "avideomp4" is a
-    # different, already-taken slug with the same similar_key (hyphens
-    # stripped) -- this is exactly the "Re:Zero" vs "ReZero" case
-    # pick_unique_slug's own docstring describes.
-    db_stub.taken_slugs_result = {"avideomp4"}
+    # "a-video.mp4" recognises as "a-video", candidate slug "a-video";
+    # "a-vi-deo" is a different, already-taken slug with the same
+    # similar_key (hyphens stripped) -- this is exactly the "Re:Zero" vs
+    # "ReZero" case pick_unique_slug's own docstring describes.
+    db_stub.taken_slugs_result = {"a-vi-deo"}
 
     async with web_client:
         resp = await web_client.get("/add/a-video.mp4")
 
     assert resp.status_code == 200
-    assert "avideomp4" in resp.text
+    assert "a-vi-deo" in resp.text
 
 
 async def test_tombstoned_slug_shows_reuse_warning_and_disables_submit(
@@ -427,31 +462,172 @@ async def test_tombstoned_slug_with_reuse_confirmed_enables_submit(
     assert "disabled" not in submit_tag
 
 
-# --- already-added ---------------------------------------------------------
+# --- already-added, now offered as an edition (D-176 supersedes D-147) ----
 
 
-async def test_already_added_banner_names_existing_title_and_submit_stays_enabled(
+def _already_added_row(**overrides):
+    row = {
+        "source_path": "a-video.mp4",
+        "title_id": "existing-id",
+        "title_name": "Existing Title",
+        "title_status": "active",
+        "slug": "existing-title-slug",
+        "episode_id": "33333333-3333-3333-3333-333333333333",
+        "number": 3,
+        "edition_kind": "remux",
+    }
+    row.update(overrides)
+    return row
+
+
+async def test_already_added_exact_match_gates_both_actions_behind_the_edition_offer(
     web_client, monkeypatch, db_stub
 ):
+    """D-176 supersedes D-147: whatever kind the existing edition is, the
+    exact-match banner is always the same warning confirm-gate offering
+    "Add as an edition" -- no differing-kind distinction, no info-only
+    branch, and both primary actions stay disabled until it is accepted.
+    """
     monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
-    db_stub.already_added_rows = [
-        {
-            "source_path": "a-video.mp4",
-            "title_id": "existing-id",
-            "title_name": "Existing Title",
-            "title_status": "active",
-            "slug": "existing-title-slug",
-            "edition_kind": "remux",
-        }
-    ]
+    db_stub.already_added_rows = [_already_added_row(edition_kind="transcode")]
 
     async with web_client:
         resp = await web_client.get("/add/a-video.mp4")
 
+    assert "already added as episode 3" in resp.text
     assert "Existing Title" in resp.text
     assert "/v/existing-title-slug" in resp.text
-    submit_tag = resp.text.split('type="submit"')[1].split(">")[0]
-    assert "disabled" not in submit_tag
+    assert "Add as an edition" in resp.text
+    assert "?target_episode_id=33333333-3333-3333-3333-333333333333" in resp.text
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    assert "disabled" in add_tag
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "disabled" in convert_tag
+    # The old second-title gate is entirely gone.
+    assert "add anyway" not in resp.text.lower()
+
+
+async def test_accepting_the_edition_offer_enters_edition_mode_with_no_gate(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row()]
+    db_stub.episode_with_title_result = {
+        "episode_id": "33333333-3333-3333-3333-333333333333",
+        "episode_status": "active",
+        "title_id": "existing-id",
+        "title_name": "Existing Title",
+        "number": 3,
+    }
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4?target_episode_id=33333333-3333-3333-3333-333333333333")
+
+    assert "Adding an edition of episode 3 of Existing Title" in resp.text
+    assert 'id="add-edition-slug"' in resp.text
+    assert 'name="make_default"' in resp.text
+    assert 'name="add-name"' not in resp.text.lower()
+    assert 'id="add-name"' not in resp.text
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    assert "disabled" not in add_tag
+
+
+# --- title match, D-159's single-file case ---------------------------------
+
+
+async def test_title_match_with_a_free_number_offers_to_attach_not_a_gate(
+    web_client, monkeypatch, db_stub, share_root
+):
+    """"Horimiya - 12.mkv" recognises as name "Horimiya", episode 12 --
+    when a catalog title's own current slug is "horimiya" and this exact
+    path was never added, the offer is an info-tint suggestion, never a
+    gate: both primary actions stay enabled either way.
+    """
+    (share_root / "Horimiya - 12.mkv").write_bytes(b"stub video bytes")
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    db_stub.title_by_current_slug_result = {
+        "title_id": "44444444-4444-4444-4444-444444444444",
+        "title_name": "Horimiya",
+        "title_status": "active",
+    }
+
+    async with web_client:
+        resp = await web_client.get("/add/Horimiya - 12.mkv")
+
+    assert "looks like episode 12 of Horimiya" in resp.text
+    assert "Add as episode 12 of Horimiya" in resp.text
+    assert "?target_title_id=44444444-4444-4444-4444-444444444444" in resp.text
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    assert "disabled" not in add_tag
+
+
+async def test_title_match_with_a_taken_number_becomes_an_edition_offer(
+    web_client, monkeypatch, db_stub, share_root
+):
+    """A *different* file recognising as the same episode number of an
+    existing title (D-176's "720p rip of the same episode" case) becomes
+    the edition-offer gate instead of the attach offer, and blocks the
+    primary actions the same way an exact-source match does.
+    """
+    (share_root / "Horimiya - 12.mkv").write_bytes(b"stub video bytes")
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    db_stub.title_by_current_slug_result = {
+        "title_id": "44444444-4444-4444-4444-444444444444",
+        "title_name": "Horimiya",
+        "title_status": "active",
+    }
+    db_stub.episode_by_number_result = {
+        "episode_id": "55555555-5555-5555-5555-555555555555",
+        "episode_status": "active",
+        "default_edition_id": "66666666-6666-6666-6666-666666666666",
+    }
+
+    async with web_client:
+        resp = await web_client.get("/add/Horimiya - 12.mkv")
+
+    assert "Episode 12 of" in resp.text
+    assert "already exists" in resp.text
+    assert "Add as an edition" in resp.text
+    assert "?target_episode_id=55555555-5555-5555-5555-555555555555" in resp.text
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    assert "disabled" in add_tag
+    # Mutually exclusive: the plain "attach" offer never renders alongside
+    # this one.
+    assert "looks like episode" not in resp.text
+
+
+async def test_no_recognised_episode_number_never_offers_a_title_match(
+    web_client, monkeypatch, db_stub
+):
+    """D-169: clips without a number behave exactly as today -- a file
+    whose name matches a catalog title but carries no recognisable
+    episode number is never offered the attach path (there is no episode
+    number to attach it at).
+    """
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    db_stub.title_by_current_slug_result = {
+        "title_id": "44444444-4444-4444-4444-444444444444",
+        "title_name": "A Video",
+        "title_status": "active",
+    }
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert "looks like episode" not in resp.text
+    assert "target_title_id=44444444" not in resp.text
+
+
+async def test_retired_second_title_gate_keys_render_nowhere(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row()]
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4")
+
+    assert "add.warning.second_edition" not in resp.text
+    assert "add.cta.add_anyway" not in resp.text
+    assert "second title" not in resp.text.lower()
 
 
 # --- the layout selector ------------------------------------------------
@@ -833,80 +1009,13 @@ async def test_external_audio_choice_leaves_subtitle_default_untouched(
     assert 'name="subtitle_choice" value="none" checked' in resp.text
 
 
-# --- the second-edition gate (D-147) -------------------------------------
-
-
-async def test_second_edition_gate_blocks_convert_when_existing_is_remux(
-    web_client, monkeypatch, db_stub
-):
-    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
-    db_stub.already_added_rows = [
-        {
-            "source_path": "a-video.mp4",
-            "title_id": "existing-id",
-            "title_name": "Existing Title",
-            "title_status": "active",
-            "slug": "existing-title-slug",
-            "edition_kind": "remux",
-        }
-    ]
-
-    async with web_client:
-        resp = await web_client.get("/add/a-video.mp4")
-
-    add_tag = resp.text.split('name="add"')[1].split(">")[0]
-    assert "disabled" not in add_tag
-    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
-    assert "disabled" in convert_tag
-    assert "Add anyway" in resp.text
-
-
-async def test_second_edition_gate_is_lifted_once_confirmed(web_client, monkeypatch, db_stub):
-    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
-    db_stub.already_added_rows = [
-        {
-            "source_path": "a-video.mp4",
-            "title_id": "existing-id",
-            "title_name": "Existing Title",
-            "title_status": "active",
-            "slug": "existing-title-slug",
-            "edition_kind": "remux",
-        }
-    ]
-
-    async with web_client:
-        resp = await web_client.get("/add/a-video.mp4?confirm_add_anyway=1")
-
-    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
-    assert "disabled" not in convert_tag
-
-
-async def test_second_edition_gate_does_not_fire_for_a_title_with_no_known_job_kind(
-    web_client, monkeypatch, db_stub
-):
-    """A title the CLI created directly, before this phase, carries no
-    `jobs` row and so no known `edition_kind` -- unknown is never treated
-    as a mismatch.
-    """
-    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
-    db_stub.already_added_rows = [
-        {
-            "source_path": "a-video.mp4",
-            "title_id": "existing-id",
-            "title_name": "Existing Title",
-            "title_status": "active",
-            "slug": "existing-title-slug",
-            "edition_kind": None,
-        }
-    ]
-
-    async with web_client:
-        resp = await web_client.get("/add/a-video.mp4")
-
-    add_tag = resp.text.split('name="add"')[1].split(">")[0]
-    assert "disabled" not in add_tag
-    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
-    assert "disabled" not in convert_tag
+# The GET-render second-edition gate (D-147) is retired: D-176 supersedes
+# it, and `test_already_added_exact_match_gates_both_actions_behind_the_edition_offer`
+# / `test_accepting_the_edition_offer_enters_edition_mode_with_no_gate` above
+# cover its replacement. The POST route's own `confirm_add_anyway` re-check
+# stays as defensive, unreachable-from-the-UI code -- see
+# `test_second_edition_gate_refuses_a_convert_post_with_no_confirmation` /
+# `test_second_edition_gate_lets_a_confirmed_convert_post_through` below.
 
 
 # --- which action is primary ---------------------------------------------

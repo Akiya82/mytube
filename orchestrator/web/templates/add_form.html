@@ -6,34 +6,49 @@
 {% block heading %}{{ t("add.heading") }}{% endblock %}
 
 {% block content %}
-{% if already_added %}
-  {% if differs_add or differs_convert %}
-    {# D-147: the existing edition's kind differs from one of the two
-       actions below -- the same confirm-before-primary gate the tombstone
-       banner already uses, reused rather than reinvented. #}
-    <div class="banner banner--warning" role="alert">
-      {{ warning(cls="banner__icon") }}
-      <div class="banner__text">
-        <p class="banner__body">{{ t("add.warning.second_edition").format(title=already_added.title_name) }}</p>
-        <a class="banner__link" href="/v/{{ already_added.slug }}">{{ t("share.cta.view_existing") }}</a>
-        {% if not add_anyway_confirmed %}
-          <a class="btn btn--secondary" href="{{ add_anyway_href }}">{{ t("add.cta.add_anyway") }}</a>
-        {% endif %}
-      </div>
+{# --- Position 1 (D-176 supersedes D-147): the four mutually exclusive
+   banner states -- opened-from-library edition mode, exact source already
+   added, a different file of an already-taken episode, or a plain title
+   match with the number still free. No "add anyway, second title" branch
+   survives here: a title-level match cannot occur once every edition
+   belongs to an episode. --- #}
+{% if mode == "edition" %}
+  <div class="banner banner--info" role="status">
+    {{ warning(cls="banner__icon") }}
+    <div class="banner__text">
+      <p class="banner__body">{{ t("add.editing_edition_of").format(n=edition_target.number, title=edition_target.title_name) }}</p>
     </div>
-    <input type="hidden" name="confirm_add_anyway" value="{{ 'true' if add_anyway_confirmed else 'false' }}">
-  {% else %}
-    <div class="banner banner--info" role="status">
-      {{ warning(cls="banner__icon") }}
-      <div class="banner__text">
-        <p class="banner__body">{{ t("share.already_added.body").format(title=already_added.title_name) }}</p>
-        <a class="banner__link" href="/v/{{ already_added.slug }}">{{ t("share.cta.view_existing") }}</a>
-      </div>
+  </div>
+{% elif already_added %}
+  <div class="banner banner--warning" role="alert">
+    {{ warning(cls="banner__icon") }}
+    <div class="banner__text">
+      <p class="banner__body">{{ t("add.edition_offer.body").format(n=already_added.number, title=already_added.title_name) }}</p>
+      <a class="banner__link" href="/v/{{ already_added.slug }}">{{ t("share.cta.view_existing") }}</a>
+      <a class="btn btn--secondary" href="{{ edition_offer_href }}">{{ t("add.edition_offer.cta") }}</a>
     </div>
-  {% endif %}
+  </div>
+{% elif title_match and title_match_episode %}
+  <div class="banner banner--warning" role="alert">
+    {{ warning(cls="banner__icon") }}
+    <div class="banner__text">
+      <p class="banner__body">{{ t("add.edition_offer.body_other_file").format(n=recognised.episode, title=title_match.title_name) }}</p>
+      <a class="btn btn--secondary" href="{{ edition_offer_href }}">{{ t("add.edition_offer.cta") }}</a>
+    </div>
+  </div>
+{% elif title_match %}
+  <div class="banner banner--info" role="status">
+    {{ warning(cls="banner__icon") }}
+    <div class="banner__text">
+      <p class="banner__body">{{ t("add.title_match.offer").format(n=recognised.episode, title=title_match.title_name) }}</p>
+      <a class="btn btn--secondary" href="{{ attach_offer_href }}">{{ t("add.title_match.cta").format(n=recognised.episode, title=title_match.title_name) }}</a>
+    </div>
+  </div>
 {% endif %}
 
 <form class="add-form" method="post" action="{{ form_action }}">
+  <input type="hidden" name="target_title_id" value="{{ target_title_id or '' }}">
+  <input type="hidden" name="target_episode_id" value="{{ target_episode_id or '' }}">
   {# --- 2. The plan: four mutually exclusive states (D-145's "explanation
      at the top"), replacing the old single verdict block. --- #}
   {% if probe_failed %}
@@ -65,34 +80,61 @@
     </div>
   {% endif %}
 
-  {# --- 3/4. Name and slug fields (unchanged). --- #}
-  <div class="form-field">
-    <label class="form-field__label" for="add-name">{{ t("add.field.name") }}</label>
-    <input class="form-field__input" type="text" id="add-name" name="name" value="{{ entry_name }}">
-  </div>
-
-  <div class="form-field">
-    <label class="form-field__label" for="add-slug">{{ t("add.field.slug") }}</label>
-    <input class="form-field__input" type="text" id="add-slug" name="slug" value="{{ slug_plan.chosen }}">
-  </div>
-
-  {% if slug_plan.is_tombstone %}
-    <div class="banner banner--warning" role="alert">
-      {{ warning(cls="banner__icon") }}
-      <div class="banner__text">
-        <p class="banner__body">{{ t("add.tombstone_warning") }}</p>
-        {% if not reuse_confirmed %}
-          <a class="btn btn--secondary" href="{{ reuse_href }}">{{ t("add.cta.reuse_slug") }}</a>
-        {% endif %}
-      </div>
+  {# --- 3/4. Name, slug and episode-number fields, or the edition fields
+     in their place -- three mutually exclusive shapes, decided by mode
+     (D-159, D-169, D-176). An edition has no name and no address segment
+     of its own beyond its slug, so mode "edition" replaces the whole
+     block; mode "attach" drops Name/Slug (there is no new title to name)
+     but keeps the episode-number field; mode "new" (the default,
+     unchanged path) keeps all three. --- #}
+  {% if mode == "edition" %}
+    <div class="form-field">
+      <label class="form-field__label" for="add-edition-slug">{{ t("edition.field.slug") }}</label>
+      <input class="form-field__input" type="text" id="add-edition-slug" name="edition_slug" value="{{ edition_slug_suggestion }}">
+      <p class="audio-note">{{ t("edition.field.slug_hint") }}</p>
     </div>
-    <input type="hidden" name="confirm_reuse" value="{{ 'true' if reuse_confirmed else 'false' }}">
-  {% elif slug_plan.similar %}
-    <div class="banner banner--info" role="status">
-      {{ warning(cls="banner__icon") }}
-      <div class="banner__text">
-        <p class="banner__body">{{ t("add.slug_similar").format(slug=slug_plan.similar | join(", ")) }}</p>
+    <label class="radio-group__option">
+      <input type="checkbox" name="make_default" value="1">
+      <span>{{ t("edition.field.make_default") }}</span>
+    </label>
+  {% else %}
+    {% if mode != "attach" %}
+    <div class="form-field">
+      <label class="form-field__label" for="add-name">{{ t("add.field.name") }}</label>
+      <input class="form-field__input" type="text" id="add-name" name="name" value="{{ recognised.name }}">
+    </div>
+
+    <div class="form-field">
+      <label class="form-field__label" for="add-slug">{{ t("add.field.slug") }}</label>
+      <input class="form-field__input" type="text" id="add-slug" name="slug" value="{{ slug_plan.chosen }}">
+    </div>
+
+    {% if slug_plan.is_tombstone %}
+      <div class="banner banner--warning" role="alert">
+        {{ warning(cls="banner__icon") }}
+        <div class="banner__text">
+          <p class="banner__body">{{ t("add.tombstone_warning") }}</p>
+          {% if not reuse_confirmed %}
+            <a class="btn btn--secondary" href="{{ reuse_href }}">{{ t("add.cta.reuse_slug") }}</a>
+          {% endif %}
+        </div>
       </div>
+      <input type="hidden" name="confirm_reuse" value="{{ 'true' if reuse_confirmed else 'false' }}">
+    {% elif slug_plan.similar %}
+      <div class="banner banner--info" role="status">
+        {{ warning(cls="banner__icon") }}
+        <div class="banner__text">
+          <p class="banner__body">{{ t("add.slug_similar").format(slug=slug_plan.similar | join(", ")) }}</p>
+        </div>
+      </div>
+    {% endif %}
+    {% endif %}
+
+    <div class="form-field">
+      <label class="form-field__label" for="add-episode-number">{{ t("add.field.episode_number") }}</label>
+      <input class="form-field__input form-field__input--narrow" type="text" inputmode="numeric" id="add-episode-number" name="episode_number" value="{{ recognised.episode if recognised.episode is not none else '' }}">
+      <p class="audio-note">{{ t("add.field.episode_number_hint") }}</p>
+      <p class="audio-note">{{ t("folder.file.raw_filename").format(name=entry_name) }}</p>
     </div>
   {% endif %}
 

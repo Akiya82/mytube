@@ -22,6 +22,7 @@ through `asyncio.to_thread`.
 """
 import asyncio
 import shutil
+import uuid
 from pathlib import Path
 from urllib.parse import quote
 
@@ -49,9 +50,14 @@ from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.language import language_from_tokens, resolve_track_kind
-from orchestrator.media.add import SlugPlan, plan_slug, required_free_bytes
+from orchestrator.media.add import (
+    SlugPlan,
+    plan_slug,
+    required_free_bytes,
+    suggest_edition_slug,
+)
 from orchestrator.recognize import recognize_filename
-from orchestrator.slugs import SlugError
+from orchestrator.slugs import SlugError, normalize_slug
 from orchestrator.web.templates import LOCALES, render
 
 router = APIRouter()
@@ -163,6 +169,10 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
     """
     settings = get_settings()
     entry_name = target.name
+    # D-169: recognised once, up front -- the name field, the episode
+    # number field and the title-match lookup below all read this same
+    # result, never a second parse of the same filename.
+    recognised = recognize_filename(entry_name)
 
     try:
         probe_json = await asyncio.to_thread(probe, target)
@@ -230,7 +240,6 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         # a dub against, so the search is simply not run for it rather
         # than guessed -- an empty audio_tracks_external list, not an
         # error.
-        recognised = recognize_filename(entry_name)
         if recognised.episode is not None:
             try:
                 audio_candidates = await asyncio.to_thread(
@@ -273,9 +282,13 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
 
     pool = request.app.state.db_pool
     convert_estimate_value = None
+    title_match = None
+    title_match_episode = None
+    edition_target = None
+    edition_slug_suggestion = ""
     async with pool.acquire() as conn:
         try:
-            slug_plan: SlugPlan = await plan_slug(conn, entry_name)
+            slug_plan: SlugPlan = await plan_slug(conn, recognised.name)
         except SlugError:
             # A filename that transliterates to nothing usable (pure
             # emoji/punctuation) is a real, if rare, edge on a share this
@@ -286,6 +299,84 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
             return _unreachable_response(request, status_code=400)
 
         already_added_rows = await queries.editions_by_source_paths(conn, [rel_path])
+        already_added = already_added_rows[0] if already_added_rows else None
+
+        # D-159: a title-level match can only ever apply to a path that
+        # was never added before -- once the exact source is already an
+        # edition of something, that IS the match, and it is always the
+        # stronger (exact-source) one of the two (the four banner states
+        # are mutually exclusive by construction, not by a later check).
+        # D-169: "Clips without a number behave exactly as today" -- with
+        # no parsed episode number there is nothing to attach this file
+        # at, so the lookup does not even run.
+        if already_added is None and recognised.episode is not None:
+            try:
+                candidate_title_slug = normalize_slug(recognised.name)
+            except SlugError:
+                candidate_title_slug = None
+            if candidate_title_slug:
+                title_match = await queries.title_by_current_slug(conn, candidate_title_slug)
+            if title_match is not None:
+                title_match_episode = await queries.episode_by_number(
+                    conn, title_match["title_id"], recognised.episode
+                )
+
+        # T-05-xx: the "add an edition" entry point (a click on this same
+        # page's own confirm-gate CTA, or a deep link the library's own
+        # "Add edition" action will produce in a later plan) -- a GET
+        # query param, resolved fresh against the database every time,
+        # never trusted as a bare string past this point.
+        mode = "new"
+        target_episode_id = None
+        raw_target_episode = request.query_params.get("target_episode_id")
+        if raw_target_episode:
+            try:
+                parsed_episode_id = uuid.UUID(raw_target_episode)
+            except ValueError:
+                parsed_episode_id = None
+            if parsed_episode_id is not None:
+                edition_target = await queries.episode_with_title(conn, parsed_episode_id)
+                if edition_target is not None:
+                    target_episode_id = parsed_episode_id
+                    mode = "edition"
+
+        target_title_id = None
+        if mode != "edition":
+            raw_target_title = request.query_params.get("target_title_id")
+            if (
+                raw_target_title
+                and title_match is not None
+                and title_match_episode is None
+                and raw_target_title == str(title_match["title_id"])
+            ):
+                target_title_id = title_match["title_id"]
+                mode = "attach"
+
+        if mode == "edition" and verdict is not None:
+            existing_technical = await queries.default_edition_technical(
+                conn, target_episode_id
+            )
+            taken_languages = await queries.audio_languages_on_episode(
+                conn, target_episode_id
+            )
+            default_track = next(
+                (t for t in verdict.tracks if t.index == verdict.default_track_index), None
+            )
+            candidate_technical = {
+                "audio_language": default_track.language if default_track else None,
+                "audio_studio_folder": None,
+                "width": verdict.width,
+                "height": verdict.height,
+                "subtitle_language": None,
+                "subtitle_signs_only": None,
+                "is_transcode": False,
+                "video_codec": None,
+            }
+            edition_slug_suggestion = suggest_edition_slug(
+                existing=dict(existing_technical) if existing_technical else {},
+                candidate=candidate_technical,
+                taken_audio_languages=frozenset(taken_languages),
+            )
 
         if verdict is not None and verdict.duration_seconds:
             # Local import: routes_titles.py already imports this module
@@ -299,10 +390,7 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
                 conn, verdict.duration_seconds, settings
             )
 
-    already_added = already_added_rows[0] if already_added_rows else None
-
     reuse_confirmed = request.query_params.get("confirm_reuse") == "1"
-    add_anyway_confirmed = request.query_params.get("confirm_add_anyway") == "1"
 
     try:
         size_bytes = await asyncio.to_thread(lambda: target.stat().st_size)
@@ -323,19 +411,23 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
     if settings.add_estimate_mb_per_second > 0:
         estimate_seconds = size_bytes / (settings.add_estimate_mb_per_second * 1024 * 1024)
 
-    # D-147: the second-edition gate applies to at most one of the two
-    # actions at a time -- the existing edition is either a remux or a
-    # transcode, never both, so only the action that would create a
-    # *different* kind ever needs the confirm-first control.
-    differs_add = already_added is not None and already_added["edition_kind"] == "transcode"
-    differs_convert = already_added is not None and already_added["edition_kind"] == "remux"
+    # D-176 supersedes D-147: a title-level match cannot occur any more --
+    # every already-added source or already-taken episode number is
+    # offered as an edition instead, gating the two primary actions until
+    # the operator either accepts that offer (mode == "edition") or picks
+    # a different file. The tombstone gate only applies while a brand new
+    # title's own slug is actually being claimed (mode == "new").
+    gate_pending = (
+        (already_added is not None or title_match_episode is not None) and mode != "edition"
+    )
+    tombstone_blocks = mode == "new" and slug_plan.is_tombstone and not reuse_confirmed
 
     can_add = bool(
         verdict is not None
         and verdict.eligible
-        and (not slug_plan.is_tombstone or reuse_confirmed)
+        and not tombstone_blocks
         and not not_enough_space
-        and not (differs_add and not add_anyway_confirmed)
+        and not gate_pending
     )
 
     can_convert = bool(
@@ -344,8 +436,8 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         # A conversion needs an audio track chosen exactly as a copy does
         # (Amendment 2) -- a source with none has no add path either way
         # (see analyze()'s own reason.no_audio branch).
-        and (not slug_plan.is_tombstone or reuse_confirmed)
-        and not (differs_convert and not add_anyway_confirmed)
+        and not tombstone_blocks
+        and not gate_pending
     )
 
     # Computed here, not concatenated in the template: the template-key
@@ -356,20 +448,31 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         "layout.detected." + verdict.stereo_layout_source if verdict is not None else None
     )
 
+    edition_offer_episode_id = None
+    if already_added is not None:
+        edition_offer_episode_id = dict(already_added).get("episode_id")
+    elif title_match_episode is not None:
+        edition_offer_episode_id = title_match_episode["episode_id"]
+
     return render(
         request,
         "add_form.html",
         entry_name=entry_name,
+        recognised=recognised,
         rel_path=rel_path,
         verdict=verdict,
         layout_detected_key=layout_detected_key,
         probe_failed=probe_json is None,
         slug_plan=slug_plan,
         already_added=already_added,
-        differs_add=differs_add,
-        differs_convert=differs_convert,
+        title_match=title_match,
+        title_match_episode=title_match_episode,
+        mode=mode,
+        target_title_id=target_title_id,
+        target_episode_id=target_episode_id,
+        edition_target=edition_target,
+        edition_slug_suggestion=edition_slug_suggestion,
         reuse_confirmed=reuse_confirmed,
-        add_anyway_confirmed=add_anyway_confirmed,
         size_bytes=size_bytes,
         estimate_seconds=estimate_seconds,
         not_enough_space=not_enough_space,
@@ -379,7 +482,16 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         can_add=can_add,
         can_convert=can_convert,
         reuse_href=_href(rel_path) + "?confirm_reuse=1",
-        add_anyway_href=_href(rel_path) + "?confirm_add_anyway=1",
+        edition_offer_href=(
+            _href(rel_path) + f"?target_episode_id={edition_offer_episode_id}"
+            if edition_offer_episode_id is not None
+            else None
+        ),
+        attach_offer_href=(
+            _href(rel_path) + f"?target_title_id={title_match['title_id']}"
+            if title_match is not None and title_match_episode is None
+            else None
+        ),
         form_action=_href(rel_path),
     )
 
