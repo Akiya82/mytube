@@ -703,6 +703,73 @@ async def test_stage_waiting_for_converter_with_no_worker_ever_connected(client,
     assert "none connected yet" in resp.text
 
 
+async def test_stage_queued_recovers_once_the_converter_is_seen_working(client, queries_stub):
+    """05-17 gap closure: the heartbeat now refreshes the check-in, so a
+    queued sibling beside a real conversion renders the queued sentence
+    for the whole conversion instead of falling into
+    waiting_for_converter about a minute in -- the same fixture shape as
+    `test_stage_waiting_for_converter_names_the_worker_and_time_since_seen`
+    above, with a fresh `worker_status="working"` check-in instead of a
+    stale `"idle"` one.
+    """
+    from datetime import datetime, timezone
+
+    title_id = uuid.uuid4()
+    fresh_seen = datetime.now(timezone.utc)
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at=None,
+            **_job(
+                job_kind="transcode",
+                job_status="queued",
+                job_db_stage="queued",
+                job_queued_ahead=1,
+            ),
+            worker_name="ml-server",
+            worker_last_seen_at=fresh_seen,
+            worker_status="working",
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-job-stage="queued"' in resp.text
+    assert "1 ahead of you" in resp.text
+
+
+async def test_stage_waiting_for_converter_still_fires_for_a_check_in_past_the_bound(
+    client, queries_stub
+):
+    """The guard against the fix over-correcting: a converter whose
+    check-in really is older than `converter_offline_seconds` must keep
+    the offline sentence -- it exists for a converter that has really
+    stopped and must keep working.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    title_id = uuid.uuid4()
+    stale_seen = datetime.now(timezone.utc) - timedelta(seconds=90)
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="preparing",
+            started_at=None,
+            **_job(job_kind="transcode", job_status="queued", job_db_stage="queued"),
+            worker_name="ml-server",
+            worker_last_seen_at=stale_seen,
+            worker_status="working",
+        )
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'data-job-stage="waiting_for_converter"' in resp.text
+
+
 async def test_stage_waiting_for_gpu_is_a_separate_sentence_from_waiting_for_a_converter(
     client, queries_stub
 ):
@@ -1992,6 +2059,47 @@ async def test_episode_row_queued_chip_carries_no_number(client, queries_stub):
         resp.text,
         re.S,
     ).group(0)
+    chip = re.search(r'<span class="chip chip--preparing">([^<]*)</span>', section)
+    assert chip is not None
+    assert chip.group(1).strip() == "Queued"
+    assert not re.search(r"\d", chip.group(1))
+
+
+async def test_episode_row_queued_chip_stays_number_free_once_the_converter_is_seen_working(
+    client, queries_stub
+):
+    """05-17 gap closure: the queued chip's own number-free rendering
+    (established above with a `remux` job, since a `transcode` job's
+    check-in went stale about a minute into any real conversion) now
+    agrees with a real transcode job carrying a fresh, working check-in
+    -- the two fixes have to produce the same chip on the same surface.
+    """
+    from datetime import datetime, timezone
+
+    title_id = uuid.uuid4()
+    fresh_seen = datetime.now(timezone.utc)
+    ep2 = _episode(
+        title_id=title_id,
+        number=2,
+        **_job(job_kind="transcode", job_status="queued", job_db_stage="queued"),
+        worker_name="ml-server",
+        worker_last_seen_at=fresh_seen,
+        worker_status="working",
+    )
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=1)
+    ]
+    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = re.search(
+        rf'<li class="episode-row[^>]*data-episode-id="{ep2["episode_id"]}"[^>]*>.*?</li>',
+        resp.text,
+        re.S,
+    ).group(0)
+    assert "Waiting for a converter" not in section
     chip = re.search(r'<span class="chip chip--preparing">([^<]*)</span>', section)
     assert chip is not None
     assert chip.group(1).strip() == "Queued"
