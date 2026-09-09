@@ -115,3 +115,80 @@ is stated plainly here rather than implied by a number that was never taken.
 
 Row 4 reports an absence rather than a wrong number, and it is not a series folder
 recognised incorrectly — it carries no filename disagreement and blocks nothing.
+
+---
+
+## Deployment
+
+With the recognition measurement above clean, the owner approved the four new
+packages (`anitopy`, `guessit`, `langcodes`, `language_data` — see
+`00-package-legitimacy.md`) and then approved a two-part deployment, converter
+first and interface second, because the two now speak a raised protocol between
+them and an old converter left running against a new interface exits at its
+first claim rather than working quietly.
+
+**Commit deployed:** `5d27962`.
+
+**Images built and pushed:**
+
+- `registry.example.com/mytube/mytube:5d27962`, digest
+  `sha256:f66b1af73ae639aac27582c4716ae76a96a596567416903c184caf3328b69853`
+- `registry.example.com/mytube/mytube-worker:5d27962`, digest
+  `sha256:2c772a82533c1d6ae30d0b2ee4e0c40eaefc2b64a34f51a4494570fb286ae2b1`
+
+**Before rolling anything**, the job queue was read back: 25 done, 1 failed,
+nothing queued and nothing running — the converter was genuinely idle.
+
+**The converter rolled first**, by the same ansible role the project's earlier
+conversion-worker rollout used, pinning the new tag on the GPU host and
+bringing the compose stack back up. Its very first polls afterward, read
+straight from its own log, show exactly the disagreement the raised protocol
+predicts:
+
+```
+INFO:__main__:worker 'ml-server' starting: service https://admin.mytube.example.com, card 6304 MiB free
+INFO:httpx:HTTP Request: POST https://admin.mytube.example.com/worker/claim "HTTP/1.1 400 Bad Request"
+ERROR:__main__:this converter speaks protocol 3, the service speaks protocol 2 -- deploy the converter and the service together
+```
+
+That is expected and temporary — it clears the moment the other half rolls, not
+a defect in the converter.
+
+**The interface rolled second**, together with both edge ConfigMaps (the
+template carrying the one new `error_page` line, and the error clips carrying
+the new fifth stub) regenerated from this same commit and applied first. The
+rolled deployment's own containers read back as
+`registry.example.com/mytube/mytube:5d27962` (interface) and
+`nginx:1.27-alpine` (edge, unchanged), and the container's own start-up ran
+the pending migration automatically. The schema revision read back afterward
+is `0007` — the two migrations this phase queued (per-edition readiness and
+the edition-scoped delete countdown) both applied. The edge container's error
+directory lists all five stub clips, `preparing.mp4` among them.
+
+**Read back once more, the converter's log now shows a clean poll on the
+matching protocol**, with no disagreement line at all:
+
+```
+INFO:httpx:HTTP Request: POST https://admin.mytube.example.com/worker/claim "HTTP/1.1 204 No Content"
+```
+
+and the running container is confirmed on the new tag.
+
+**After the migration's backfill**, an existing title's numbered address was
+checked against its bare address to confirm the backfill actually reached
+every pre-existing row. `horimiya-01`, an episode already in the catalog
+before this phase, answers identically at its bare address and at every
+numbered form of it:
+
+| Address | Status | Redirects to |
+|---|---|---|
+| `/v/horimiya-01` | 302 | the same signed blob address |
+| `/v/horimiya-01/01` | 302 | the same signed blob address |
+| `/v/horimiya-01/1` | 302 | the same signed blob address |
+| `/v/horimiya-01/001` | 302 | the same signed blob address |
+
+All four forms resolve to the exact same object, confirming the migration's
+backfill reached this title without anyone touching it by hand.
+
+Both public hostnames answered after the roll: the operator's own interface
+with a login redirect, and the delivery hostname with a real video response.

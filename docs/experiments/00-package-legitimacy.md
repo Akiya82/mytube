@@ -90,10 +90,22 @@ happens only after this table exists, matching the same gate.
 
 | # | Package | Group | pypi.org URL | Expected repository (from the PyPI page) | Version / pin | Age, legitimacy signals | Confirmed |
 |---|-------|--------|------------------|-------------------------------------------|--------------|-------------------------------|---------------|
-| 14 | `anitopy` | interface (`[api]` extra) | https://pypi.org/project/anitopy/ | github.com/igorcmoura/anitopy | pins the range `>=2.1,<3`; current release queried live at implementation time is 2.1.1 | Long-standing filename-parsing library, published 2022-07-24 and unchanged since, no post-install hook | Awaiting the owner's confirmation |
-| 15 | `guessit` | interface (`[api]` extra) | https://pypi.org/project/guessit/ | guessit-io.github.io/guessit (GitHub org `guessit-io`) | pins the range `>=4.4,<5`; current release queried live at implementation time is 4.4.0 | Actively released (4.4.0, 2026-07-31), no post-install hook | Awaiting the owner's confirmation |
-| 16 | `langcodes` | interface (`[api]` extra) | https://pypi.org/project/langcodes/ | github.com/rspeer/langcodes | pins the range `>=3.5,<4`; current release queried live at implementation time is 3.5.1 | MIT license, long-standing CLDR wrapper, no post-install hook | Awaiting the owner's confirmation |
-| 17 | `language_data` | interface (`[api]` extra) | https://pypi.org/project/language_data/ | github.com/georgkrause/language_data | pins the range `>=1.4,<2`; current release queried live at implementation time is 1.4.0 | Companion data package to `langcodes`, same maintainer lineage, no post-install hook | Awaiting the owner's confirmation |
+| 14 | `anitopy` | interface (`[api]` extra) | https://pypi.org/project/anitopy/ | github.com/igorcmoura/anitopy | pins the range `>=2.1,<3`; current release queried live at implementation time is 2.1.1 | Long-standing filename-parsing library, published 2022-07-24 and unchanged since, no post-install hook | Yes |
+| 15 | `guessit` | interface (`[api]` extra) | https://pypi.org/project/guessit/ | guessit-io.github.io/guessit (GitHub org `guessit-io`) | pins the range `>=4.4,<5`; current release queried live at implementation time is 4.4.0 | Actively released (4.4.0, 2026-07-31), no post-install hook | Yes |
+| 16 | `langcodes` | interface (`[api]` extra) | https://pypi.org/project/langcodes/ | github.com/rspeer/langcodes | pins the range `>=3.5,<4`; current release queried live at implementation time is 3.5.1 | MIT license, long-standing CLDR wrapper, no post-install hook | Yes |
+| 17 | `language_data` | interface (`[api]` extra) | https://pypi.org/project/language_data/ | github.com/georgkrause/language_data | pins the range `>=1.4,<2`; current release queried live at implementation time is 1.4.0 | Companion data package to `langcodes`, same maintainer lineage, no post-install hook | Yes |
 
 **What to check for these four:** the same three checks as the table above,
 against these four pypi.org links instead.
+
+## Verification date and signature (packages 14-17)
+
+| Field | Value |
+|---|---|
+| Verification date | 2026-09-09 |
+| Signature | Owner confirmed: "packages approved" — all four pypi.org pages opened and checked by hand before the image carrying them was published; no package raised any doubt |
+
+**Verification complete.** The owner personally opened and checked all four
+pypi.org pages for `anitopy`, `guessit`, `langcodes` and `language_data` —
+the gate is closed. The image carrying them was built, pushed and rolled
+after this confirmation, not before.
