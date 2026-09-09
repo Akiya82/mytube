@@ -130,6 +130,12 @@ def _readiness_status_code(row) -> int | None:
         return EDITION_PREPARING_STATUS
     if edition_status == "failed":
         return 404
+    if edition_status == "pending_delete":
+        # Plan 11 (D-178): an edition mid-countdown is gone the moment the
+        # delete route flips it, exactly like a pending_delete episode two
+        # lines above -- the operator's own undo window, not a window a
+        # viewer's still-open address gets to play through.
+        return 410
     return None
 
 

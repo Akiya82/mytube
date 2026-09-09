@@ -112,4 +112,26 @@
       </form>
     {% endif %}
   </div>
+
+  {% if (episode.edition_count or 1) > 1 %}
+    {# Nested edition disclosure (05-UI-SPEC.md Screen D item 5): same
+       <details> mechanism as the series' own episode list, default closed
+       -- the default edition's own address is already on the line above,
+       and is what an operator copies day to day. data-episode-id here
+       reuses this episode's own id (not a new attribute) so
+       static/app.js's existing details[data-episode-id] open-state sync
+       (_syncEpisodeState) covers this disclosure across a poll's row
+       replacement with no change to that function at all. #}
+    <details class="edition-list" data-episode-id="{{ episode.episode_id }}">
+      <summary>
+        {{ chevron_down(cls="episode-list__chevron") }}
+        {{ t("edition.list.summary").format(n=episode.edition_count) }}
+      </summary>
+      <ul class="edition-list__body">
+        {% for edition in episode.editions %}
+          {% include "partials/edition_row.html" %}
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
 </li>

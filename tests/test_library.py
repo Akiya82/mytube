@@ -97,6 +97,12 @@ class _QueriesStub:
     episodes_by_title: dict = field(default_factory=dict)
     episodes_for_library_calls: int = 0
     episodes_for_library_title_ids: list = field(default_factory=list)
+    # Plan 11: editions_for_library's own stub data, keyed by episode_id --
+    # empty by default, so an episode whose own edition_count stays at 1
+    # never triggers this call's own round trip at all.
+    editions_by_episode: dict = field(default_factory=dict)
+    editions_for_library_calls: int = 0
+    editions_for_library_episode_ids: list = field(default_factory=list)
 
 
 @pytest.fixture
@@ -134,6 +140,14 @@ def queries_stub(monkeypatch):
     async def _playlist_rows(conn):
         return stub.playlist_rows
 
+    async def _editions_for_library(conn, episode_ids):
+        stub.editions_for_library_calls += 1
+        stub.editions_for_library_episode_ids = list(episode_ids)
+        rows = []
+        for episode_id in episode_ids:
+            rows.extend(stub.editions_by_episode.get(episode_id, []))
+        return rows
+
     monkeypatch.setattr(queries, "library_rows", _library_rows)
     monkeypatch.setattr(queries, "library_row", _library_row)
     monkeypatch.setattr(queries, "count_preparing_ahead", _count_preparing_ahead)
@@ -142,6 +156,7 @@ def queries_stub(monkeypatch):
     monkeypatch.setattr(queries, "referenced_objects", _referenced_objects)
     monkeypatch.setattr(queries, "playlist_rows", _playlist_rows, raising=False)
     monkeypatch.setattr(queries, "episodes_for_library", _episodes_for_library, raising=False)
+    monkeypatch.setattr(queries, "editions_for_library", _editions_for_library, raising=False)
     return stub
 
 
@@ -288,6 +303,37 @@ def _episode(**over) -> dict:
     }
     episode.update(over)
     return episode
+
+
+def _edition(**over) -> dict:
+    """One raw `editions_for_library` row -- the shape
+    `routes_titles._group_editions_by_episode` reads. `episode_id` is left
+    unset here on purpose, the same convention `_episode()` already uses:
+    a test assigns it to key the fixture into
+    `queries_stub.editions_by_episode`.
+    """
+    edition = {
+        "episode_id": None,
+        "edition_id": uuid.uuid4(),
+        "slug": "dub-ru",
+        "edition_status": "active",
+        "edition_failure_reason": None,
+        "is_default": False,
+        "size_bytes": 500_000_000,
+        "duration_seconds": 1400.0,
+        "width": 1920,
+        "height": 1080,
+        "audio_language": "rus",
+        "audio_title": None,
+        "audio_reencoded": False,
+        "source_codec": None,
+        "subtitle_burned_language": None,
+        "subtitle_burned_title": None,
+        "subtitle_burned_signs_only": None,
+        "stereo_layout": None,
+    }
+    edition.update(over)
+    return edition
 
 
 # --- Task 1: technical detail, address, copy button, header, empty ------
@@ -1953,6 +1999,272 @@ async def test_episode_row_pending_delete_shows_countdown_and_undo_purge(client,
     assert f'action="/library/episode/{ep1["episode_id"]}/purge"' in section
     assert 'data-control="undo"' in section
     assert 'data-control="purge"' in section
+
+
+# --- Plan 11 Task 1: the edition list, the badge, and the pointer that only
+# --- the operator moves -----------------------------------------------------
+
+
+def _edition_section(resp_text: str, edition_id) -> str:
+    """One edition row's own markup, bounded by its own `data-edition-id`
+    and its own closing `</li>` -- safe against the nested `<li>` an
+    episode's own edition-list disclosure now contains, unlike splitting on
+    an episode's `data-episode-id` (which an edition row's own `</li>`
+    would close too early).
+    """
+    return resp_text.split(f'data-edition-id="{edition_id}"')[1].split("</li>")[0]
+
+
+async def test_edition_row_disclosure_absent_for_a_single_edition_episode(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1, edition_count=1),
+        _episode(title_id=title_id, number=2, edition_count=1),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "edition-list" not in resp.text
+    assert queries_stub.editions_for_library_calls == 1
+    assert queries_stub.editions_for_library_episode_ids == []
+
+
+async def test_edition_row_disclosure_renders_closed_with_count_for_two_editions(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep1 = _episode(title_id=title_id, number=1, edition_count=2)
+    ep2 = _episode(title_id=title_id, number=2, edition_count=1)
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", slug="two-ed", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [ep1, ep2]
+    default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
+    other_edition = _edition(episode_id=ep1["episode_id"], is_default=False, slug="dub-ru")
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, other_edition]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert queries_stub.editions_for_library_episode_ids == [ep1["episode_id"]]
+    details_tag = re.search(r'<details class="edition-list"[^>]*>', resp.text).group(0)
+    assert " open" not in details_tag
+    assert "2 editions" in resp.text
+
+
+async def test_edition_row_renders_for_every_edition_including_the_default(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep1 = _episode(title_id=title_id, number=1, edition_count=2)
+    ep2 = _episode(title_id=title_id, number=2, edition_count=1)
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [ep1, ep2]
+    default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
+    other_edition = _edition(episode_id=ep1["episode_id"], is_default=False, slug="dub-ru")
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, other_edition]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert f'data-edition-id="{default_edition["edition_id"]}"' in resp.text
+    assert f'data-edition-id="{other_edition["edition_id"]}"' in resp.text
+
+
+async def test_edition_row_default_has_badge_no_make_default_and_disabled_delete_blocked_reason(
+    client, queries_stub
+):
+    title_id = uuid.uuid4()
+    ep1 = _episode(title_id=title_id, number=1, edition_count=2)
+    ep2 = _episode(title_id=title_id, number=2, edition_count=1)
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [ep1, ep2]
+    default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
+    other_edition = _edition(episode_id=ep1["episode_id"], is_default=False)
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, other_edition]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = _edition_section(resp.text, default_edition["edition_id"])
+    assert "Default" in section
+    assert 'data-control="edition-make-default"' not in section
+    assert "disabled" in section
+    assert "This is the default edition" in section
+
+
+async def test_edition_row_non_default_has_make_default_and_enabled_delete(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep1 = _episode(title_id=title_id, number=1, edition_count=2)
+    ep2 = _episode(title_id=title_id, number=2, edition_count=1)
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [ep1, ep2]
+    default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
+    other_edition = _edition(episode_id=ep1["episode_id"], is_default=False)
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, other_edition]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = _edition_section(resp.text, other_edition["edition_id"])
+    assert f'action="/library/edition/{other_edition["edition_id"]}/make-default"' in section
+    assert f'action="/library/edition/{other_edition["edition_id"]}/delete"' in section
+    assert 'data-control="edition-make-default"' in section
+    assert 'data-control="edition-delete"' in section
+    assert "disabled" not in section
+
+
+async def test_edition_row_signs_only_detail_line_renders_when_resolved(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep1 = _episode(title_id=title_id, number=1, edition_count=2)
+    ep2 = _episode(title_id=title_id, number=2, edition_count=1)
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [ep1, ep2]
+    default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
+    signs_edition = _edition(
+        episode_id=ep1["episode_id"],
+        is_default=False,
+        subtitle_burned_language="ru",
+        subtitle_burned_signs_only=True,
+    )
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, signs_edition]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = _edition_section(resp.text, signs_edition["edition_id"])
+    assert "signs only" in section
+    assert "Subtitles burned: ru, signs only" in section
+
+
+async def test_edition_row_detail_line_unaffected_when_signs_only_unresolved(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep1 = _episode(title_id=title_id, number=1, edition_count=2)
+    ep2 = _episode(title_id=title_id, number=2, edition_count=1)
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [ep1, ep2]
+    default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
+    unresolved_edition = _edition(
+        episode_id=ep1["episode_id"],
+        is_default=False,
+        subtitle_burned_language="ru",
+        subtitle_burned_signs_only=None,
+    )
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, unresolved_edition]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = _edition_section(resp.text, unresolved_edition["edition_id"])
+    assert "signs only" not in section
+    assert "Subtitles burned: ru" in section
+
+
+async def _create_episode_with_two_editions(conn, name: str, slug: str):
+    """A one-episode title whose one episode carries a second, non-default
+    edition -- the shape every edition-action integration test below acts
+    on, mirroring test_deletion.py's own `_create_two_episode_series`.
+    """
+    edition1 = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        conn, name, slug, edition1, f"{edition1}.mp4"
+    )
+    episode_row = await queries.episode_by_number(conn, title_id, 1)
+    episode_id = episode_row["episode_id"]
+    edition2 = uuid.uuid4()
+    await queries.add_edition_to_episode(
+        conn, episode_id, "dub-ru", edition2, f"{edition2}.mp4"
+    )
+    return title_id, episode_id, edition1, edition2
+
+
+@pytest.mark.integration
+async def test_make_default_moves_the_pointer_and_previous_default_keeps_its_own_address(
+    action_client, raw_conn
+):
+    _title_id, episode_id, edition1, edition2 = await _create_episode_with_two_editions(
+        raw_conn, "Make Default", "make-default-slug"
+    )
+
+    resp = await action_client.post(f"/library/edition/{edition2}/make-default")
+
+    assert resp.status_code == 302
+    episode = await queries.episode_for_action(raw_conn, episode_id)
+    assert episode["default_edition_id"] == edition2
+    still_there = await queries.resolve_edition(raw_conn, edition1)
+    assert still_there is not None
+
+
+@pytest.mark.integration
+async def test_deleting_the_default_edition_is_blocked_while_another_exists(
+    action_client, raw_conn
+):
+    _title_id, episode_id, edition1, _edition2 = await _create_episode_with_two_editions(
+        raw_conn, "Blocked Default", "blocked-default-slug"
+    )
+
+    resp = await action_client.post(f"/library/edition/{edition1}/delete")
+
+    assert resp.status_code == 404
+    episode = await queries.episode_for_action(raw_conn, episode_id)
+    assert episode["default_edition_id"] == edition1
+
+
+@pytest.mark.integration
+async def test_deleting_a_non_default_edition_leaves_the_pointer_where_it_was(
+    action_client, raw_conn
+):
+    _title_id, episode_id, edition1, edition2 = await _create_episode_with_two_editions(
+        raw_conn, "Delete Non Default", "delete-non-default-slug"
+    )
+
+    resp = await action_client.post(f"/library/edition/{edition2}/delete")
+
+    assert resp.status_code == 302
+    episode = await queries.episode_for_action(raw_conn, episode_id)
+    assert episode["default_edition_id"] == edition1
+    target = await queries.edition_for_action(raw_conn, edition2)
+    assert target["edition_status"] == "pending_delete"
+
+    # raw_conn commits for real and outlives this test (conftest.py's own
+    # docstring on that fixture) -- a `pending_delete` edition is a status
+    # value that only exists from this migration onward, so leaving one
+    # committed would break a later downgrade-to-base round trip
+    # elsewhere in this same session. Cleaned up the same way an operator
+    # would finish the countdown, not left to rot.
+    await queries.delete_edition(raw_conn, edition2)
+
+
+@pytest.mark.integration
+async def test_undo_on_a_pending_edition_cancels_the_countdown(action_client, raw_conn):
+    _title_id, _episode_id, _edition1, edition2 = await _create_episode_with_two_editions(
+        raw_conn, "Undo Edition", "undo-edition-slug"
+    )
+    await queries.mark_edition_for_delete(raw_conn, edition2, grace_seconds=3600)
+
+    resp = await action_client.post(f"/library/edition/{edition2}/undo")
+
+    assert resp.status_code == 302
+    target = await queries.edition_for_action(raw_conn, edition2)
+    assert target["edition_status"] == "active"
+
+
+@pytest.mark.integration
+async def test_purge_on_a_pending_edition_deletes_the_object_and_the_row(
+    action_client, raw_conn, monkeypatch
+):
+    from orchestrator import reaper as reaper_module
+
+    deleted = []
+    monkeypatch.setattr(reaper_module, "delete_object", lambda key: deleted.append(key))
+
+    _title_id, _episode_id, _edition1, edition2 = await _create_episode_with_two_editions(
+        raw_conn, "Purge Edition", "purge-edition-slug"
+    )
+    await queries.mark_edition_for_delete(raw_conn, edition2, grace_seconds=3600)
+
+    resp = await action_client.post(f"/library/edition/{edition2}/purge")
+
+    assert resp.status_code == 302
+    assert f"{edition2}.mp4" in deleted
+    target = await queries.edition_for_action(raw_conn, edition2)
+    assert target is None
 
 
 # --- Plan 09 Task 3: the poll that does not throw away what the operator did

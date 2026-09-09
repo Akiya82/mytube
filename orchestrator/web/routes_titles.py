@@ -732,13 +732,35 @@ def _group_episodes_by_title(rows, settings) -> dict:
     return by_title
 
 
+def _group_editions_by_episode(rows) -> dict:
+    """`editions_for_library`'s flat rows, turned into one list per episode
+    in the creation order that query already sorted them in -- the nested
+    edition disclosure's own data source (plan 11, D-164). No `derive_job_
+    ui` here: a non-default edition's own in-flight job is the documented
+    gap 05-09's own summary already carries forward (an episode's stage
+    chip is scoped to its *default* edition only), so an edition row never
+    reads a job_stage at all.
+    """
+    by_episode: dict = {}
+    for row in rows:
+        data = dict(row)
+        by_episode.setdefault(data["episode_id"], []).append(data)
+    return by_episode
+
+
 async def _attach_series_episodes(
     conn, settings, rows: list[dict], *, apply_default_open: bool
 ) -> None:
     """Fetch and attach `row["episodes"]` for every series row in `rows`
     (`derive_series_ui`'s own `is_series` flag) in the one batched
     `episodes_for_library` call this screen makes, regardless of how many
-    rows are series and how many episodes any of them has.
+    rows are series and how many episodes any of them has. Also fetches
+    and attaches `episode["editions"]` (plan 11) for every episode whose
+    own `edition_count` is more than one, in one further batched
+    `editions_for_library` call -- an episode with a single edition never
+    triggers that call's own round trip, and a screen with no such episode
+    at all never reaches the database for it (`editions_for_library`'s own
+    empty-list short-circuit).
 
     `apply_default_open` decides whether `row["episode_list_default_open"]`
     is set at all -- true only for the full page's initial render. A poll
@@ -753,6 +775,19 @@ async def _attach_series_episodes(
     series_title_ids = [row["title_id"] for row in rows if row.get("is_series")]
     raw_episodes = await queries.episodes_for_library(conn, series_title_ids)
     episodes_by_title = _group_episodes_by_title(raw_episodes, settings)
+
+    multi_edition_episode_ids = [
+        episode["episode_id"]
+        for episodes in episodes_by_title.values()
+        for episode in episodes
+        if (episode.get("edition_count") or 1) > 1
+    ]
+    raw_editions = await queries.editions_for_library(conn, multi_edition_episode_ids)
+    editions_by_episode = _group_editions_by_episode(raw_editions)
+    for episodes in episodes_by_title.values():
+        for episode in episodes:
+            episode["editions"] = editions_by_episode.get(episode["episode_id"], [])
+
     for row in rows:
         episodes = episodes_by_title.get(row["title_id"], [])
         row["episodes"] = episodes

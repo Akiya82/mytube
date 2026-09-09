@@ -835,6 +835,51 @@ async def episodes_for_library(
     )
 
 
+async def editions_for_library(conn: asyncpg.Connection, episode_ids: list) -> list[asyncpg.Record]:
+    """Every edition of every episode in `episode_ids`, oldest first, each
+    carrying its own technical detail (including the burned-in subtitle
+    columns and the signs-only attribute) and whether it is that episode's
+    current default -- the nested edition disclosure's whole data source
+    (plan 11, D-164), fetched in one round trip regardless of how many
+    episodes are asked for, the same "one query per screen" reasoning
+    `episodes_for_library`'s own docstring states this pair follows.
+    Callers pass only the episode ids `episodes_for_library`'s own
+    `edition_count` column already named as holding more than one edition
+    -- an episode with a single edition never triggers this call's own
+    round trip, and a screen with no such episode at all never reaches the
+    database here, the same empty-list short-circuit `episodes_for_library`
+    already uses.
+    """
+    if not episode_ids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT
+            e.episode_id AS episode_id,
+            e.id AS edition_id,
+            e.slug AS slug,
+            e.status AS edition_status,
+            e.failure_reason AS edition_failure_reason,
+            (e.id = ep.default_edition_id) AS is_default,
+            e.size_bytes AS size_bytes,
+            e.duration_seconds AS duration_seconds,
+            e.width AS width, e.height AS height,
+            e.audio_language AS audio_language, e.audio_title AS audio_title,
+            e.audio_reencoded AS audio_reencoded,
+            e.source_codec AS source_codec,
+            e.subtitle_burned_language AS subtitle_burned_language,
+            e.subtitle_burned_title AS subtitle_burned_title,
+            e.subtitle_burned_signs_only AS subtitle_burned_signs_only,
+            e.stereo_layout AS stereo_layout
+        FROM editions e
+        JOIN episodes ep ON ep.id = e.episode_id
+        WHERE e.episode_id = ANY($1::uuid[])
+        ORDER BY e.episode_id, e.created_at
+        """,
+        episode_ids,
+    )
+
+
 async def cancel_delete(conn: asyncpg.Connection, title_id) -> None:
     """Undo mark_for_delete -- D-62's "Undo" action. Back to active,
     delete_at cleared; GET /v/{slug} starts resolving again immediately.
@@ -2089,17 +2134,118 @@ async def edition_by_slug(
 
 
 async def delete_edition(conn: asyncpg.Connection, edition_id) -> None:
-    """Hard-delete one edition's row immediately -- the only edition-
-    removal shape with no grace window (a non-default edition removed
-    while a sibling edition still exists, D-178): the schema carries no
-    per-edition `delete_at` the way a title or an episode does. The caller
-    must have already removed the objects `edition_by_slug` named for this
-    id from storage, and must never call this for an episode's only or its
-    default edition -- both of those go through `mark_episode_for_delete`
-    instead, at the episode level, on the same countdown a whole episode's
-    removal already uses.
+    """Hard-delete one edition's row immediately, with no tombstone: unlike
+    a title or an episode, nothing keeps a per-edition slug-history-shaped
+    record for this edition's own address to answer 410 through afterwards,
+    so a gone edition simply stops resolving (D-178). The CLI's `remove`
+    calls this directly with no grace window at all -- an operator running
+    a command has already stated their intent with no mouse slip to
+    protect against. The library's own per-edition Delete route (plan 11)
+    calls this too, but only once `mark_edition_for_delete`'s own countdown
+    has actually elapsed (see that function and `due_for_reaping_editions`
+    below) -- the caller must have already removed the objects
+    `edition_by_slug`/`edition_for_action` named for this id from storage,
+    and must never call this for an episode's only or its default edition
+    -- both of those go through `mark_episode_for_delete` instead, at the
+    episode level, on the same countdown a whole episode's removal already
+    uses.
     """
     await conn.execute("DELETE FROM editions WHERE id = $1", edition_id)
+
+
+async def edition_for_action(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
+    """One edition's own status, its object/poster keys, its episode and
+    title ids, whether it is its episode's current default, and how many
+    editions the episode holds in total -- what every edition-scoped action
+    route (`routes_episodes.py`, plan 11) reads fresh on every request,
+    never trusted from the page that opened it (T-05-43): the edition-
+    scoped twin of `episode_for_action`. Make-default refuses unless the
+    edition is `active` and not already the default; delete/undo/purge
+    refuse the same way the episode-level ones already refuse, one level
+    down, plus D-178's own rule that the default itself can never start a
+    delete countdown while a sibling edition exists.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT
+            e.id AS edition_id, e.status AS edition_status,
+            e.object_key AS object_key, e.poster_key AS poster_key,
+            ep.id AS episode_id, t.id AS title_id,
+            (e.id = ep.default_edition_id) AS is_default,
+            (SELECT COUNT(*) FROM editions WHERE episode_id = ep.id) AS edition_count
+        FROM editions e
+        JOIN episodes ep ON ep.id = e.episode_id
+        JOIN seasons s ON s.id = ep.season_id
+        JOIN titles t ON t.id = s.title_id
+        WHERE e.id = $1
+        """,
+        edition_id,
+    )
+
+
+async def mark_edition_for_delete(
+    conn: asyncpg.Connection, edition_id, grace_seconds: int
+) -> None:
+    """Flip one edition to `pending_delete` with `delete_at = now() +
+    grace_seconds` -- the edition-scoped twin of `mark_episode_for_delete`
+    (plan 11, D-178). The edition's own address (whichever segment names
+    it) starts answering 410 immediately (`orchestrator.resolve
+    ._readiness_status_code`'s own `pending_delete` branch); the grace
+    window only delays the reaper's physical `delete_object`/
+    `delete_edition`, exactly as it does for a whole episode.
+    """
+    await conn.execute(
+        """
+        UPDATE editions
+        SET status = 'pending_delete', delete_at = now() + make_interval(secs => $2)
+        WHERE id = $1
+        """,
+        edition_id,
+        grace_seconds,
+    )
+
+
+async def cancel_delete_edition(conn: asyncpg.Connection, edition_id) -> None:
+    """Undo `mark_edition_for_delete` -- the edition-scoped twin of
+    `cancel_delete_episode`. Back to `active` (the only status a delete
+    route ever starts a countdown from, see `edition_for_action`'s own
+    callers), `delete_at` cleared; the edition's own address starts
+    resolving again immediately.
+    """
+    await conn.execute(
+        "UPDATE editions SET status = 'active', delete_at = NULL WHERE id = $1",
+        edition_id,
+    )
+
+
+async def due_for_reaping_editions(conn: asyncpg.Connection) -> list[asyncpg.Record]:
+    """Editions whose `delete_at` has passed -- identifiers only, the same
+    shape `due_for_reaping_episodes` gives for the identical reason: one
+    edition holds at most one object and one poster key, but reading them
+    happens in `edition_object_keys` below, at the point the reaper is
+    actually about to delete them, not here.
+    """
+    return await conn.fetch(
+        "SELECT id AS edition_id FROM editions WHERE status = 'pending_delete' AND delete_at <= now()"
+    )
+
+
+async def edition_object_keys(conn: asyncpg.Connection, edition_id) -> list[str]:
+    """One edition's own object key and poster key (when set) -- what the
+    reaper must remove from storage before `delete_edition`, the single-
+    edition twin of `episode_object_keys`. Read-only, deletes nothing.
+    """
+    row = await conn.fetchrow(
+        "SELECT object_key, poster_key FROM editions WHERE id = $1", edition_id
+    )
+    if row is None:
+        return []
+    keys: list[str] = []
+    if row["object_key"]:
+        keys.append(row["object_key"])
+    if row["poster_key"]:
+        keys.append(row["poster_key"])
+    return keys
 
 
 # --- The folder confirmation screen's save (0006, plan 08) -----------------

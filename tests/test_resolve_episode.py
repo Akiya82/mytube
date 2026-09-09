@@ -117,9 +117,13 @@ def _slug(tag: str) -> str:
 
 async def test_migration_upgrade_succeeds_and_reports_the_new_revision(migrated_db_url):
     _run_alembic(migrated_db_url, "downgrade", "0005")
-    _run_alembic(migrated_db_url, "upgrade", "head")
+    _run_alembic(migrated_db_url, "upgrade", "0006")
     current = _run_alembic(migrated_db_url, "current")
     assert "0006" in current
+    # Restore head -- every test module sharing this session-scoped
+    # Postgres after this one expects the full schema in place (plan 11
+    # added 0007 on top of this migration).
+    _run_alembic(migrated_db_url, "upgrade", "head")
 
 
 async def test_migration_backfill_writes_one_current_history_row_for_a_pre_existing_episode(

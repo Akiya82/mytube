@@ -687,6 +687,83 @@ button.site-nav__link {
   gap: var(--space-sm);
 }
 
+/* Nested edition disclosure (05-UI-SPEC.md Screen D item 5): the same
+   .episode-list mechanism one level down, reused rather than duplicated --
+   no new custom property, no new colour, no new spacing value. */
+.edition-list {
+  margin-top: var(--space-xs);
+}
+
+.edition-list > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  cursor: pointer;
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+}
+
+.edition-list[open] > summary .episode-list__chevron {
+  transform: rotate(180deg);
+}
+
+.edition-list__body {
+  list-style: none;
+  margin: var(--space-xs) 0 0;
+  padding: 0;
+}
+
+/* Edition row (Component Inventory): the .picker-row density (40px), the
+   default included -- badge instead of Make default, disabled Delete with
+   its hint (05-UI-SPEC.md States -> Edition default state). */
+.edition-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-height: 40px;
+  padding: var(--space-xs);
+  border-bottom: 1px solid var(--surface-secondary-border);
+}
+
+.edition-row__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.edition-row__slug {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.edition-row__address {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.edition-row__detail,
+.edition-row__hint {
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+}
+
+.edition-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* "Default" badge (Component Inventory): neutral tint, no new colour --
+   the same status-neutral pair the 3D badge above already reuses. */
+.chip--neutral {
+  background: var(--status-neutral-bg);
+  color: var(--status-neutral-text);
+}
+
 .chip--preparing {
   background: var(--status-preparing-bg);
   color: var(--status-preparing-text);

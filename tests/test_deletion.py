@@ -270,6 +270,36 @@ async def test_episode_purge_deletes_immediately_leaving_sibling_untouched(
     assert sibling["episode_status"] == "active"
 
 
+async def test_deleting_an_episodes_last_edition_takes_the_episode_with_it(
+    raw_conn, deleted_objects
+):
+    """D-178/plan 11: an episode with exactly one edition never renders the
+    nested edition disclosure at all (05-UI-SPEC.md Screen D item 5) --
+    "Delete episode" is the only control that can ever remove that one
+    edition, and it takes the whole episode with it on the same countdown,
+    after which every address of that episode answers as gone (here: the
+    tombstone branch, since attach_episode_to_title's own default status
+    is "active").
+    """
+    _title_id, ep1, ep2, edition2 = await _create_two_episode_series(
+        raw_conn, "Last Edition", "last-edition-slug"
+    )
+
+    resp = await routes_episodes.delete_episode_route(str(ep2), _FakeRequest(raw_conn))
+    assert resp.status_code == 302
+    mid = await queries.episode_for_action(raw_conn, ep2)
+    assert mid["episode_status"] == "pending_delete"
+
+    await queries.mark_episode_for_delete(raw_conn, ep2, grace_seconds=0)
+    await reaper.reap_once(_SinglePoolLike(raw_conn))
+
+    assert f"{edition2}.mp4" in deleted_objects
+    after = await queries.episode_for_action(raw_conn, ep2)
+    assert after["episode_status"] == "deleted"
+    sibling = await queries.episode_for_action(raw_conn, ep1)
+    assert sibling["episode_status"] == "active"
+
+
 async def test_episode_cancel_drops_a_never_active_episode_leaving_sibling_untouched(
     raw_conn, episode_route_deleted_objects
 ):

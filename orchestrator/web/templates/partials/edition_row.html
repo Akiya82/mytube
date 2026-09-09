@@ -1,0 +1,81 @@
+{#
+  One edition inside an episode's nested <details class="edition-list">
+  (05-UI-SPEC.md Screen D item 6) -- included from partials/episode_row.html
+  inside a `{% for edition in episode.editions %}` loop, so `row` (the
+  title), `episode` (the one this edition belongs to) and `edition` (this
+  one entry) are all in scope, the same context-sharing {% include %}
+  episode_row.html itself already uses one level up.
+
+  Renders for *every* edition of the episode, the default included (D-178):
+  its own slug, its own address (the bare `/v/{slug}/{number}` for the
+  default, `/v/{slug}/{number}/{edition-slug}` for any other), its own
+  technical detail line, and its controls. The default's row carries the
+  "Default" badge in the neutral tint, no make-default control, and a
+  disabled Delete with `edition.delete.blocked_default` beside it -- the
+  one place that sentence can live, never a bare greyed control. Every
+  other *ready* row carries "Make default" and an enabled outline Delete;
+  a non-default edition still preparing or already failed carries neither
+  (a known, documented gap: a second edition's own in-flight job has no
+  controls of its own yet, the same scope 05-09's own summary already
+  carries forward for its stage chip).
+
+  `edition` carries the raw columns `queries.editions_for_library` fetches.
+#}
+{% set edition_address = public_base_url ~ "/v/" ~ row.slug ~ "/" ~ episode.number ~ (("/" ~ edition.slug) if (not edition.is_default and edition.slug) else "") %}
+<li class="edition-row" data-edition-id="{{ edition.edition_id }}">
+  <div class="edition-row__head">
+    <span class="edition-row__slug">{{ edition.slug or "" }}</span>
+    <span class="edition-row__address">{{ edition_address }}</span>
+    {% if edition.is_default %}
+      <span class="chip chip--neutral">{{ t("edition.badge.default") }}</span>
+    {% endif %}
+    {% if not edition.edition_status or edition.edition_status == "active" %}
+      {% if edition.size_bytes is not none and edition.duration_seconds is not none %}
+        <span class="edition-row__detail">
+          {{ edition.size_bytes | filesizeformat_binary }}
+          &middot; {{ edition.duration_seconds | duration_hms }}
+          {% if edition.audio_language %}
+            &middot; {{ edition.audio_language }}{% if edition.audio_title %} - {{ edition.audio_title }}{% endif %}
+          {% endif %}
+          {% if edition.subtitle_burned_signs_only %}
+            &middot; {{ t("library.detail.subtitles_burned_signs").format(language=edition.subtitle_burned_language or t("add.track.language_unknown")) }}
+          {% elif edition.subtitle_burned_language or edition.subtitle_burned_title %}
+            &middot; {{ t("library.detail.subtitles_burned").format(language=edition.subtitle_burned_language or t("add.track.language_unknown"), title=edition.subtitle_burned_title or "") }}
+          {% endif %}
+        </span>
+      {% endif %}
+    {% elif edition.edition_status == "pending_delete" %}
+      <span class="chip chip--deleting" data-countdown-template="{{ t('library.delete.countdown') }}">
+        {{ t("library.delete.countdown").format(mm="--", ss="--") }}
+      </span>
+    {% elif edition.edition_status == "failed" %}
+      <span class="chip chip--refused">{{ t("failed.reason_prefix").format(reason=t(edition.edition_failure_reason or "failed.reason.unknown")) }}</span>
+    {% endif %}
+  </div>
+
+  <div class="edition-row__actions">
+    {% if edition.is_default %}
+      <button
+        type="button"
+        class="btn btn--destructive-outline"
+        disabled
+        aria-disabled="true"
+      >{{ t("library.cta.delete") }}</button>
+      <span class="edition-row__hint">{{ t("edition.delete.blocked_default") }}</span>
+    {% elif edition.edition_status == "pending_delete" %}
+      <form method="post" action="/library/edition/{{ edition.edition_id }}/undo" data-confirm="{{ t('library.delete.confirm_undo') }}">
+        <button type="submit" class="btn btn--secondary" data-control="edition-undo">{{ t("library.cta.undo") }}</button>
+      </form>
+      <form method="post" action="/library/edition/{{ edition.edition_id }}/purge" data-confirm="{{ t('library.delete.confirm_purge') }}">
+        <button type="submit" class="btn btn--destructive" data-control="edition-purge">{{ t("library.cta.purge_now") }}</button>
+      </form>
+    {% elif edition.edition_status == "active" %}
+      <form method="post" action="/library/edition/{{ edition.edition_id }}/make-default">
+        <button type="submit" class="btn btn--ghost" data-control="edition-make-default">{{ t("edition.cta.make_default") }}</button>
+      </form>
+      <form method="post" action="/library/edition/{{ edition.edition_id }}/delete">
+        <button type="submit" class="btn btn--destructive-outline" data-control="edition-delete">{{ t("library.cta.delete") }}</button>
+      </form>
+    {% endif %}
+  </div>
+</li>

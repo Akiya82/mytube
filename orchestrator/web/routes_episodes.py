@@ -261,6 +261,108 @@ async def dismiss_episode_route(episode_id: str, request: Request):
     return RedirectResponse("/library", status_code=302)
 
 
+# --- Plan 11: an edition can be made default, cancelled, and deleted on its
+# --- own, one level down from the episode routes above ---------------------
+
+
+@router.post("/library/edition/{edition_id}/make-default")
+async def make_default_edition_route(edition_id: str, request: Request):
+    """Move an episode's default-edition pointer to `edition_id` (D-178) --
+    the operator's own explicit "Make default" click, the only other
+    caller of `queries.set_default_edition` besides a job's own terminal
+    write with `make_default_when_ready` set. Refused for anything but a
+    ready (`active`), non-default edition: the pointer must never move to
+    an edition still converting or one that has already failed, and a
+    click on the edition that is already default is meaningless.
+    """
+    parsed = _parse_uuid(edition_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.edition_for_action(conn, parsed)
+        if row is None or row["edition_status"] != "active" or row["is_default"]:
+            return Response(status_code=404)
+        await queries.set_default_edition(conn, parsed)
+
+    return RedirectResponse("/library", status_code=302)
+
+
+@router.post("/library/edition/{edition_id}/delete")
+async def delete_edition_route(edition_id: str, request: Request):
+    """Start the grace window on one non-default edition alone (D-178) --
+    the edition-scoped twin of `delete_episode_route`, one level down.
+    Refused for the default edition (the control is disabled with its
+    reason in the template, but the server refuses a crafted POST too,
+    T-05-43) and for anything not currently `active`: a still-converting
+    or already-failed non-default edition has no live address this
+    countdown protects.
+    """
+    parsed = _parse_uuid(edition_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    settings = get_settings()
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.edition_for_action(conn, parsed)
+        if row is None or row["edition_status"] != "active" or row["is_default"]:
+            return Response(status_code=404)
+        await queries.mark_edition_for_delete(conn, parsed, settings.delete_grace_seconds)
+
+    return RedirectResponse("/library", status_code=302)
+
+
+@router.post("/library/edition/{edition_id}/undo")
+async def undo_edition_route(edition_id: str, request: Request):
+    """D-62's cancel, scoped to one edition -- only an edition currently
+    pending deletion may be undone.
+    """
+    parsed = _parse_uuid(edition_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.edition_for_action(conn, parsed)
+        if row is None:
+            return Response(status_code=404)
+        if row["edition_status"] != "pending_delete":
+            return Response(status_code=400)
+        await queries.cancel_delete_edition(conn, parsed)
+
+    return RedirectResponse("/library", status_code=302)
+
+
+@router.post("/library/edition/{edition_id}/purge")
+async def purge_edition_route(edition_id: str, request: Request):
+    """D-62's skip-the-wait, scoped to one edition: reuses
+    `mark_edition_for_delete` with a zero-second window rather than a
+    second deletion path, then awaits one `reap_once` cycle inline -- the
+    same sweep the title- and episode-level purges already await, extended
+    by this plan to also collect editions -- so the object is actually
+    gone before this response returns. Only an edition already pending
+    deletion may be purged.
+    """
+    parsed = _parse_uuid(edition_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await queries.edition_for_action(conn, parsed)
+        if row is None:
+            return Response(status_code=404)
+        if row["edition_status"] != "pending_delete":
+            return Response(status_code=400)
+        await queries.mark_edition_for_delete(conn, parsed, 0)
+
+    await reap_once(pool)
+
+    return RedirectResponse("/library", status_code=302)
+
+
 # --- Task 2: a check page for every episode and every edition --------------
 
 

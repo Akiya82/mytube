@@ -1,5 +1,6 @@
 """Background reaper for delayed title deletion (D-13), delayed per-episode
-deletion (plan 10) and expired session cleanup (D-80).
+deletion (plan 10), delayed per-edition deletion (plan 11) and expired
+session cleanup (D-80).
 
 Runs inside the same FastAPI process as everything else -- a title crossing
 its `delete_at` needs no dedicated compose service, the orchestrator is
@@ -44,13 +45,13 @@ POLL_INTERVAL_SECONDS = 30
 
 
 async def reap_once(pool: asyncpg.Pool) -> None:
-    """Sweep both a title's own countdown and every episode's (plan 10) in
-    one pass -- `purge_route` (both the title-level and the per-episode
-    one, orchestrator.web.routes_titles/routes_episodes) awaits this
-    inline so the object is actually gone before the response returns,
-    and reusing one function for both grace windows means a purge can
-    never race a title's sweep against a separately-scheduled episode
-    sweep.
+    """Sweep a title's own countdown, every episode's (plan 10) and every
+    edition's (plan 11) in one pass -- `purge_route` (the title-level, the
+    per-episode and the per-edition one, orchestrator.web.routes_titles/
+    routes_episodes) awaits this inline so the object is actually gone
+    before the response returns, and reusing one function for all three
+    grace windows means a purge can never race one sweep against a
+    separately-scheduled one.
     """
     async with pool.acquire() as conn:
         due = await queries.due_for_reaping(conn)
@@ -111,6 +112,32 @@ async def reap_once(pool: asyncpg.Pool) -> None:
                 # bucket must never be recorded as reaped.
                 continue
             await queries.finish_delete_episode(conn, episode_id)
+
+        # A single edition's own countdown (plan 11, D-178), collected the
+        # same cycle rather than a third background loop -- the identical
+        # per-object exception isolation and finish-only-on-success rule
+        # the title and episode sweeps above already establish. Unlike an
+        # episode, a reaped edition is hard-deleted outright
+        # (`queries.delete_edition`) rather than tombstoned: nothing keeps
+        # a per-edition slug-history-shaped record for its address to
+        # answer 410 through afterwards, so there is nothing to preserve.
+        for row in await queries.due_for_reaping_editions(conn):
+            edition_id = row["edition_id"]
+            keys = await queries.edition_object_keys(conn, edition_id)
+            failed = False
+            for object_key in keys:
+                try:
+                    await asyncio.to_thread(delete_object, object_key)
+                except Exception:
+                    failed = True
+                    logger.exception(
+                        "reaper: failed to delete object %s for edition %s",
+                        object_key,
+                        edition_id,
+                    )
+            if failed:
+                continue
+            await queries.delete_edition(conn, edition_id)
 
 
 async def reap_playlists_once(pool: asyncpg.Pool) -> None:
