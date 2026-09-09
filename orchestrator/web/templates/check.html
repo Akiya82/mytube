@@ -2,7 +2,22 @@
 
 {% block title %}{{ title_name }} - MyTube{% endblock %}
 
-{% block heading %}{{ title_name }}{% endblock %}
+{#
+  `heading_kind` (plan 10, D-158) is set only by the two per-episode/
+  edition routes in routes_episodes.py -- routes_titles.check_page_route
+  never passes it, so a film's bare check page falls through to the
+  original, unchanged {{ title_name }} heading via Jinja's own
+  undefined-is-falsy behaviour.
+#}
+{% block heading %}
+  {%- if heading_kind == "edition" -%}
+    {{ t("check.heading.edition").format(title=title_name, number=episode_number, edition=edition_slug) }}
+  {%- elif heading_kind == "episode" -%}
+    {{ t("check.heading.episode").format(title=title_name, number=episode_number) }}
+  {%- else -%}
+    {{ title_name }}
+  {%- endif -%}
+{% endblock %}
 
 {% block content %}
 <p class="check-page__intro">{{ t("check.body") }}</p>
@@ -21,10 +36,34 @@
 {% endif %}
 
 <p class="check-page__address">{{ address }}</p>
-<button
-  type="button"
-  class="btn btn--ghost"
-  data-copy-text="{{ address }}"
-  data-copy-done-label="{{ t('library.cta.copy_link_done') }}"
->{{ t("check.cta.copy_link") }}</button>
+<div class="add-form__actions">
+  <button
+    type="button"
+    class="btn btn--ghost"
+    data-copy-text="{{ address }}"
+    data-copy-done-label="{{ t('library.cta.copy_link_done') }}"
+  >{{ t("check.cta.copy_link") }}</button>
+  {#
+    Screen E (D-158): the navigation walks every episode of the title in
+    number order, ready or not -- no ready range is ever computed, so a
+    neighbour that is not ready is still a real link, rendering its own
+    check.inactive state once visited. Rendered only for a multi-episode
+    title (show_episode_nav, computed in routes_episodes.py from the
+    title's own episode_count) -- a film gets neither link.
+  #}
+  {% if show_episode_nav %}
+    {% if previous_href %}
+      <a class="btn btn--ghost" href="{{ previous_href }}">{{ t("check.cta.previous_episode") }}</a>
+    {% else %}
+      <span class="btn btn--ghost" aria-disabled="true">{{ t("check.cta.previous_episode") }}</span>
+      <span class="audio-note">{{ t(previous_reason_key) }}</span>
+    {% endif %}
+    {% if next_href %}
+      <a class="btn btn--ghost" href="{{ next_href }}">{{ t("check.cta.next_episode") }}</a>
+    {% else %}
+      <span class="btn btn--ghost" aria-disabled="true">{{ t("check.cta.next_episode") }}</span>
+      <span class="audio-note">{{ t(next_reason_key) }}</span>
+    {% endif %}
+  {% endif %}
+</div>
 {% endblock %}

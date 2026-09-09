@@ -1247,8 +1247,10 @@ async def resolve_episode_slug(
     slug resolves to nothing" the same way an unknown number does. When
     `edition_slug` is omitted, the episode's own default_edition_id is
     used. Returns the title's status, the episode's id and status, and the
-    resolved edition's id and status, or None when the slug or the number
-    does not resolve to anything at all.
+    resolved edition's id, status and stereo layout (plan 10's check page
+    needs the exact edition's own 3D hint, not the title's first episode's
+    -- see routes_episodes.py), or None when the slug or the number does
+    not resolve to anything at all.
     """
     return await conn.fetchrow(
         """
@@ -1267,7 +1269,9 @@ async def resolve_episode_slug(
             CASE WHEN $3::text IS NOT NULL THEN chosen.id ELSE ep.default_edition_id END
                 AS edition_id,
             CASE WHEN $3::text IS NOT NULL THEN chosen.status ELSE def_edition.status END
-                AS edition_status
+                AS edition_status,
+            CASE WHEN $3::text IS NOT NULL THEN chosen.stereo_layout ELSE def_edition.stereo_layout END
+                AS stereo_layout
         FROM winning_slug ws
         JOIN titles t ON t.id = ws.title_id
         JOIN LATERAL (
@@ -1304,8 +1308,10 @@ async def resolve_title_edition_slug(
     either statement runs, and a slug that looked like a number would make
     that decision ambiguous.
 
-    Returns the same column shape resolve_episode_slug does, or None when
-    the slug or the edition slug does not resolve.
+    Returns the same column shape resolve_episode_slug does, plus that
+    lowest episode's own current `number` (plan 10's check page heading
+    names it even for a film, D-158), or None when the slug or the edition
+    slug does not resolve.
     """
     return await conn.fetchrow(
         """
@@ -1314,15 +1320,18 @@ async def resolve_title_edition_slug(
             t.status AS status,
             lowest.id AS episode_id,
             lowest.status AS episode_status,
+            lowest.number AS number,
             e.id AS edition_id,
-            e.status AS edition_status
+            e.status AS edition_status,
+            e.stereo_layout AS stereo_layout
         FROM slug_history sh
         JOIN titles t ON t.id = sh.title_id
         JOIN LATERAL (
             -- "lowest episode" tiebreak reads episode_number_history, not
             -- the legacy episodes.number column -- see resolve_slug's own
-            -- docstring (plan 10 fix).
-            SELECT ep.id, ep.status
+            -- docstring (plan 10 fix). Exposes its own current number
+            -- directly, so the outer query needs no second join for it.
+            SELECT ep.id, ep.status, enh0.number AS number
             FROM episodes ep
             JOIN seasons s ON s.id = ep.season_id
             LEFT JOIN episode_number_history enh0
@@ -1337,6 +1346,57 @@ async def resolve_title_edition_slug(
         LIMIT 1
         """,
         slug,
+        edition_slug,
+    )
+
+
+async def episode_neighbours(
+    conn: asyncpg.Connection, title_id, number: int, edition_slug: str | None = None
+) -> asyncpg.Record | None:
+    """The previous and next episode of `title_id` in number order around
+    `number` -- the check page's own navigation (D-158), one query rather
+    than a full listing filtered in the route or two separate reads.
+
+    Reads `episode_number_history`'s own *current* claims (`is_current`),
+    the exact set `taken_episode_numbers` already reads -- a number a
+    sibling used to hold but no longer does is not a neighbour to walk to.
+    `previous_has_edition_slug`/`next_has_edition_slug` answer whether that
+    neighbour carries an edition of its own matching `edition_slug` (`None`
+    when the current page is not edition-specific, which makes both
+    columns simply false) -- the caller's own fallback rule (D-158: keep
+    the same edition slug when the neighbour has it, otherwise fall back
+    to that neighbour's default) reads these two booleans rather than
+    running a second query per direction.
+    """
+    return await conn.fetchrow(
+        """
+        WITH numbers AS (
+            SELECT DISTINCT number FROM episode_number_history
+            WHERE title_id = $1 AND is_current
+        ),
+        prev AS (SELECT MAX(number) AS number FROM numbers WHERE number < $2),
+        next AS (SELECT MIN(number) AS number FROM numbers WHERE number > $2)
+        SELECT
+            prev.number AS previous_number,
+            next.number AS next_number,
+            EXISTS (
+                SELECT 1 FROM editions e
+                JOIN episodes ep ON ep.id = e.episode_id
+                JOIN episode_number_history enh
+                    ON enh.episode_id = ep.id AND enh.is_current
+                WHERE enh.title_id = $1 AND enh.number = prev.number AND e.slug = $3
+            ) AS previous_has_edition_slug,
+            EXISTS (
+                SELECT 1 FROM editions e
+                JOIN episodes ep ON ep.id = e.episode_id
+                JOIN episode_number_history enh
+                    ON enh.episode_id = ep.id AND enh.is_current
+                WHERE enh.title_id = $1 AND enh.number = next.number AND e.slug = $3
+            ) AS next_has_edition_slug
+        FROM prev, next
+        """,
+        title_id,
+        number,
         edition_slug,
     )
 

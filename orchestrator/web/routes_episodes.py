@@ -1,4 +1,5 @@
-"""Per-episode actions (plan 10, D-164).
+"""Per-episode actions and per-episode/edition check pages (plan 10,
+D-158, D-164).
 
 A twelve-episode season is twelve things that can go wrong independently
 -- until this module the only controls that exist are cancel/retry/
@@ -13,9 +14,12 @@ twins plan 02 already wrote, and `reaper.reap_once` (extended by this
 plan) is the one sweep that collects both a title's own countdown and
 every episode's.
 
-A second plan-10 task adds the episode/edition check pages to this same
-router -- see that task's own commit for `GET /check/{slug}/{segment}`
-and `GET /check/{slug}/{number}/{edition_slug}`.
+The two check routes are the other half: an episode or an edition's own
+verification page, reached one path segment deeper than the public
+address that plays it, and read through the exact same address grammar
+(`orchestrator.slugs.parse_public_address`) so a check address and a
+playing address can never disagree about what a segment means. Both stay
+behind the session gate -- the check page has never been public.
 """
 import asyncio
 import uuid
@@ -26,7 +30,10 @@ from fastapi.responses import RedirectResponse, Response
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.reaper import reap_once
+from orchestrator.resolve import _readiness_status_code
+from orchestrator.slugs import AddressRefused, parse_public_address
 from orchestrator.storage import delete_object
+from orchestrator.web.templates import render
 
 router = APIRouter()
 
@@ -252,3 +259,161 @@ async def dismiss_episode_route(episode_id: str, request: Request):
         await queries.sync_title_status(conn, row["title_id"])
 
     return RedirectResponse("/library", status_code=302)
+
+
+# --- Task 2: a check page for every episode and every edition --------------
+
+
+def _layout_hint_key(stereo_layout: str | None) -> str | None:
+    """The stereo-mode sentence's own catalog key (04-UI-SPEC.md Screen 4
+    addendum), read straight off the resolved edition rather than
+    re-derived from the file -- the identical rule
+    routes_titles.check_page_route already applies to a title's default
+    edition, applied here to whichever edition this exact address names.
+    """
+    if stereo_layout and stereo_layout.startswith("sbs"):
+        return "check.layout_hint.sbs"
+    if stereo_layout and stereo_layout.startswith("ou"):
+        return "check.layout_hint.ou"
+    return None
+
+
+def _episode_check_href(slug: str, number: int, edition_slug: str | None) -> str:
+    if edition_slug is not None:
+        return f"/check/{slug}/{number}/{edition_slug}"
+    return f"/check/{slug}/{number}"
+
+
+async def _render_episode_check(
+    request: Request, conn, *, slug: str, number: int, edition_slug: str | None, resolved
+) -> Response:
+    """Shared body of both routes below -- an episode's own check page, or
+    an edition's, reached one path segment apart. Mirrors
+    routes_titles.check_page_route's own shape (D-65: the video points at
+    the public address, never a direct storage URL) one level down, and
+    reuses that exact template rather than a second one.
+
+    The navigation walks every episode of the title in number order,
+    ready or not (D-158): no ready range is computed anywhere, so the
+    links can never skip an episode the operator wanted to look at. It
+    renders only when the title has more than one episode -- a film's
+    check page (bare, or its own edition address) never gets it.
+    """
+    settings = get_settings()
+    title_row = await queries.episode_with_title(conn, resolved["episode_id"])
+    title_name = title_row["title_name"] if title_row is not None else slug
+    library = await queries.library_row(conn, resolved["title_id"])
+    episode_count = library["episode_count"] if library is not None else 1
+
+    address = f"{settings.public_base_url}/v/{slug}/{number}"
+    if edition_slug is not None:
+        address += f"/{edition_slug}"
+
+    show_episode_nav = bool(episode_count and episode_count > 1)
+    previous_href = next_href = None
+    previous_reason_key = next_reason_key = None
+    if show_episode_nav:
+        neighbours = await queries.episode_neighbours(
+            conn, resolved["title_id"], number, edition_slug
+        )
+        if neighbours["previous_number"] is not None:
+            keep_edition = edition_slug if neighbours["previous_has_edition_slug"] else None
+            previous_href = _episode_check_href(slug, neighbours["previous_number"], keep_edition)
+        else:
+            previous_reason_key = "check.nav.first"
+        if neighbours["next_number"] is not None:
+            keep_edition = edition_slug if neighbours["next_has_edition_slug"] else None
+            next_href = _episode_check_href(slug, neighbours["next_number"], keep_edition)
+        else:
+            next_reason_key = "check.nav.last"
+
+    return render(
+        request,
+        "check.html",
+        title_name=title_name,
+        heading_kind="edition" if edition_slug is not None else "episode",
+        episode_number=number,
+        edition_slug=edition_slug,
+        address=address,
+        is_active=_readiness_status_code(resolved) is None,
+        layout_hint_key=_layout_hint_key(resolved.get("stereo_layout")),
+        show_episode_nav=show_episode_nav,
+        previous_href=previous_href,
+        next_href=next_href,
+        previous_reason_key=previous_reason_key,
+        next_reason_key=next_reason_key,
+    )
+
+
+@router.get("/check/{slug}/{segment}")
+async def check_episode_route(slug: str, segment: str, request: Request):
+    """A numbered episode's check page (.../check/{slug}/{number}), or a
+    film's own alternative edition's (.../check/{slug}/{edition_slug}) --
+    decided by `parse_public_address` from `segment`'s own shape, the
+    identical grammar `orchestrator.resolve`'s public route reads (D-156,
+    D-158), so a check address and a playing address can never disagree
+    about what a segment means. Stays behind the session gate: the check
+    page is the operator's own verification step and has never been
+    public.
+    """
+    try:
+        address = parse_public_address(f"{slug}/{segment}")
+    except AddressRefused:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        if address.number is not None:
+            resolved = await queries.resolve_episode_slug(conn, address.slug, address.number)
+            number = address.number
+            edition_slug = None
+        else:
+            resolved = await queries.resolve_title_edition_slug(
+                conn, address.slug, address.edition_slug
+            )
+            edition_slug = address.edition_slug
+            number = resolved["number"] if resolved is not None else None
+
+        if resolved is None:
+            return Response(status_code=404)
+
+        return await _render_episode_check(
+            request,
+            conn,
+            slug=address.slug,
+            number=number,
+            edition_slug=edition_slug,
+            resolved=resolved,
+        )
+
+
+@router.get("/check/{slug}/{number}/{edition_slug}")
+async def check_episode_edition_route(
+    slug: str, number: str, edition_slug: str, request: Request
+):
+    """An episode's own alternative edition's check page (D-158) -- the
+    three-segment address a series episode gets once it, too, carries more
+    than one edition. Read through `parse_public_address` exactly as the
+    two-segment route above is.
+    """
+    try:
+        address = parse_public_address(f"{slug}/{number}/{edition_slug}")
+    except AddressRefused:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        resolved = await queries.resolve_episode_slug(
+            conn, address.slug, address.number, edition_slug=address.edition_slug
+        )
+        if resolved is None:
+            return Response(status_code=404)
+
+        return await _render_episode_check(
+            request,
+            conn,
+            slug=address.slug,
+            number=address.number,
+            edition_slug=address.edition_slug,
+            resolved=resolved,
+        )
