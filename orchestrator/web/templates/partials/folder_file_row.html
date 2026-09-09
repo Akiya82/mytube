@@ -1,0 +1,95 @@
+{#- One file's row on the folder confirmation screen's five-column grid
+   (05-UI-SPEC.md Component Inventory): include checkbox, narrow number
+   field, filename-and-meta, the already-added chip slot, the row's own
+   preview control. Everything that belongs to the file but is not its
+   name wraps under it inside the third column.
+
+   `data-preview-path` sits on this row's own outer element (an ancestor
+   of the Preview button below), which is exactly what static/app.js's
+   delegated preview handler reads through `closest()` before falling
+   back to the shared panel's own attribute -- see that file's own
+   comment on `_previewPathFor`. -#}
+<div
+  class="folder-file-row{% if file.highlighted %} folder-file-row--highlighted{% endif %}"
+  data-preview-path="{{ file.rel_path }}"
+>
+  <input
+    type="checkbox"
+    name="include_{{ index }}"
+    value="1"
+    aria-label="{{ t('folder.file.number') }}"
+    {% if file.checked %}checked{% endif %}
+  >
+  <input
+    class="form-field__input form-field__input--narrow"
+    type="text"
+    inputmode="numeric"
+    name="episode_number_{{ index }}"
+    value="{{ file.number if file.number is not none else '' }}"
+  >
+  <div class="folder-file-row__meta">
+    <span class="folder-file-row__name">{{ file.name }}</span>
+    <p class="audio-note">{{ t("folder.file.raw_filename").format(name=file.name) }}</p>
+
+    {% if file.number_missing %}
+      <p class="audio-note">{{ t("folder.file.number_missing") }}</p>
+    {% endif %}
+    {% if file.number_duplicate %}
+      <p class="audio-note">{{ t("folder.file.number_duplicate").format(n=file.number) }}</p>
+    {% endif %}
+    {% if file.number_taken %}
+      <p class="audio-note">{{ t("library.renumber.taken").format(n=file.number) }}</p>
+    {% endif %}
+
+    {% if file.moved %}
+      <p class="audio-note">{{ t("folder.file.already_added").format(slug=file.already_added.slug) }}</p>
+      <label class="radio-group__option">
+        <input type="checkbox" name="move_{{ index }}" value="1" checked>
+        <span>{{ t("folder.file.move_into_series") }}</span>
+      </label>
+      <p class="audio-note">{{ t("library.rename.old_still_works") }}</p>
+    {% elif file.probe_failed %}
+      <p class="audio-note">{{ t("reason.unreadable") }}</p>
+    {% elif not file.compatible and file.verdict is not none %}
+      <p class="audio-note">{{ t(file.reason_key).format(**file.reason_params) }}</p>
+    {% endif %}
+
+    {% if file.highlighted %}
+      <p class="audio-note">{{ t("folder.track.mismatch") }}</p>
+      {% if file.audio_mismatch %}
+        <fieldset class="radio-group folder-file-row__fallback">
+          {% for opt in file.audio_fallback %}
+            <label class="radio-group__option">
+              <input type="radio" name="audio_fallback_{{ index }}" value="{{ opt.kind }}:{{ loop.index0 }}">
+              <span>{% if opt.kind == "embedded" %}{{ opt.language or t("add.track.language_unknown") }}{% else %}{{ opt.folder_label }}{% endif %}</span>
+            </label>
+          {% endfor %}
+        </fieldset>
+      {% endif %}
+      {% if file.subtitle_mismatch %}
+        <fieldset class="radio-group folder-file-row__fallback">
+          {% for opt in file.subtitle_fallback %}
+            <label class="radio-group__option">
+              <input type="radio" name="subtitle_fallback_{{ index }}" value="{{ opt.kind }}:{{ loop.index0 }}">
+              <span>{% if opt.kind == "embedded" %}{{ opt.language or t("add.track.language_unknown") }}{% else %}{{ opt.folder_label }}{% endif %}</span>
+            </label>
+          {% endfor %}
+          <label class="radio-group__option">
+            <input type="radio" name="subtitle_fallback_{{ index }}" value="none">
+            <span>{{ t("subtitle.option.none") }}</span>
+          </label>
+        </fieldset>
+      {% endif %}
+    {% endif %}
+  </div>
+  <span>
+    {% if file.already_added %}<span class="chip">{{ t("share.badge.already_added") }}</span>{% endif %}
+  </span>
+  <button
+    type="button"
+    class="btn btn--ghost"
+    data-preview-render
+    aria-controls="preview-panel"
+    data-preview-loading-label="{{ t('preview.loading') }}"
+  >{{ t("preview.cta.render") }}</button>
+</div>

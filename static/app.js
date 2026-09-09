@@ -231,7 +231,6 @@ async function reorderPlaylistMember(playlistId, itemId, direction, steps) {
 function _previewFormValues(form) {
   const subtitleChoice = form.querySelector('[name="subtitle_choice"]:checked');
   const layout = form.querySelector('[name="stereo_layout"]:checked');
-  const path = form.querySelector("[data-preview-panel]");
   const body = new URLSearchParams();
   body.set("subtitle_choice", subtitleChoice ? subtitleChoice.value : "none");
   body.set(
@@ -239,13 +238,26 @@ function _previewFormValues(form) {
     (form.querySelector('[name="subtitle_manual_path"]') || {}).value || ""
   );
   body.set("stereo_layout", layout ? layout.value : "2d");
-  return { body, path: path ? path.getAttribute("data-preview-path") : "" };
+  return body;
+}
+
+// 05-UI-SPEC.md Screen B item 8: the folder screen's own row carries its
+// path on an ancestor of the clicked control; the single-file form has no
+// such ancestor, so this falls through to the shared panel's own
+// attribute unchanged -- the byte-for-byte behaviour that form already
+// had.
+function _previewPathFor(button, form) {
+  const row = button.closest("[data-preview-path]");
+  if (row) return row.getAttribute("data-preview-path");
+  const panel = form.querySelector("[data-preview-panel]");
+  return panel ? panel.getAttribute("data-preview-path") : "";
 }
 
 async function _requestPreview(button, form, after) {
   const panel = form.querySelector("[data-preview-panel]");
   if (!panel) return;
-  const { body, path } = _previewFormValues(form);
+  const body = _previewFormValues(form);
+  const path = _previewPathFor(button, form);
   body.set("after", after);
 
   const originalLabel = button.textContent;

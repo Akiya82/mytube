@@ -15,7 +15,7 @@
 
    Convert stays enabled regardless of which of these renders -- a broken
    preview never blocks a conversion (CONV-04). -#}
-<div class="preview-panel" data-preview-panel data-preview-path="{{ rel_path }}">
+<div id="preview-panel" class="preview-panel" data-preview-panel data-preview-path="{{ rel_path }}" aria-live="polite">
   {% if state == "rendered" %}
     <img
       class="preview-panel__image"

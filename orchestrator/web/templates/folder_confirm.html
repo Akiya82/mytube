@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import warning %}
+
+{% block title %}{{ t("folder.heading") }} - MyTube{% endblock %}
+
+{% block heading %}{{ t("folder.heading") }}{% endblock %}
+
+{% block content %}
+{# --- 1. Breadcrumb -- unchanged component, same as the share listing
+   this screen was opened from. --- #}
+<nav class="breadcrumb" aria-label="breadcrumb">
+  {% for crumb in breadcrumb %}
+    {% if not loop.last %}
+      <a class="breadcrumb__segment" href="{{ crumb.href }}">{{ t("share.breadcrumb.root") if crumb.is_root else crumb.label }}</a>
+      <span class="breadcrumb__sep" aria-hidden="true">/</span>
+    {% else %}
+      <span class="breadcrumb__segment breadcrumb__segment--current">{{ t("share.breadcrumb.root") if crumb.is_root else crumb.label }}</span>
+    {% endif %}
+  {% endfor %}
+</nav>
+
+{# --- 2. Season-grouping banner -- only when this folder's own files
+   parsed into more than one (name, season) group (D-152). --- #}
+{% if group_summaries | length > 1 %}
+  <div class="banner banner--info" role="status">
+    {{ warning(cls="banner__icon") }}
+    <div class="banner__text">
+      <p class="banner__body">{{ t("folder.group.banner").format(groups=group_summaries | map(attribute="title") | join(", ")) }}</p>
+      {% for g in group_summaries %}
+        <a class="banner__link" href="{{ form_action }}?group={{ g.index }}">{{ t("folder.group.continue").format(n=g.count, title=g.title) }}</a>
+      {% endfor %}
+    </div>
+  </div>
+{% endif %}
+
+<form class="add-form" method="post" action="{{ form_action }}">
+  <input type="hidden" name="group" value="{{ active_index }}">
+
+  {# --- 3. Title-mode radio (D-159). The existing-title option renders
+     only when a name match exists at all; which one is checked is the
+     server's own preselection, computed once at render time -- neither
+     option toggles the fields below live, matching the single-file
+     form's own mode switching (a fresh GET, never client-side JS). --- #}
+  <fieldset class="form-field radio-group">
+    <legend class="form-field__label">{{ t("folder.section.title") }}</legend>
+    <label class="radio-group__option">
+      <input type="radio" name="title_mode" value="new"{% if mode == "new" %} checked{% endif %}>
+      <span>{{ t("folder.title.mode.new") }}</span>
+    </label>
+    {% if title_match %}
+      <label class="radio-group__option">
+        <input type="radio" name="title_mode" value="existing"{% if mode == "existing" %} checked{% endif %}>
+        <span>{{ t("folder.title.mode.existing").format(title=title_match.title_name) }}</span>
+      </label>
+    {% endif %}
+  </fieldset>
+
+  {# --- 4. Name and Address, new-title mode only; a read-only line
+     naming the matched title otherwise. The season provenance caption
+     sits directly under the Address field either way (04-UI-SPEC.md's
+     layout.detected.* pattern). --- #}
+  {% if mode == "new" %}
+    <div class="form-field">
+      <label class="form-field__label" for="folder-name">{{ t("add.field.name") }}</label>
+      <input class="form-field__input" type="text" id="folder-name" name="name" value="{{ title_name }}">
+    </div>
+    <div class="form-field">
+      <label class="form-field__label" for="folder-slug">{{ t("add.field.slug") }}</label>
+      <input class="form-field__input" type="text" id="folder-slug" name="slug" value="{{ slug_plan.chosen }}">
+      <p class="audio-note">{{ t(season_provenance_key) }}</p>
+    </div>
+    {% if slug_plan.similar %}
+      <div class="banner banner--info" role="status">
+        {{ warning(cls="banner__icon") }}
+        <div class="banner__text">
+          <p class="banner__body">{{ t("add.slug_similar").format(slug=slug_plan.similar | join(", ")) }}</p>
+        </div>
+      </div>
+    {% endif %}
+  {% else %}
+    <input type="hidden" name="target_title_id" value="{{ title_match.title_id }}">
+    <p class="audio-note">{{ t(season_provenance_key) }}</p>
+  {% endif %}
+
+  {# --- 5. Folder-wide track fieldsets, above the files they apply to. --- #}
+  <h2 class="section-heading">{{ t("folder.section.tracks") }}</h2>
+
+  {% if audio_options %}
+    <fieldset class="form-field radio-group">
+      <legend class="form-field__label">{{ t("add.field.audio") }}</legend>
+      {% for opt in audio_options %}
+        <label class="radio-group__option{% if opt.kind == 'external' %} radio-group__option--stacked{% endif %}">
+          <input type="radio" name="audio_choice" value="{{ opt.kind }}:{{ loop.index0 }}"{% if loop.first %} checked{% endif %}>
+          {% if opt.kind == "embedded" %}
+            <span>{{ opt.language or t("add.track.language_unknown") }}{% if opt.title %} - {{ opt.title }}{% endif %}</span>
+          {% else %}
+            <span class="radio-group__option-text">
+              <span>{{ opt.folder_label }}</span>
+              <span class="audio-note">{{ t("track.external.label").format(folder=opt.folder_label, language=(opt.language or t("add.track.language_unknown")), codec=opt.codec) }}</span>
+            </span>
+          {% endif %}
+        </label>
+      {% endfor %}
+    </fieldset>
+  {% endif %}
+
+  <fieldset class="form-field radio-group">
+    <legend class="form-field__label">{{ t("subtitle.field.heading") }}</legend>
+    <label class="radio-group__option">
+      <input type="radio" name="subtitle_choice" value="none" checked>
+      <span>{{ t("subtitle.option.none") }}</span>
+    </label>
+    {% for opt in subtitle_options %}
+      <label class="radio-group__option radio-group__option--stacked">
+        <input type="radio" name="subtitle_choice" value="{{ opt.kind }}:{{ loop.index0 }}">
+        <span class="radio-group__option-text">
+          {% if opt.kind == "embedded" %}
+            <span>{{ opt.language or t("add.track.language_unknown") }}{% if opt.title %} - {{ opt.title }}{% endif %}</span>
+          {% else %}
+            <span>{{ opt.folder_label }}</span>
+            <span class="audio-note">{% if opt.folder_label %}{{ opt.folder_label }} - {% endif %}{{ opt.language or t("add.track.language_unknown") }}</span>
+            {% if opt.track_kind == "signs_only" %}
+              <span class="audio-note">{{ t("track.kind.signs_only") }}</span>
+            {% elif opt.track_kind == "full" %}
+              <span class="audio-note">{{ t("track.kind.full") }}</span>
+            {% endif %}
+          {% endif %}
+        </span>
+      </label>
+    {% endfor %}
+  </fieldset>
+
+  <fieldset class="form-field radio-group">
+    <legend class="form-field__label">{{ t("layout.field.heading") }}</legend>
+    {% for value, key in [
+      ("2d", "layout.option.2d"),
+      ("sbs_full", "layout.option.sbs_full"),
+      ("sbs_half", "layout.option.sbs_half"),
+      ("ou_full", "layout.option.ou_full"),
+      ("ou_half", "layout.option.ou_half"),
+    ] %}
+      <label class="radio-group__option">
+        <input type="radio" name="stereo_layout" value="{{ value }}"{% if value == default_stereo_layout %} checked{% endif %}>
+        <span>{{ t(key) }}</span>
+      </label>
+    {% endfor %}
+  </fieldset>
+
+  {# --- 6/7. The per-file list, in filename order, each on the five-
+     column grid; a highlighted row carries its own inline fallback
+     group (05-UI-SPEC.md Screen B items 6-7). --- #}
+  <h2 class="section-heading">{{ t("folder.section.files") }}</h2>
+
+  {% if nothing_recognized %}
+    <div class="banner banner--info" role="status">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t("folder.empty.nothing_recognized") }}</p>
+      </div>
+    </div>
+  {% elif all_added %}
+    <div class="banner banner--info" role="status">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t("folder.all_added.banner") }}</p>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="folder-file-list">
+    {% for file in rows %}
+      {% set index = loop.index0 %}
+      {% include "partials/folder_file_row.html" %}
+    {% endfor %}
+  </div>
+
+  {# --- 8. The one shared preview panel (D-175) -- idle until a row's
+     own Preview button renders into it, exactly the empty-until-swapped
+     element the single-file form already uses (`.preview-panel:empty`).
+     The first file is the default target on load. --- #}
+  <div id="preview-panel" class="preview-panel" data-preview-panel data-preview-path="{{ default_preview_path }}" aria-live="polite"></div>
+
+  {# --- 9. Folder-wide incompatible-files hint. --- #}
+  {% if incompatible_count > 0 %}
+    <div class="banner banner--warning" role="alert">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">{{ t("folder.incompatible.hint").format(n=incompatible_count) }}</p>
+      </div>
+    </div>
+  {% endif %}
+
+  {# --- 11. Cost line -- summed over the checked set as of this render,
+     never live (recomputed only on the next request). --- #}
+  {% if estimate_seconds %}
+    <p class="cost-line">{{ t("add.estimate").format(size=estimate_size_bytes | filesizeformat_binary, time=estimate_seconds | humanize_seconds) }}</p>
+  {% endif %}
+
+  {# --- 10/12. The action row. Disabled-with-reason stays only for a
+     server-known condition no checkbox can change (every probe having
+     failed) -- never for a reason that depends on which boxes the
+     operator has ticked, since nothing on this page recomputes and a
+     button greyed out at render would stay grey after the row was
+     fixed. The save-blocked validation sentence itself only ever renders
+     on a refused POST, which is the next plan's own route. --- #}
+  <div class="add-form__actions">
+    {% if as_is_is_primary %}
+      <button type="submit" name="add" value="1" class="btn btn--primary"{% if all_probes_failed %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.primary") }}</button>
+      <button type="submit" name="convert" value="1" class="btn btn--secondary"{% if all_probes_failed %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.convert") }}</button>
+    {% else %}
+      <button type="submit" name="add" value="1" class="btn btn--secondary"{% if all_probes_failed %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.primary") }}</button>
+      <button type="submit" name="convert" value="1" class="btn btn--primary"{% if all_probes_failed %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.convert") }}</button>
+    {% endif %}
+    {% if all_probes_failed %}
+      <span class="add-form__convert-caption">{{ t("reason.unreadable") }}</span>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}

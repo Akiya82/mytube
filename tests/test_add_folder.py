@@ -4,6 +4,7 @@ real Postgres or subprocess, `ffprobe` and the database layer both
 monkeypatched at their module boundary.
 """
 import json
+import re
 from pathlib import Path
 
 import httpx
@@ -82,6 +83,15 @@ def folder_share_root(tmp_path):
     single = root / "OneFile"
     single.mkdir()
     (single / "a-video.mp4").write_bytes(b"stub video bytes")
+
+    # A second, plain two-file folder Task 3's row-state tests reuse under
+    # different probe/db_stub configurations per test, kept separate from
+    # "Horimiya" so those files' own three-episode shape stays fixed for
+    # Task 1/2's own tests.
+    mixed = root / "Mixed"
+    mixed.mkdir()
+    (mixed / "Mixed - 01.mkv").write_bytes(b"stub video bytes")
+    (mixed / "Mixed - 02.mkv").write_bytes(b"stub video bytes")
     return root
 
 
@@ -589,3 +599,319 @@ async def test_the_estimate_sums_only_ticked_rows(monkeypatch, db_stub):
     assert unticked_row["checked"] is False
     assert built["estimate_size_bytes"] == ticked_row["size_bytes"]
     assert built["estimate_size_bytes"] > 0
+
+
+# --- Task 3: the confirmation screen --------------------------------------
+
+
+async def test_rendered_order_matches_the_contracts_numbering(web_client, monkeypatch):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+    text = resp.text
+
+    markers = [
+        'class="breadcrumb"',
+        'name="title_mode"',
+        ">Tracks for every file<",
+        ">Files<",
+        'class="folder-file-row"',
+        'id="preview-panel"',
+        'class="cost-line"',
+        'class="add-form__actions"',
+    ]
+    positions = [text.index(m) for m in markers]
+    assert positions == sorted(positions)
+
+
+async def test_grouping_banner_absent_for_a_single_group_folder(web_client, monkeypatch):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+    assert "Continue with" not in resp.text
+
+
+async def test_grouping_banner_shows_one_line_per_group(
+    monkeypatch, folder_share_root, db_stub, _web_env, signed_in
+):
+    # A folder whose files split into two names -- two distinct groups,
+    # each with its own "Continue with N files as {title}" link.
+    folder = folder_share_root / "Mixed2"
+    folder.mkdir(parents=True)
+    (folder / "ShowA - 01.mkv").write_bytes(b"x")
+    (folder / "ShowB - 01.mkv").write_bytes(b"x")
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    app.state.db_pool = _DummyPool()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    ) as client:
+        resp = await client.get("/add-folder/Mixed2")
+    assert resp.text.count("Continue with") == 2
+
+
+async def test_title_mode_preselects_the_existing_title_on_an_exact_match(
+    web_client, monkeypatch, db_stub
+):
+    db_stub.title_by_current_slug_result = {
+        "title_id": "t1", "title_name": "Horimiya", "title_status": "active",
+    }
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+
+    existing_tag = resp.text.split('value="existing"')[1].split(">")[0]
+    assert "checked" in existing_tag
+    new_tag = resp.text.split('value="new"')[1].split(">")[0]
+    assert "checked" not in new_tag
+
+
+async def test_title_mode_stays_on_new_title_when_only_similar(web_client, monkeypatch, db_stub):
+    db_stub.taken_slugs_result = {"hori-miya"}
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+
+    new_tag = resp.text.split('value="new"')[1].split(">")[0]
+    assert "checked" in new_tag
+    assert 'name="target_title_id"' not in resp.text
+
+
+async def test_name_slug_and_provenance_caption_render(web_client, monkeypatch):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+
+    assert 'value="Horimiya"' in resp.text
+    assert 'value="horimiya"' in resp.text
+    assert "No season detected, treated as season 1." in resp.text
+
+
+async def test_the_three_fieldsets_render_once_each_not_per_file(web_client, monkeypatch):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+
+    assert resp.text.count(">Audio track<") == 1
+    assert resp.text.count(">Subtitles<") == 1
+    assert resp.text.count(">3D layout<") == 1
+    assert resp.text.count('class="folder-file-row"') == 3  # one per file, unlike the fieldsets
+
+
+async def test_row_state_plain_ticked_and_numbered(web_client, monkeypatch):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+
+    assert "checked" in resp.text.split('name="include_0"')[1].split(">")[0]
+    assert 'value="1"' in resp.text.split('name="episode_number_0"')[1].split(">")[0]
+
+
+async def test_row_state_empty_and_unticked(monkeypatch, db_stub, folder_share_root, _web_env, signed_in):
+    # "Mixed - Special.mkv" recognises to the same name ("Mixed") as the
+    # other two files in this folder, with no episode number -- same
+    # group, so it renders in the default (unscoped) view alongside them.
+    (folder_share_root / "Mixed" / "Mixed - Special.mkv").write_bytes(b"x")
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    app.state.db_pool = _DummyPool()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    ) as client:
+        resp = await client.get("/add-folder/Mixed")
+    row_start = resp.text.index('data-preview-path="Mixed/Mixed - Special.mkv"')
+    row_html = resp.text[row_start: row_start + 900]
+    assert 'value=""' in row_html
+    assert "No episode number recognized" in row_html
+
+
+async def test_row_state_already_added_with_move_checkbox(web_client, monkeypatch, db_stub):
+    db_stub.already_added_rows = [
+        {
+            "source_path": "Horimiya/Horimiya - 01.mkv",
+            "title_id": "t1",
+            "title_name": "Horimiya",
+            "status": "active",
+            "slug": "horimiya",
+            "episode_id": "e1",
+            "number": 1,
+            "edition_kind": "remux",
+        }
+    ]
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+
+    assert "Already added as horimiya" in resp.text
+    assert 'name="move_0"' in resp.text
+    assert "checked" in resp.text.split('name="move_0"')[1].split(">")[0]
+    assert "The old address keeps working." in resp.text
+
+
+async def test_row_state_highlighted_with_fallback_group(monkeypatch, db_stub, folder_share_root, _web_env, signed_in):
+    monkeypatch.setattr(
+        routes_folder,
+        "probe",
+        _probe_dispatch(
+            {"Mixed - 01.mkv": "compatible.json", "Mixed - 02.mkv": "multitrack.json"}
+        ),
+    )
+    app.state.db_pool = _DummyPool()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    ) as client:
+        resp = await client.get("/add-folder/Mixed")
+
+    assert "folder-file-row--highlighted" in resp.text
+    assert "This file&#39;s track differs from the folder&#39;s choice" in resp.text or (
+        "differs from the folder" in resp.text
+    )
+    assert 'name="audio_fallback_1"' in resp.text
+
+
+async def test_row_state_unreadable(monkeypatch, db_stub, folder_share_root, _web_env, signed_in):
+    def _mixed_probe(path):
+        name = Path(path).name
+        if name == "Mixed - 01.mkv":
+            raise ProbeError("simulated")
+        return _fixture("compatible.json")
+
+    monkeypatch.setattr(routes_folder, "probe", _mixed_probe)
+    app.state.db_pool = _DummyPool()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    ) as client:
+        resp = await client.get("/add-folder/Mixed")
+    assert "This file could not be read" in resp.text
+
+
+async def test_empty_state_nothing_recognized(monkeypatch, db_stub, folder_share_root, _web_env, signed_in):
+    unparsed = folder_share_root / "AllUnparsed"
+    unparsed.mkdir()
+    (unparsed / "Random Movie File.mkv").write_bytes(b"x")
+    (unparsed / "Another Bonus Clip.mkv").write_bytes(b"x")
+
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    app.state.db_pool = _DummyPool()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    ) as client:
+        resp = await client.get("/add-folder/AllUnparsed")
+    assert "No episode numbers were recognized" in resp.text
+
+
+async def test_empty_state_all_added_one_title(web_client, monkeypatch, db_stub):
+    db_stub.already_added_rows = [
+        {"source_path": f"Horimiya/Horimiya - {n:02d}.mkv", "title_id": "t1",
+         "title_name": "Horimiya", "status": "active", "slug": "horimiya",
+         "episode_id": f"e{n}", "number": n, "edition_kind": "remux"}
+        for n in (1, 2, 3)
+    ]
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+    assert "Every file here is already added" in resp.text
+
+
+async def test_empty_state_all_added_several_titles(web_client, monkeypatch, db_stub):
+    db_stub.already_added_rows = [
+        {"source_path": "Horimiya/Horimiya - 01.mkv", "title_id": "t1",
+         "title_name": "Horimiya", "status": "active", "slug": "horimiya",
+         "episode_id": "e1", "number": 1, "edition_kind": "remux"},
+        {"source_path": "Horimiya/Horimiya - 02.mkv", "title_id": "t2",
+         "title_name": "Other", "status": "active", "slug": "other",
+         "episode_id": "e2", "number": 1, "edition_kind": "remux"},
+        {"source_path": "Horimiya/Horimiya - 03.mkv", "title_id": "t1",
+         "title_name": "Horimiya", "status": "active", "slug": "horimiya",
+         "episode_id": "e3", "number": 3, "edition_kind": "remux"},
+    ]
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+    assert "Every file here is already added" in resp.text
+
+
+async def test_preview_control_names_the_shared_panel(web_client, monkeypatch):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+    assert 'aria-controls="preview-panel"' in resp.text
+    assert 'id="preview-panel"' in resp.text
+
+
+async def test_preview_row_two_rows_carry_two_different_preview_paths(web_client, monkeypatch):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+    paths = re.findall(r'data-preview-path="([^"]+)"', resp.text)
+    row_paths = [p for p in paths if "Horimiya - 0" in p]
+    assert len(set(row_paths)) >= 2
+
+
+async def test_preview_row_paths_address_two_distinct_render_requests(web_client, monkeypatch):
+    """Each row's own `data-preview-path` is a real, distinct address the
+    render route accepts -- the two rows this test reads off the rendered
+    screen are provably not the same request once encoded, matching what
+    the delegated click handler in static/app.js would send for each.
+    """
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+        paths = sorted(set(re.findall(r'data-preview-path="([^"]+)"', resp.text)))
+        row_paths = [p for p in paths if "Horimiya - 0" in p]
+        assert len(row_paths) >= 2
+        encoded = [
+            "/preview/" + "/".join(part for part in p.split("/")) for p in row_paths[:2]
+        ]
+        assert encoded[0] != encoded[1]
+        for target in encoded:
+            resp2 = await web_client.post(target, data={"subtitle_choice": "none"})
+            assert resp2.status_code == 200
+
+
+async def test_action_row_all_compatible_add_is_primary(web_client, monkeypatch):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    assert "btn--primary" in add_tag
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "btn--secondary" in convert_tag
+
+
+async def test_action_row_one_incompatible_file_makes_convert_primary(
+    monkeypatch, db_stub, folder_share_root, _web_env, signed_in
+):
+    monkeypatch.setattr(
+        routes_folder,
+        "probe",
+        _probe_dispatch(
+            {"Mixed - 01.mkv": "compatible.json", "Mixed - 02.mkv": "hevc.json"}
+        ),
+    )
+    app.state.db_pool = _DummyPool()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=SESSION_COOKIE
+    ) as client:
+        resp = await client.get("/add-folder/Mixed")
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    assert "btn--secondary" in add_tag
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "btn--primary" in convert_tag
+    assert "can&#39;t be added as-is" in resp.text or "can't be added as-is" in resp.text
+
+
+async def test_not_predisabled_no_button_is_disabled_for_a_reason_a_box_could_change(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
+    assert "disabled" not in add_tag
+    assert "disabled" not in convert_tag

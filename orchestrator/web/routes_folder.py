@@ -22,7 +22,6 @@ from collections import Counter
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import PlainTextResponse
 
 from mytube_media.compat import (
     ProbeError,
@@ -45,13 +44,15 @@ from orchestrator.recognize import Recognised, normalize_season, recognize_filen
 from orchestrator.slugs import SlugError, normalize_slug
 from orchestrator.web.routes_share import (
     MIN_VIDEO_FILES_FOR_FOLDER_ADD,
-    _folder_segments_relative_to,
-    _resolve_sidecar_language,
-    _resolve_track_kind_from_folders,
+    _breadcrumb,
+    _folder_href,
     _is_video_file,
     _resolve_share_path,
+    _resolve_sidecar_language,
+    _resolve_track_kind_from_folders,
     _unreachable_response,
 )
+from orchestrator.web.templates import render
 
 router = APIRouter()
 
@@ -433,6 +434,13 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
                 "already_added": already_added,
                 "verdict": verdict,
                 "probe_failed": result["probe_failed"],
+                "compatible": bool(verdict is not None and verdict.eligible),
+                "reason_key": (
+                    "reason.unreadable"
+                    if result["probe_failed"]
+                    else (verdict.reason_key if verdict is not None else None)
+                ),
+                "reason_params": verdict.reason_params if verdict is not None else {},
                 "highlighted": highlighted,
                 "audio_mismatch": audio_mismatch,
                 "subtitle_mismatch": subtitle_mismatch,
@@ -546,7 +554,53 @@ async def folder_confirm_route(request: Request, path: str, group: str = ""):
             # identical case, rather than a raw 500.
             return _unreachable_response(request, status_code=400)
 
-    # The recognition, probing and matching above is everything the
-    # template needs; rendering that screen is a later commit in this same
-    # plan.
-    return PlainTextResponse("")
+    rows = built["rows"]
+    mode = "existing" if built["title_match"] is not None else "new"
+
+    unmoved_rows = [row for row in rows if not row["moved"]]
+    all_added = bool(rows) and not unmoved_rows
+    nothing_recognized = bool(unmoved_rows) and all(
+        row["number"] is None for row in unmoved_rows
+    )
+    checked_unmoved = [row for row in unmoved_rows if row["checked"]]
+    incompatible_checked = [row for row in checked_unmoved if not row["compatible"]]
+    all_probes_failed = bool(unmoved_rows) and all(row["probe_failed"] for row in unmoved_rows)
+
+    estimate_seconds = 0.0
+    if settings.add_estimate_mb_per_second > 0:
+        estimate_seconds = built["estimate_size_bytes"] / (
+            settings.add_estimate_mb_per_second * 1024 * 1024
+        )
+
+    default_stereo_layout = next(
+        (row["verdict"].stereo_layout for row in unmoved_rows if row["verdict"] is not None),
+        "2d",
+    )
+
+    return render(
+        request,
+        "folder_confirm.html",
+        rel_path=rel_path,
+        breadcrumb=_breadcrumb(rel_path),
+        group_summaries=group_summaries,
+        active_index=active_index,
+        rows=rows,
+        mode=mode,
+        title_name=built["title_name"],
+        slug_plan=built["slug_plan"],
+        title_match=built["title_match"],
+        season=built["season"],
+        season_provenance_key="folder.season." + built["season_provenance"],
+        audio_options=built["audio_options"],
+        subtitle_options=built["subtitle_options"],
+        default_stereo_layout=default_stereo_layout,
+        all_added=all_added,
+        nothing_recognized=nothing_recognized,
+        incompatible_count=len(incompatible_checked),
+        all_probes_failed=all_probes_failed,
+        estimate_size_bytes=built["estimate_size_bytes"],
+        as_is_is_primary=not incompatible_checked,
+        estimate_seconds=estimate_seconds,
+        form_action=_folder_href(rel_path),
+        default_preview_path=rows[0]["rel_path"] if rows else "",
+    )
