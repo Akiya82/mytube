@@ -667,15 +667,40 @@ def derive_job_ui(data: dict, settings) -> None:
     data["worker_name"] = worker_name
 
 
+def derive_series_ui(data: dict) -> None:
+    """Turn `library_rows`/`library_row`'s new aggregate columns
+    (`episode_count`, `ready_count`, `failed_count`, `job_episode_number`)
+    into what the row renders for a series (D-162/D-163). Mutates `data`
+    in place, the same pure/synchronous shape `derive_job_ui` already
+    establishes -- every fact this needs already rode in on the one row
+    query, this only ever recombines them.
+
+    `is_series` is the one flag the template actually branches on: a
+    one-episode title (a film, or any title before this phase) always has
+    `episode_count == 1` and renders exactly as it did before this plan
+    (D-162's "a film looks exactly as it does today") -- nothing else
+    this function sets is even read in that case. The three counts
+    default to the film-shaped values (1/0/0) for a row from a stub or a
+    pre-migration read that never populated them, rather than raising on
+    a missing key the way a bare `data["episode_count"]` would.
+    """
+    data["episode_count"] = data.get("episode_count") or 1
+    data["ready_count"] = data.get("ready_count") or 0
+    data["failed_count"] = data.get("failed_count") or 0
+    data["is_series"] = data["episode_count"] > 1
+
+
 async def _row_context(conn, settings, row) -> dict:
     """One `library_rows`/`library_row` record, enriched with the one
     fact the row query cannot answer synchronously: the job/converter
     columns it already joined in, recombined into `job_stage` by
-    `derive_job_ui`. No further database call -- see that function's own
-    docstring.
+    `derive_job_ui`, and the series aggregate recombined by
+    `derive_series_ui`. No further database call -- see those functions'
+    own docstrings.
     """
     data = dict(row)
     derive_job_ui(data, settings)
+    derive_series_ui(data)
     # The converted-detail line's own bitrate (D-146), formatted the same
     # way every other size on this row already is (`filesizeformat_binary`,
     # applied in the template) -- reusing that filter on bytes-per-second
@@ -687,6 +712,54 @@ async def _row_context(conn, settings, row) -> dict:
     if data.get("source_codec") and data.get("size_bytes") and data.get("duration_seconds"):
         data["output_bytes_per_second"] = data["size_bytes"] / data["duration_seconds"]
     return data
+
+
+def _group_episodes_by_title(rows, settings) -> dict:
+    """`episodes_for_library`'s flat rows, turned into one list per title
+    in the number order that query already sorted them in. Each episode
+    gets its own `job_stage` (`derive_job_ui`, reused verbatim -- an
+    episode's stage chip is composed from the identical six keys a
+    title's own job chip already uses) and `failed` (its own default
+    edition's status, the fact the episode row's failed variant and the
+    series summary's failed count both read).
+    """
+    by_title: dict = {}
+    for row in rows:
+        data = dict(row)
+        derive_job_ui(data, settings)
+        data["failed"] = data.get("edition_status") == "failed"
+        by_title.setdefault(data["title_id"], []).append(data)
+    return by_title
+
+
+async def _attach_series_episodes(
+    conn, settings, rows: list[dict], *, apply_default_open: bool
+) -> None:
+    """Fetch and attach `row["episodes"]` for every series row in `rows`
+    (`derive_series_ui`'s own `is_series` flag) in the one batched
+    `episodes_for_library` call this screen makes, regardless of how many
+    rows are series and how many episodes any of them has.
+
+    `apply_default_open` decides whether `row["episode_list_default_open"]`
+    is set at all -- true only for the full page's initial render. A poll
+    fragment (`library_row_fragment_route`) passes `False`, so the
+    `<details>` this function's caller renders never carries the `open`
+    attribute on a fragment (05-UI-SPEC.md Screen D item 3: the operator's
+    own choice, which `static/app.js` already copied onto the fragment
+    before the swap, must win from the first poll tick onward -- a
+    fragment that reasserted its own opinion would fight that copy on
+    every single tick).
+    """
+    series_title_ids = [row["title_id"] for row in rows if row.get("is_series")]
+    raw_episodes = await queries.episodes_for_library(conn, series_title_ids)
+    episodes_by_title = _group_episodes_by_title(raw_episodes, settings)
+    for row in rows:
+        episodes = episodes_by_title.get(row["title_id"], [])
+        row["episodes"] = episodes
+        if apply_default_open and row.get("is_series"):
+            row["episode_list_default_open"] = any(
+                ep.get("job_stage") or ep.get("failed") for ep in episodes
+            )
 
 
 @router.get("/library")
@@ -708,6 +781,7 @@ async def library_route(request: Request):
         video_rows = [await _row_context(conn, settings, row) for row in raw_rows]
         for row in video_rows:
             row["kind"] = "video"
+        await _attach_series_episodes(conn, settings, video_rows, apply_default_open=True)
 
         raw_playlist_rows = await queries.playlist_rows(conn)
         playlist_rows = [dict(row) for row in raw_playlist_rows]
@@ -745,6 +819,12 @@ async def library_row_fragment_route(title_id: str, request: Request):
     (D-49). Never anything but the one `<li>` element: the poller swaps
     only the row it fetched, so a page's scroll position and any other
     row's focus survive every poll.
+
+    Never sets `episode_list_default_open` (`_attach_series_episodes`'s
+    own `apply_default_open=False`): the default-open rule applies to the
+    initial page render only (05-UI-SPEC.md Screen D item 3), and the
+    poller in `static/app.js` already copies the operator's own open
+    state onto this fragment client-side before it ever replaces the row.
     """
     try:
         parsed = uuid.UUID(title_id)
@@ -758,6 +838,7 @@ async def library_row_fragment_route(title_id: str, request: Request):
         if row is None:
             return Response(status_code=404)
         data = await _row_context(conn, settings, row)
+        await _attach_series_episodes(conn, settings, [data], apply_default_open=False)
 
     return render(request, "partials/library_row.html", row=data)
 

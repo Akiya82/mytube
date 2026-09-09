@@ -1392,3 +1392,142 @@ async def test_reparent_edition_to_episode_touches_the_target_titles_changed_at(
 
     after = await raw_conn.fetchval("SELECT changed_at FROM titles WHERE id = $1", target_title_id)
     assert after > before
+
+
+# --- Plan 09 Task 1: the whole hierarchy in one round trip ----------------
+
+
+async def test_library_rows_orders_by_changed_at_not_created_at(raw_conn):
+    """D-165: a title rises to the top when it changes, not only when it
+    was created -- the older title outranks the newer one once its own
+    `changed_at` is bumped past it.
+    """
+    older_id = await _create_title(raw_conn, "Older By Creation", "older-by-creation-slug")
+    newer_id = await _create_title(raw_conn, "Newer By Creation", "newer-by-creation-slug")
+
+    await queries.touch_title_changed(raw_conn, older_id)
+
+    rows = await queries.library_rows(raw_conn)
+    ids = [row["title_id"] for row in rows]
+    assert ids.index(older_id) < ids.index(newer_id)
+
+
+async def test_library_row_carries_the_new_aggregate_columns_for_a_one_episode_title(raw_conn):
+    """A film's aggregate columns are exactly what a one-episode title
+    always was: one episode, ready, none failed -- so `derive_series_ui`
+    (routes_titles.py) has real data to fall back on for D-162's
+    unchanged-film guarantee, not just a stub default.
+    """
+    title_id = await _create_title(raw_conn, "One Episode Aggregate", "one-episode-aggregate-slug")
+
+    row = await queries.library_row(raw_conn, title_id)
+    assert row["episode_count"] == 1
+    assert row["ready_count"] == 1
+    assert row["failed_count"] == 0
+    assert row["job_episode_number"] is None
+
+
+async def test_library_row_aggregate_counts_ready_failed_and_current_episode(raw_conn):
+    """A multi-episode title reports its own ready/failed counts and,
+    while a job is in flight, which episode that job belongs to -- the
+    three facts the aggregate chip (D-163) reads.
+    """
+    first_edition = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Aggregate Season", "aggregate-season-slug", first_edition,
+        f"{first_edition}.mp4",
+    )
+    ep2_edition = uuid.uuid4()
+    ep2_id = await queries.attach_episode_to_title(
+        raw_conn, title_id, 2, ep2_edition, f"{ep2_edition}.mp4", status="preparing",
+    )
+    ep3_edition = uuid.uuid4()
+    await queries.attach_episode_to_title(
+        raw_conn, title_id, 3, ep3_edition, f"{ep3_edition}.mp4", status="failed",
+    )
+
+    job_id = await queries.enqueue_job(
+        raw_conn, kind="transcode", title_id=title_id, edition_id=ep2_edition,
+    )
+
+    row = await queries.library_row(raw_conn, title_id)
+    assert row["episode_count"] == 3
+    assert row["ready_count"] == 1
+    assert row["failed_count"] == 1
+    assert row["job_episode_number"] == 2
+
+    await queries.request_job_cancel(raw_conn, job_id)
+
+
+async def test_episodes_for_library_returns_every_episode_in_number_order_with_its_own_state(raw_conn):
+    """`episodes_for_library` -- the expanded list's own data source --
+    returns one row per episode, in number order, each carrying its own
+    default edition's technical detail and its own edition count,
+    regardless of which episode the title's own default edition sits on.
+    """
+    first_edition = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Episode List Season", "episode-list-season-slug", first_edition,
+        f"{first_edition}.mp4",
+    )
+    await queries.set_edition_technical(
+        raw_conn, first_edition, size_bytes=100, duration_seconds=60.0, width=1280, height=720,
+        audio_language="jpn", audio_title=None, audio_reencoded=False,
+    )
+    ep2_edition = uuid.uuid4()
+    ep2_id = await queries.attach_episode_to_title(
+        raw_conn, title_id, 2, ep2_edition, f"{ep2_edition}.mp4",
+    )
+    await queries.set_edition_technical(
+        raw_conn, ep2_edition, size_bytes=200, duration_seconds=120.0, width=1280, height=720,
+        audio_language="jpn", audio_title=None, audio_reencoded=False,
+    )
+
+    episodes = await queries.episodes_for_library(raw_conn, [title_id])
+
+    assert [e["number"] for e in episodes] == [1, 2]
+    assert [e["title_id"] for e in episodes] == [title_id, title_id]
+    assert episodes[0]["size_bytes"] == 100
+    assert episodes[1]["size_bytes"] == 200
+    assert episodes[1]["episode_id"] == ep2_id
+    assert episodes[0]["edition_count"] == 1
+
+
+async def test_episodes_for_library_scoped_to_the_given_title_ids_and_short_circuits_on_empty(raw_conn):
+    """Passing an empty list never reaches the database (the same guard
+    `editions_by_source_paths` already uses), and passing one title's id
+    never returns another title's episodes.
+    """
+    assert await queries.episodes_for_library(raw_conn, []) == []
+
+    first_edition = uuid.uuid4()
+    title_a = await queries.create_title_with_edition(
+        raw_conn, "Scope A", "scope-a-slug", first_edition, f"{first_edition}.mp4",
+    )
+    second_edition = uuid.uuid4()
+    title_b = await queries.create_title_with_edition(
+        raw_conn, "Scope B", "scope-b-slug", second_edition, f"{second_edition}.mp4",
+    )
+
+    episodes = await queries.episodes_for_library(raw_conn, [title_a])
+    assert {e["title_id"] for e in episodes} == {title_a}
+
+
+async def test_episodes_for_library_query_count_is_one_call_for_several_titles(raw_conn):
+    """One round trip regardless of how many titles are asked for -- the
+    arithmetic `episodes_for_library`'s own docstring states: two queries
+    per screen, never one per title and never one per episode.
+    """
+    title_ids = []
+    for i in range(3):
+        edition_id = uuid.uuid4()
+        title_id = await queries.create_title_with_edition(
+            raw_conn, f"Batch Title {i}", f"batch-title-{i}-slug", edition_id, f"{edition_id}.mp4",
+        )
+        await queries.attach_episode_to_title(
+            raw_conn, title_id, 2, uuid.uuid4(), f"{uuid.uuid4()}.mp4",
+        )
+        title_ids.append(title_id)
+
+    episodes = await queries.episodes_for_library(raw_conn, title_ids)
+    assert len(episodes) == 6

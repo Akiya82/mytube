@@ -590,7 +590,9 @@ _LIBRARY_ROW_COLUMNS = """
     job.job_id AS job_id, job.job_kind AS job_kind, job.job_status AS job_status,
     job.job_db_stage AS job_db_stage, job.job_progress_pct AS job_progress_pct,
     job.job_eta_seconds AS job_eta_seconds, job.job_cancel_requested AS job_cancel_requested,
-    job.job_queued_ahead AS job_queued_ahead,
+    job.job_queued_ahead AS job_queued_ahead, job.job_episode_number AS job_episode_number,
+    agg.episode_count AS episode_count, agg.ready_count AS ready_count,
+    agg.failed_count AS failed_count,
     wc.worker_name AS worker_name, wc.worker_last_seen_at AS worker_last_seen_at,
     wc.worker_status AS worker_status
 """
@@ -618,6 +620,19 @@ _LIBRARY_ROW_COLUMNS = """
 # and every queued transcode row reads the same "is a converter even
 # alive" fact, so one LATERAL with no correlation to `t` is cheaper than
 # resolving it once per row and passing it down by hand.
+#
+# `agg` and `job.job_episode_number` (05-09/D-163): a series is legible
+# while collapsed only if the title row itself carries how many episodes
+# exist, how many are ready and how many failed, plus which episode the
+# live job above belongs to -- one more LATERAL rather than a second
+# round trip, the same reasoning `job`/`wc` already establish. Every
+# non-deleted episode counts toward `episode_count` regardless of its own
+# job state; `ready_count`/`failed_count` read each episode's own
+# *default* edition, the same row `episodes_for_library` (below) exposes
+# in full for the expanded list. A film (one episode) gets `episode_count
+# = 1` here exactly like every other title -- `derive_series_ui`
+# (routes_titles.py) is what decides a one-episode title renders
+# unchanged (D-162), not this query.
 _LIBRARY_ROW_FROM = """
     FROM titles t
     LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
@@ -639,12 +654,28 @@ _LIBRARY_ROW_FROM = """
                    SELECT count(*) FROM jobs j2
                    WHERE j2.status = 'queued' AND j2.kind = j.kind
                      AND j2.created_at < j.created_at
-               ) AS job_queued_ahead
+               ) AS job_queued_ahead,
+               (
+                   SELECT enh.number FROM editions je
+                   JOIN episode_number_history enh
+                       ON enh.episode_id = je.episode_id AND enh.is_current
+                   WHERE je.id = j.edition_id
+               ) AS job_episode_number
         FROM jobs j
         WHERE j.title_id = t.id AND j.status IN ('queued', 'running')
         ORDER BY j.created_at DESC
         LIMIT 1
     ) job ON true
+    LEFT JOIN LATERAL (
+        SELECT
+            count(*) AS episode_count,
+            count(*) FILTER (WHERE de.status = 'active') AS ready_count,
+            count(*) FILTER (WHERE de.status = 'failed') AS failed_count
+        FROM episodes ep2
+        JOIN seasons s2 ON s2.id = ep2.season_id
+        LEFT JOIN editions de ON de.id = ep2.default_edition_id
+        WHERE s2.title_id = t.id AND ep2.status != 'deleted'
+    ) agg ON true
     LEFT JOIN LATERAL (
         SELECT worker_name AS worker_name, last_seen_at AS worker_last_seen_at,
                status AS worker_status
@@ -657,12 +688,23 @@ _LIBRARY_ROW_FROM = """
 
 async def library_rows(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     """Every non-deleted title with its current slug and its default
-    edition's technical detail, newest first (D-60) -- the Library
-    screen's whole data source in one query.
+    edition's technical detail, newest first by `changed_at` (D-165) --
+    the Library screen's whole data source in one query.
+
+    Ordered by `titles.changed_at`, not `created_at`: a title rises to
+    the top the moment an episode or an edition is added or turns ready
+    (`touch_title_changed`, called by `mark_edition_active`/
+    `mark_edition_failed`/`attach_episodes_to_title` and every other
+    catalog write that changes what this row shows), so what the operator
+    just worked on stays on top for as long as it keeps changing, exactly
+    as a brand new title already did under the old creation-time
+    ordering. Migration 0006's own backfill sets `changed_at = created_at`
+    for every pre-existing title, so this ordering starts out identical
+    to the one it replaces rather than reshuffling the library on deploy.
     """
     return await conn.fetch(
         f"SELECT {_LIBRARY_ROW_COLUMNS} {_LIBRARY_ROW_FROM} "
-        "WHERE t.status != 'deleted' ORDER BY t.created_at DESC"
+        "WHERE t.status != 'deleted' ORDER BY t.changed_at DESC"
     )
 
 
@@ -674,6 +716,102 @@ async def library_row(conn: asyncpg.Connection, title_id) -> asyncpg.Record | No
     return await conn.fetchrow(
         f"SELECT {_LIBRARY_ROW_COLUMNS} {_LIBRARY_ROW_FROM} WHERE t.id = $1",
         title_id,
+    )
+
+
+async def episodes_for_library(
+    conn: asyncpg.Connection, title_ids: list
+) -> list[asyncpg.Record]:
+    """Every episode of every title in `title_ids`, in number order, each
+    carrying its own default edition's technical detail and its own live
+    job -- the series row's expanded list (D-162/D-163), fetched in
+    exactly one round trip regardless of how many titles or episodes are
+    asked for.
+
+    Callers pass every series title id the screen (or the one row it is
+    polling) already has and get back one flat list, grouped by
+    `title_id` in the caller's own code
+    (`routes_titles._group_episodes_by_title`) rather than by a second
+    query per title. This is the second and last query the Library screen
+    makes per render, paired with `library_rows` -- and the second and
+    last one the 4-second poll fragment makes per tick, paired with
+    `library_row`: thirty in-flight episodes across a handful of
+    converting seasons cost two queries on every tick either way, not one
+    per episode and not one per title. Passing an empty list short-
+    circuits before ever reaching the database, the same guard
+    `editions_by_source_paths` already uses -- a screen with no series at
+    all (every title a film) never makes this call's round trip at all.
+
+    Each episode's own live job is looked up through *any* of its
+    editions (`je.episode_id = ep.id`), not only its current default --
+    an in-flight second edition of an already-ready episode still shows
+    on that episode's own row rather than vanishing until it either wins
+    or fails. `edition_count` is a plain per-episode count of its own
+    editions, read for a later plan's own nested edition disclosure
+    (D-164) -- unused by this plan's own row, carried now so that plan
+    adds no second query either.
+    """
+    if not title_ids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT
+            s.title_id AS title_id,
+            ep.id AS episode_id,
+            enh.number AS number,
+            ep.status AS episode_status,
+            e.id AS edition_id,
+            e.status AS edition_status,
+            e.failure_reason AS edition_failure_reason,
+            e.size_bytes AS size_bytes,
+            e.duration_seconds AS duration_seconds,
+            e.width AS width, e.height AS height,
+            e.audio_language AS audio_language, e.audio_title AS audio_title,
+            e.audio_reencoded AS audio_reencoded,
+            e.source_codec AS source_codec,
+            e.subtitle_burned_language AS subtitle_burned_language,
+            e.subtitle_burned_title AS subtitle_burned_title,
+            e.stereo_layout AS stereo_layout,
+            (SELECT count(*) FROM editions e2 WHERE e2.episode_id = ep.id) AS edition_count,
+            job.job_id AS job_id, job.job_kind AS job_kind, job.job_status AS job_status,
+            job.job_db_stage AS job_db_stage, job.job_progress_pct AS job_progress_pct,
+            job.job_eta_seconds AS job_eta_seconds,
+            job.job_cancel_requested AS job_cancel_requested,
+            job.job_queued_ahead AS job_queued_ahead,
+            wc.worker_name AS worker_name, wc.worker_last_seen_at AS worker_last_seen_at,
+            wc.worker_status AS worker_status
+        FROM episodes ep
+        JOIN seasons s ON s.id = ep.season_id
+        LEFT JOIN episode_number_history enh
+            ON enh.episode_id = ep.id AND enh.is_current
+        LEFT JOIN editions e ON e.id = ep.default_edition_id
+        LEFT JOIN LATERAL (
+            SELECT j.id AS job_id, j.kind AS job_kind, j.status AS job_status,
+                   j.stage AS job_db_stage, j.progress_pct AS job_progress_pct,
+                   j.eta_seconds AS job_eta_seconds,
+                   j.cancel_requested AS job_cancel_requested,
+                   (
+                       SELECT count(*) FROM jobs j2
+                       WHERE j2.status = 'queued' AND j2.kind = j.kind
+                         AND j2.created_at < j.created_at
+                   ) AS job_queued_ahead
+            FROM jobs j
+            JOIN editions je ON je.id = j.edition_id
+            WHERE je.episode_id = ep.id AND j.status IN ('queued', 'running')
+            ORDER BY j.created_at DESC
+            LIMIT 1
+        ) job ON true
+        LEFT JOIN LATERAL (
+            SELECT worker_name AS worker_name, last_seen_at AS worker_last_seen_at,
+                   status AS worker_status
+            FROM worker_checkins
+            ORDER BY last_seen_at DESC
+            LIMIT 1
+        ) wc ON true
+        WHERE s.title_id = ANY($1::uuid[]) AND ep.status != 'deleted'
+        ORDER BY s.title_id, enh.number
+        """,
+        title_ids,
     )
 
 
