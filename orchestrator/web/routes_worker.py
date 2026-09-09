@@ -417,7 +417,6 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
                     realtime_factor=body.realtime_factor,
                 )
                 if wrote and job_row is not None and job_row["title_id"] is not None:
-                    await queries.mark_title_active(conn, job_row["title_id"])
                     await queries.set_edition_conversion_detail(
                         conn,
                         job_row["edition_id"],
@@ -449,6 +448,18 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
                         await queries.set_edition_poster(
                             conn, job_row["edition_id"], body.poster_key
                         )
+                    # D-157/D-178: the edition this job produced lands on
+                    # 'active' (not the title directly), the default
+                    # pointer moves only when this job's own creation
+                    # asked for it, and the title's own aggregate status
+                    # is recomputed from the whole season -- see
+                    # orchestrator.media.queue's identical done-path
+                    # sequence and queries.sync_title_status's own
+                    # docstring for the rule.
+                    await queries.mark_edition_active(conn, job_row["edition_id"])
+                    if job_row["make_default_when_ready"]:
+                        await queries.set_default_edition(conn, job_row["edition_id"])
+                    await queries.sync_title_status(conn, job_row["title_id"])
     except Exception:
         logger.exception("done: could not finish job %s", job_id)
         return JSONResponse(status_code=503, content={"error": "try_again"})
@@ -495,7 +506,16 @@ async def failed_route(job_id: uuid.UUID, request: Request, body: FailedBody):
                     reason_key=body.reason_key,
                 )
                 if wrote and job_row is not None and job_row["title_id"] is not None:
-                    await queries.mark_title_failed(conn, job_row["title_id"], body.reason_key)
+                    # D-157: the edition this job would have produced is
+                    # what actually fails; the title's own aggregate
+                    # status is recomputed from the whole season, exactly
+                    # as the done path recomputes it on success.
+                    await queries.mark_edition_failed(
+                        conn, job_row["edition_id"], body.reason_key
+                    )
+                    await queries.sync_title_status(
+                        conn, job_row["title_id"], reason_key=body.reason_key
+                    )
     except Exception:
         logger.exception("failed: could not finish job %s", job_id)
         return JSONResponse(status_code=503, content={"error": "try_again"})

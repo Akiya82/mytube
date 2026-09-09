@@ -257,6 +257,7 @@ class AddJob:
     audio_stream_index: int
     channels: int
     external_audio_rel_path: str | None = None
+    make_default_when_ready: bool = False
 
     @classmethod
     def from_row(cls, job_row: asyncpg.Record, edition_row: asyncpg.Record) -> "AddJob":
@@ -270,6 +271,7 @@ class AddJob:
             audio_stream_index=job_row["audio_stream_index"],
             channels=edition_row["audio_channels"],
             external_audio_rel_path=job_row["external_audio_path"],
+            make_default_when_ready=job_row["make_default_when_ready"],
         )
 
 
@@ -613,7 +615,18 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
             )
             if poster_key is not None:
                 await queries.set_edition_poster(conn, job.edition_id, poster_key)
-            await queries.mark_title_active(conn, job.title_id)
+            # D-157: readiness lands on the edition this job actually
+            # produced, not the title directly -- queries.sync_title_status
+            # is what decides the title's own status from there (a
+            # one-episode title reduces to the exact write this used to be;
+            # a title with siblings reads the whole season, not just this
+            # job). D-178: the default-edition request the operator ticked
+            # is applied here, once the edition really is ready, never at
+            # save time.
+            await queries.mark_edition_active(conn, job.edition_id)
+            if job.make_default_when_ready:
+                await queries.set_default_edition(conn, job.edition_id)
+            await queries.sync_title_status(conn, job.title_id)
 
         # The terminal write runs first, inside the same transaction as
         # the catalog writes it gates (CR-03(a)'s in-process shape): all
@@ -655,7 +668,8 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         reason_key = _reason_key_for(exc)
 
         async def _mark_failed(conn) -> None:
-            await queries.mark_title_failed(conn, job.title_id, reason_key)
+            await queries.mark_edition_failed(conn, job.edition_id, reason_key)
+            await queries.sync_title_status(conn, job.title_id, reason_key=reason_key)
 
         await _finish_add(
             pool, job, outcome="failed", reason_key=reason_key, on_success=_mark_failed
