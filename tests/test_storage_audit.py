@@ -8,6 +8,8 @@ shape, the exit code, and the two extra requirements the plan calls out --
 naming a missing object by the `/v/{slug}` address it breaks, and never
 calling anything that deletes or aborts.
 """
+import uuid
+
 import asyncpg
 import pytest
 
@@ -24,7 +26,17 @@ class _DummyConn:
 
 
 @pytest.fixture(autouse=True)
-def _no_real_connect(monkeypatch):
+def _no_real_connect(request, monkeypatch):
+    """Every test in this file is a fast CLI-level unit test against a
+    stubbed `asyncpg.connect` -- except the handful of plan-10 tests below
+    marked `integration`, which need `raw_conn`'s own real connection to
+    exercise `queries.referenced_objects` directly against a real
+    Postgres. Patching unconditionally would silently hand `raw_conn` this
+    same dummy the moment it calls `asyncpg.connect` itself.
+    """
+    if request.node.get_closest_marker("integration"):
+        return
+
     async def _fake_connect(*args, **kwargs):
         return _DummyConn()
 
@@ -241,3 +253,83 @@ async def test_a_missing_playlist_artifact_names_the_playlist_address_not_a_vide
     assert "/p/p-slug" in out
     assert "/v/v-slug" in out
     assert "/v/p-slug" not in out
+
+
+# --- Plan 10: a per-episode reap excludes only that episode's own object,
+# integration tests against a real Postgres exercising queries.referenced_
+# objects directly, rather than the CLI's own stubbed report above.
+
+
+async def _seed_three_episode_title(conn, tag: str) -> tuple:
+    edition1 = uuid.uuid4()
+    slug = f"storage-audit-{tag}-{uuid.uuid4().hex[:8]}"
+    title_id = await queries.create_title_with_edition(
+        conn, f"Storage Audit {tag}", slug, edition1, f"{edition1}.mp4"
+    )
+    edition2 = uuid.uuid4()
+    await queries.attach_episode_to_title(conn, title_id, 2, edition2, f"{edition2}.mp4")
+    edition3 = uuid.uuid4()
+    await queries.attach_episode_to_title(conn, title_id, 3, edition3, f"{edition3}.mp4")
+    return title_id, edition1, edition2, edition3
+
+
+@pytest.mark.integration
+async def test_a_reaped_episodes_object_is_counted_zero_times_and_its_siblings_once(raw_conn):
+    """`referenced_objects` excludes only the reaped episode's own edition
+    (`ep.status = 'deleted'`), leaving its two untouched siblings counted
+    exactly once each -- the exact false positive the function's own
+    docstring says the title-level exclusion exists to prevent, one level
+    down (plan 10).
+    """
+    title_id, edition1, edition2, edition3 = await _seed_three_episode_title(raw_conn, "reaped")
+    episode2 = await queries.episode_by_number(raw_conn, title_id, 2)
+    await queries.mark_episode_for_delete(raw_conn, episode2["episode_id"], grace_seconds=0)
+    await queries.finish_delete_episode(raw_conn, episode2["episode_id"])
+
+    referenced = await queries.referenced_objects(raw_conn)
+    keys = [row["key"] for row in referenced]
+
+    assert keys.count(f"{edition1}.mp4") == 1
+    assert keys.count(f"{edition2}.mp4") == 0
+    assert keys.count(f"{edition3}.mp4") == 1
+
+
+@pytest.mark.integration
+async def test_an_episode_still_inside_its_countdown_is_still_counted_referenced(raw_conn):
+    """A `pending_delete` episode's objects are untouched while the
+    deletion can still be undone (D-62) -- a bucket genuinely missing them
+    during that window is still a broken address, so it must not be
+    excluded the way a reaped one is.
+    """
+    title_id, edition1, edition2, edition3 = await _seed_three_episode_title(
+        raw_conn, "countdown"
+    )
+    episode2 = await queries.episode_by_number(raw_conn, title_id, 2)
+    await queries.mark_episode_for_delete(raw_conn, episode2["episode_id"], grace_seconds=3600)
+
+    referenced = await queries.referenced_objects(raw_conn)
+    keys = [row["key"] for row in referenced]
+
+    assert keys.count(f"{edition1}.mp4") == 1
+    assert keys.count(f"{edition2}.mp4") == 1
+    assert keys.count(f"{edition3}.mp4") == 1
+
+
+@pytest.mark.integration
+async def test_a_reaped_titles_episodes_are_still_excluded_exactly_as_before(raw_conn):
+    """The new `ep.status != 'deleted'` predicate sits beside the existing
+    `t.status != 'deleted'` one, not in place of it -- a whole reaped
+    title still excludes every one of its episodes' objects, unchanged.
+    """
+    edition_id = uuid.uuid4()
+    slug = f"storage-audit-reaped-title-{uuid.uuid4().hex[:8]}"
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Storage Audit Reaped Title", slug, edition_id, f"{edition_id}.mp4"
+    )
+    await queries.mark_for_delete(raw_conn, title_id, grace_seconds=0)
+    await queries.finish_delete(raw_conn, title_id)
+
+    referenced = await queries.referenced_objects(raw_conn)
+    keys = [row["key"] for row in referenced]
+
+    assert keys.count(f"{edition_id}.mp4") == 0

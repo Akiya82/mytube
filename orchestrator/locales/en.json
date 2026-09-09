@@ -103,6 +103,7 @@
   "library.cta.copy_link": "Copy link",
   "library.cta.copy_link_done": "Copied",
   "library.cta.delete": "Delete",
+  "library.cta.delete_episode": "Delete episode",
   "library.cta.dismiss": "Dismiss",
   "library.cta.edit": "Edit",
   "library.cta.purge_now": "Delete now",

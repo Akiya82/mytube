@@ -34,6 +34,18 @@ async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | 
     series its file later joined, silently, the moment this migration
     landed.
 
+    **The "lowest episode" tiebreak reads `episode_number_history`, not
+    the legacy `episodes.number` column** (plan 10 fix): every episode-
+    creation path since migration 0006 (`attach_episode_to_title` and its
+    plural/reparent twins) claims its number only in
+    `episode_number_history`, leaving `episodes.number` at its schema
+    default of 1 for every episode of every multi-episode title -- a tie
+    Postgres breaks by whatever physical order it happens to scan rows in,
+    not by the number an operator actually gave the episode. Falling back
+    to the legacy column via `COALESCE` only when no current history row
+    exists keeps this a no-op for the one caller that can still lack one
+    (a hand-built test row bypassing `claim_episode_number` entirely).
+
     Returns the title's own status, the resolved episode's id and status,
     the episode's default edition id, and that edition's status --
     readiness now lives on the episode and the edition (D-157), so the
@@ -61,8 +73,10 @@ async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | 
                     SELECT e3.id
                     FROM episodes e3
                     JOIN seasons s3 ON s3.id = e3.season_id
+                    LEFT JOIN episode_number_history enh3
+                        ON enh3.episode_id = e3.id AND enh3.is_current
                     WHERE s3.title_id = t.id
-                    ORDER BY s3.number, e3.number
+                    ORDER BY s3.number, COALESCE(enh3.number, e3.number)
                     LIMIT 1
                 )
             )
@@ -637,11 +651,17 @@ _LIBRARY_ROW_FROM = """
     FROM titles t
     LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
     LEFT JOIN LATERAL (
+        -- "lowest episode" tiebreak reads episode_number_history, not the
+        -- legacy episodes.number column -- see resolve_slug's own
+        -- docstring (plan 10 fix) for why the latter is always 1 for
+        -- every episode of a multi-episode title.
         SELECT ep.default_edition_id
         FROM episodes ep
         JOIN seasons s ON s.id = ep.season_id
+        LEFT JOIN episode_number_history enh
+            ON enh.episode_id = ep.id AND enh.is_current
         WHERE s.title_id = t.id
-        ORDER BY s.number, ep.number
+        ORDER BY s.number, COALESCE(enh.number, ep.number)
         LIMIT 1
     ) first_ep ON true
     LEFT JOIN editions e ON e.id = first_ep.default_edition_id
@@ -1053,6 +1073,16 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     while the deletion can still be undone, so a bucket missing them
     genuinely is a broken address.
 
+    **A reaped episode is excluded the same way, one level down** (plan
+    10). A per-episode delete tombstones the episode alone and leaves its
+    title active -- `ep.status = 'deleted'` is the one new predicate on
+    both edition branches below, added beside the title exclusion rather
+    than as a second rule stated twice, closing the exact false positive
+    the paragraph above describes for a whole title. An episode still in
+    `pending_delete` stays in the set, for the identical reason a
+    `pending_delete` title does: nothing has been removed from storage yet.
+    The playlist branch names no episode at all and is untouched.
+
     The third branch is a playlist artifact -- `playlist_artifacts.
     object_key`, excluded only once its playlist is `'deleted'`, for the
     same reason as the two branches above. **Superseded artifacts are
@@ -1075,7 +1105,7 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
         JOIN seasons s ON s.id = ep.season_id
         JOIN titles t ON t.id = s.title_id
         LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
-        WHERE t.status != 'deleted'
+        WHERE t.status != 'deleted' AND ep.status != 'deleted'
         UNION ALL
         SELECT e.poster_key AS key, 'poster' AS kind,
                t.name AS title_name, sh.slug AS slug, t.status AS title_status
@@ -1084,7 +1114,7 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
         JOIN seasons s ON s.id = ep.season_id
         JOIN titles t ON t.id = s.title_id
         LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
-        WHERE e.poster_key IS NOT NULL AND t.status != 'deleted'
+        WHERE e.poster_key IS NOT NULL AND t.status != 'deleted' AND ep.status != 'deleted'
         UNION ALL
         SELECT pa.object_key AS key, 'playlist' AS kind,
                p.name AS title_name, p.slug AS slug, p.status AS title_status
@@ -1289,11 +1319,16 @@ async def resolve_title_edition_slug(
         FROM slug_history sh
         JOIN titles t ON t.id = sh.title_id
         JOIN LATERAL (
+            -- "lowest episode" tiebreak reads episode_number_history, not
+            -- the legacy episodes.number column -- see resolve_slug's own
+            -- docstring (plan 10 fix).
             SELECT ep.id, ep.status
             FROM episodes ep
             JOIN seasons s ON s.id = ep.season_id
+            LEFT JOIN episode_number_history enh0
+                ON enh0.episode_id = ep.id AND enh0.is_current
             WHERE s.title_id = t.id
-            ORDER BY s.number, ep.number
+            ORDER BY s.number, COALESCE(enh0.number, ep.number)
             LIMIT 1
         ) lowest ON true
         JOIN editions e ON e.episode_id = lowest.id AND e.slug = $2
@@ -1374,6 +1409,76 @@ async def mark_edition_started(conn: asyncpg.Connection, edition_id) -> None:
     """
     await conn.execute(
         "UPDATE editions SET started_at = clock_timestamp() WHERE id = $1", edition_id
+    )
+
+
+async def requeue_edition(conn: asyncpg.Connection, edition_id) -> None:
+    """Put a 'failed' edition back to 'preparing' for a per-episode Retry
+    (D-164) -- the edition-scoped twin of requeue_title: clears
+    failure_reason and started_at, the same two fields requeue_title
+    clears, so the episode row renders queued, indistinguishable from a
+    first attempt.
+
+    Also lifts the *title* itself out of 'failed' when it is currently
+    there, the one title-level transition sync_title_status can never
+    produce on its own (D-157: its own rule only ever moves a title to
+    'active' or 'failed', never back to 'preparing'). sync_title_status
+    only ever marks a title 'failed' once every one of its episodes has
+    failed -- the retried episode's edition is a moment away from being
+    the only thing keeping that title showing the full-failure row
+    template, which hides the episode list this retry needs to be watched
+    in. A title still 'active' from a sibling episode, or already
+    'preparing', is left alone by the `AND status = 'failed'` guard below
+    -- retry must never demote a working address back to 'preparing'.
+    """
+    async with conn.transaction():
+        title_id = await conn.fetchval(
+            """
+            SELECT t.id FROM editions e
+            JOIN episodes ep ON ep.id = e.episode_id
+            JOIN seasons s ON s.id = ep.season_id
+            JOIN titles t ON t.id = s.title_id
+            WHERE e.id = $1
+            """,
+            edition_id,
+        )
+        await conn.execute(
+            "UPDATE editions SET status = 'preparing', failure_reason = NULL, "
+            "started_at = NULL WHERE id = $1",
+            edition_id,
+        )
+        if title_id is not None:
+            await conn.execute(
+                "UPDATE titles SET status = 'preparing', failure_reason = NULL, "
+                "started_at = NULL WHERE id = $1 AND status = 'failed'",
+                title_id,
+            )
+            await touch_title_changed(conn, title_id)
+
+
+async def episode_for_action(conn: asyncpg.Connection, episode_id) -> asyncpg.Record | None:
+    """One episode's own status, its title id, and its default edition's
+    status/failure reason -- what every per-episode action route
+    (routes_episodes.py) reads fresh on every request, never trusted from
+    the page that opened (T-05-43): delete/undo/purge read `episode_status`
+    the same way the title-level routes read `title_status`; cancel/retry
+    read the default edition's own status; dismiss refuses unless it is
+    'failed'.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT
+            ep.id AS episode_id, ep.status AS episode_status,
+            ep.default_edition_id AS default_edition_id,
+            t.id AS title_id,
+            e.status AS edition_status, e.failure_reason AS edition_failure_reason
+        FROM episodes ep
+        JOIN seasons s ON s.id = ep.season_id
+        JOIN titles t ON t.id = s.title_id
+        LEFT JOIN editions e ON e.id = ep.default_edition_id
+        WHERE ep.id = $1
+        """,
+        episode_id,
     )
 
 
@@ -1878,12 +1983,17 @@ async def lowest_episode_of_title(conn: asyncpg.Connection, title_id) -> asyncpg
     """
     return await conn.fetchrow(
         """
+        -- "lowest episode" tiebreak reads episode_number_history, not the
+        -- legacy episodes.number column -- see resolve_slug's own
+        -- docstring (plan 10 fix).
         SELECT ep.id AS episode_id, ep.status AS episode_status,
                ep.default_edition_id AS default_edition_id
         FROM episodes ep
         JOIN seasons s ON s.id = ep.season_id
+        LEFT JOIN episode_number_history enh
+            ON enh.episode_id = ep.id AND enh.is_current
         WHERE s.title_id = $1
-        ORDER BY s.number, ep.number
+        ORDER BY s.number, COALESCE(enh.number, ep.number)
         LIMIT 1
         """,
         title_id,
@@ -2457,11 +2567,16 @@ async def active_editions_for_picker(conn: asyncpg.Connection) -> list[dict]:
                e.duration_seconds AS duration_seconds
         FROM titles t
         JOIN LATERAL (
+            -- "lowest episode" tiebreak reads episode_number_history, not
+            -- the legacy episodes.number column -- see resolve_slug's own
+            -- docstring (plan 10 fix).
             SELECT ep.default_edition_id
             FROM episodes ep
             JOIN seasons s ON s.id = ep.season_id
+            LEFT JOIN episode_number_history enh
+                ON enh.episode_id = ep.id AND enh.is_current
             WHERE s.title_id = t.id
-            ORDER BY s.number, ep.number
+            ORDER BY s.number, COALESCE(enh.number, ep.number)
             LIMIT 1
         ) first_ep ON true
         JOIN editions e ON e.id = first_ep.default_edition_id
@@ -3462,6 +3577,39 @@ async def job_for_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | 
         LIMIT 1
         """,
         title_id,
+    )
+
+
+async def job_for_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
+    """The live (queued or running) job for one edition, if any -- the
+    per-episode Cancel action's own read (D-164), scoped one level below
+    `job_for_title`: an episode's default edition is what its row's own
+    in-flight chip and Cancel control are keyed on.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT * FROM jobs
+        WHERE edition_id = $1 AND status IN ('queued', 'running')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        edition_id,
+    )
+
+
+async def last_job_for_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
+    """The most recent job of any status for one edition -- what a
+    per-episode Retry reads to requeue the same choices (D-164), the
+    edition-scoped twin of `last_job_for_title`.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT * FROM jobs
+        WHERE edition_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        edition_id,
     )
 
 

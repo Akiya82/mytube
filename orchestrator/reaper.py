@@ -1,5 +1,5 @@
-"""Background reaper for delayed title deletion (D-13) and expired session
-cleanup (D-80).
+"""Background reaper for delayed title deletion (D-13), delayed per-episode
+deletion (plan 10) and expired session cleanup (D-80).
 
 Runs inside the same FastAPI process as everything else -- a title crossing
 its `delete_at` needs no dedicated compose service, the orchestrator is
@@ -44,6 +44,14 @@ POLL_INTERVAL_SECONDS = 30
 
 
 async def reap_once(pool: asyncpg.Pool) -> None:
+    """Sweep both a title's own countdown and every episode's (plan 10) in
+    one pass -- `purge_route` (both the title-level and the per-episode
+    one, orchestrator.web.routes_titles/routes_episodes) awaits this
+    inline so the object is actually gone before the response returns,
+    and reusing one function for both grace windows means a purge can
+    never race a title's sweep against a separately-scheduled episode
+    sweep.
+    """
     async with pool.acquire() as conn:
         due = await queries.due_for_reaping(conn)
         for row in due:
@@ -73,6 +81,36 @@ async def reap_once(pool: asyncpg.Pool) -> None:
                 # accumulated once.
                 continue
             await queries.finish_delete(conn, title_id)
+
+        # An episode's own countdown (plan 02/10), collected the same
+        # cycle rather than a second background loop: due_for_reaping_episodes
+        # names only identifiers (an episode can carry an arbitrary number
+        # of editions, the same reason due_for_reaping_playlists gives),
+        # episode_object_keys walks them at the point the objects are
+        # actually about to go, and finish_delete_episode itself decides
+        # tombstone-or-drop from whether any edition of the episode was
+        # ever active -- nothing here has to ask that question a second
+        # time. Nothing about the title-level sweep above changes.
+        for row in await queries.due_for_reaping_episodes(conn):
+            episode_id = row["episode_id"]
+            keys = await queries.episode_object_keys(conn, episode_id)
+            failed = False
+            for object_key in keys:
+                try:
+                    await asyncio.to_thread(delete_object, object_key)
+                except Exception:
+                    failed = True
+                    logger.exception(
+                        "reaper: failed to delete object %s for episode %s",
+                        object_key,
+                        episode_id,
+                    )
+            if failed:
+                # Same retry-next-cycle rule as the title sweep above: an
+                # episode still pending_delete with an object left in the
+                # bucket must never be recorded as reaped.
+                continue
+            await queries.finish_delete_episode(conn, episode_id)
 
 
 async def reap_playlists_once(pool: asyncpg.Pool) -> None:

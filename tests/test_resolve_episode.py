@@ -826,3 +826,60 @@ async def test_http_a_title_with_one_ready_and_one_preparing_episode_serves_both
 
     assert ready_resp.status_code == 302
     assert preparing_resp.status_code == EDITION_PREPARING_STATUS
+
+
+# --- Plan 10: a reaped episode's every address answers gone, not 404 -------
+
+
+async def test_a_tombstoned_episodes_own_number_answers_gone_while_its_title_stays_active(
+    raw_conn, http_client
+):
+    """D-164: `finish_delete_episode` tombstones (rather than drops) an
+    episode that was ever active, exactly as a whole title's own reap
+    does one level up (D-10) -- its own number must answer gone (410),
+    never as though it had never existed, even while the *title* itself
+    stays 'active' because a sibling episode is untouched.
+    """
+    title_id, slug, episodes = await _seed_series(raw_conn, "tombstoned-episode", episode_count=2)
+
+    await queries.mark_episode_for_delete(raw_conn, episodes[2], grace_seconds=0)
+    await queries.finish_delete_episode(raw_conn, episodes[2])
+
+    sibling_resp = await http_client.get(f"/v/{slug}/1", follow_redirects=False)
+    reaped_resp = await http_client.get(f"/v/{slug}/2", follow_redirects=False)
+    bare_resp = await http_client.get(f"/v/{slug}", follow_redirects=False)
+
+    assert sibling_resp.status_code == 302
+    assert reaped_resp.status_code == 410
+    assert bare_resp.status_code == 302
+
+    title = await raw_conn.fetchrow("SELECT status FROM titles WHERE id = $1", title_id)
+    assert title["status"] == "active"
+
+
+async def test_a_reaped_episodes_former_number_still_answers_gone_after_a_renumber(
+    raw_conn, http_client
+):
+    """D-164/D-161: `resolve_episode_slug` reads a number's own newest
+    history row regardless of `is_current`, so a former number that a
+    renumber superseded (and nothing else has reclaimed) still resolves
+    to the exact episode it always did -- once that episode is reaped,
+    the former number has to answer gone too, the identical rule a
+    tombstoned slug already gives a former name (D-10).
+    """
+    edition_id = uuid.uuid4()
+    slug = _slug("former-number")
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Former Number", slug, edition_id, f"{edition_id}.mp4"
+    )
+    episode_id = await _episode_id_for_title(raw_conn, title_id)
+    await queries.claim_episode_number(raw_conn, title_id, episode_id, 99)
+
+    await queries.mark_episode_for_delete(raw_conn, episode_id, grace_seconds=0)
+    await queries.finish_delete_episode(raw_conn, episode_id)
+
+    current_resp = await http_client.get(f"/v/{slug}/99", follow_redirects=False)
+    former_resp = await http_client.get(f"/v/{slug}/1", follow_redirects=False)
+
+    assert current_resp.status_code == 410
+    assert former_resp.status_code == 410

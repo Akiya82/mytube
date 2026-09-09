@@ -1887,6 +1887,74 @@ async def test_episode_row_ready_and_settled_shows_check_link(client, queries_st
     assert 'data-control="check"' in resp.text
 
 
+async def test_episode_row_ready_and_settled_check_link_is_episode_scoped(client, queries_stub):
+    """Plan 10: an episode's own Check link points at its own numbered
+    check page, not the title's bare one -- distinct from the title row's
+    own Check action asserted above, which still exists and still points
+    at the bare address.
+    """
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", slug="settled-show-2", episode_count=2, ready_count=2)]
+    ep1 = _episode(title_id=title_id, number=1)
+    ep2 = _episode(title_id=title_id, number=2)
+    queries_stub.episodes_by_title[title_id] = [ep1, ep2]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section1 = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split("</li>")[0]
+    section2 = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split("</li>")[0]
+    assert 'href="/check/settled-show-2/1"' in section1
+    assert 'href="/check/settled-show-2/2"' in section2
+
+
+async def test_episode_row_ready_and_settled_shows_delete_episode_button(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", slug="deletable-show", episode_count=2, ready_count=2)]
+    ep1 = _episode(title_id=title_id, number=1)
+    queries_stub.episodes_by_title[title_id] = [ep1, _episode(title_id=title_id, number=2)]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split("</li>")[0]
+    assert f'action="/library/episode/{ep1["episode_id"]}/delete"' in section
+    assert 'data-control="delete"' in section
+
+
+async def test_episode_row_failed_shows_retry_and_dismiss(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep2 = _episode(title_id=title_id, number=2, edition_status="failed", edition_failure_reason="failed.reason.upload")
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)]
+    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split("</li>")[0]
+    assert f'action="/library/episode/{ep2["episode_id"]}/retry"' in section
+    assert f'action="/library/episode/{ep2["episode_id"]}/dismiss"' in section
+    assert 'data-control="retry"' in section
+    assert 'data-control="dismiss"' in section
+
+
+async def test_episode_row_pending_delete_shows_countdown_and_undo_purge(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep1 = _episode(title_id=title_id, number=1, episode_status="pending_delete")
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1)]
+    queries_stub.episodes_by_title[title_id] = [ep1, _episode(title_id=title_id, number=2)]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split("</li>")[0]
+    assert "chip--deleting" in section
+    assert f'action="/library/episode/{ep1["episode_id"]}/undo"' in section
+    assert f'action="/library/episode/{ep1["episode_id"]}/purge"' in section
+    assert 'data-control="undo"' in section
+    assert 'data-control="purge"' in section
+
+
 # --- Plan 09 Task 3: the poll that does not throw away what the operator did
 
 

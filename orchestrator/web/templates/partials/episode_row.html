@@ -12,14 +12,20 @@
   dispatch the title row's own Preparing branch already uses, reused
   verbatim per episode rather than composed into a new key) and, once
   settled, its size and duration -- the per-edition facts D-163 moves
-  down from the title row. `.episode-row__actions` carries what this
-  plan gives an episode row today: Check. Edit number, Add edition and
-  Delete episode are a later plan's own slots into this same cluster,
-  which is why the actions line is already `flex-wrap: wrap` and each
-  control carries `data-control` rather than relying on name/class
-  alone to stay distinguishable once more controls land beside it.
-  During an in-flight stage the actions line collapses to Cancel alone,
-  the identical rule the title row's own actions already follow.
+  down from the title row. `.episode-row__actions` carries what plan 10
+  adds to this cluster: Check and, last, Delete episode
+  (`.btn--destructive-outline`, the same outline weight Cancel already
+  uses -- a twelve-episode season would otherwise show twelve filled
+  destructive buttons at once) when the episode is settled; Undo/Purge
+  during its own countdown; Cancel alone while in flight; Retry/Dismiss
+  once its own default edition has failed. Edit number and Add edition
+  are later plans' own slots into this same cluster, which is why the
+  actions line is already `flex-wrap: wrap` and each control carries
+  `data-control` rather than relying on name/class alone to stay
+  distinguishable once more controls land beside it. Every one of these
+  forms posts to its own episode's route in `orchestrator.web.
+  routes_episodes` -- a scoped copy of the identical title-level route,
+  touching no sibling episode (D-164).
 
   `episode` carries the raw columns `queries.episodes_for_library`
   fetches, plus `job_stage`/`job_percent`/`job_remaining_text`/
@@ -45,7 +51,11 @@
       {% if episode.edition_status != "active" %}disabled aria-disabled="true"{% endif %}
     >{{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}</button>
 
-    {% if episode.job_stage == "waiting_for_converter" %}
+    {% if episode.episode_status == "pending_delete" %}
+      <span class="chip chip--deleting" data-countdown-template="{{ t('library.delete.countdown') }}">
+        {{ t("library.delete.countdown").format(mm="--", ss="--") }}
+      </span>
+    {% elif episode.job_stage == "waiting_for_converter" %}
       <span class="chip chip--waiting">
         {% if episode.worker_name %}{{ t("library.status.waiting_for_converter_named").format(worker=episode.worker_name, ago=episode.worker_ago_text) }}
         {% else %}{{ t("library.status.waiting_for_converter_none") }}{% endif %}
@@ -73,12 +83,33 @@
   </div>
 
   <div class="episode-row__actions">
-    {% if episode.job_stage and episode.job_stage != "cancelling" %}
-      <form method="post" action="/library/{{ row.title_id }}/cancel" data-confirm="{{ t('library.cancel.confirm') }}">
+    {% if episode.episode_status == "pending_delete" %}
+      <form method="post" action="/library/episode/{{ episode.episode_id }}/undo" data-confirm="{{ t('library.delete.confirm_undo') }}">
+        <button type="submit" class="btn btn--secondary" data-control="undo">{{ t("library.cta.undo") }}</button>
+      </form>
+      <form method="post" action="/library/episode/{{ episode.episode_id }}/purge" data-confirm="{{ t('library.delete.confirm_purge') }}">
+        <button type="submit" class="btn btn--destructive" data-control="purge">{{ t("library.cta.purge_now") }}</button>
+      </form>
+    {% elif episode.job_stage and episode.job_stage != "cancelling" %}
+      <form method="post" action="/library/episode/{{ episode.episode_id }}/cancel" data-confirm="{{ t('library.cancel.confirm') }}">
         <button type="submit" class="btn btn--destructive-outline" data-control="cancel">{{ t("library.cta.cancel") }}</button>
       </form>
-    {% elif episode.job_stage != "cancelling" %}
-      <a class="btn btn--ghost" href="/check/{{ row.slug }}" data-control="check">{{ t("library.cta.check") }}</a>
+    {% elif episode.job_stage == "cancelling" %}
+      {# Nothing, the identical empty-actions rule the title row's own
+         cancelling state already follows -- there is nothing to offer
+         while the consumer or the reaper is still finishing the stop. #}
+    {% elif episode.failed %}
+      <form method="post" action="/library/episode/{{ episode.episode_id }}/retry">
+        <button type="submit" class="btn btn--secondary" data-control="retry">{{ t("library.cta.retry") }}</button>
+      </form>
+      <form method="post" action="/library/episode/{{ episode.episode_id }}/dismiss">
+        <button type="submit" class="btn btn--ghost" data-control="dismiss">{{ t("library.cta.dismiss") }}</button>
+      </form>
+    {% else %}
+      <a class="btn btn--ghost" href="/check/{{ row.slug }}/{{ episode.number }}" data-control="check">{{ t("library.cta.check") }}</a>
+      <form method="post" action="/library/episode/{{ episode.episode_id }}/delete">
+        <button type="submit" class="btn btn--destructive-outline" data-control="delete">{{ t("library.cta.delete_episode") }}</button>
+      </form>
     {% endif %}
   </div>
 </li>

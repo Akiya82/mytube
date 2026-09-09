@@ -39,6 +39,7 @@ from orchestrator.media.queue import run_add_consumer
 from orchestrator.reaper import run_reaper
 from orchestrator.resolve import router as resolve_router
 from orchestrator.web.routes_auth import router as auth_router
+from orchestrator.web.routes_episodes import router as episodes_router
 from orchestrator.web.routes_folder import router as folder_router
 from orchestrator.web.routes_playlists import router as playlists_router
 from orchestrator.web.routes_preview import router as preview_router
@@ -242,6 +243,10 @@ app.include_router(share_router)
 # module docstring for what it does and does not do yet.
 app.include_router(folder_router)
 app.include_router(titles_router)
+# Per-episode actions and per-episode/edition check pages (plan 10,
+# orchestrator/web/routes_episodes.py) -- routes scoped one level below
+# routes_titles's own title-wide ones.
+app.include_router(episodes_router)
 app.include_router(preview_router)
 app.include_router(auth_router)
 app.include_router(playlists_router)
