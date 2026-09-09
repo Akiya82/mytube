@@ -607,6 +607,155 @@ async def test_a_conflict_on_a_job_that_is_already_done_deletes_nothing(monkeypa
     assert edition_object_key_called == [], "the key is never even looked up for a done job"
 
 
+# --- Every terminal report announces the bucket this process never saw --
+#
+# The converter uploads its object with its own client, in its own pod --
+# this process's cached bucket listing has never seen that key. These
+# three reports are the first moment this process can know the bucket
+# changed, so all three clear orchestrator.storage's own cache on their
+# accepted branch. A raised write, by contrast, must leave a still-correct
+# cache alone.
+
+
+def _accepted_job_row(title_id=None):
+    """A job row with `title_id=None` by default -- the minimal shape
+    that lets `wrote=True` short-circuit every route's own further write
+    (set_edition_conversion_detail, mark_edition_failed, etc.), which
+    this plan does not touch and does not need mocked to prove the cache
+    is cleared on the accepted branch.
+    """
+    return {
+        "id": STUB_JOB_ID,
+        "title_id": title_id,
+        "edition_id": uuid.uuid4(),
+        "stereo_layout": None,
+        "status": "running",
+        "make_default_when_ready": False,
+    }
+
+
+async def _fake_job_by_id(conn, job_id):
+    return _accepted_job_row()
+
+
+async def test_a_successful_done_report_clears_the_cached_storage_listing(monkeypatch, client):
+    from orchestrator.db import queries
+    import orchestrator.storage as storage
+
+    monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
+
+    async def fake_finish_job(conn, job_id, **kwargs):
+        return True
+
+    monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
+    storage._usage_cache["usage"] = "stub-usage"
+    storage._usage_cache["expires_at"] = 9_999_999_999.0
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/done",
+            json=_valid_done_body(),
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+
+    assert resp.status_code == 204
+    assert storage._usage_cache["usage"] is None
+
+
+async def test_a_failed_report_clears_the_cached_storage_listing_too(monkeypatch, client):
+    """The poster case: the converter uploads the poster before the
+    video (D-115), so a failed conversion can have already left an
+    object in the bucket. The failed report is the only announcement of
+    it, so it clears the cache exactly like the done report does.
+    """
+    from orchestrator.db import queries
+    import orchestrator.storage as storage
+
+    monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
+
+    async def fake_finish_job(conn, job_id, **kwargs):
+        return True
+
+    monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
+    storage._usage_cache["usage"] = "stub-usage"
+    storage._usage_cache["expires_at"] = 9_999_999_999.0
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/failed",
+            json={
+                "protocol": WORKER_PROTOCOL_VERSION,
+                "worker": "ml-server",
+                "attempt": 1,
+                "reason_key": "failed.reason.upload",
+            },
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+
+    assert resp.status_code == 204
+    assert storage._usage_cache["usage"] is None
+
+
+async def test_a_cancelled_report_clears_the_cached_storage_listing_too(monkeypatch, client):
+    from orchestrator.db import queries
+    import orchestrator.storage as storage
+
+    monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
+
+    async def fake_finish_job(conn, job_id, **kwargs):
+        return True
+
+    monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
+    storage._usage_cache["usage"] = "stub-usage"
+    storage._usage_cache["expires_at"] = 9_999_999_999.0
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/cancelled",
+            json={
+                "protocol": WORKER_PROTOCOL_VERSION,
+                "worker": "ml-server",
+                "attempt": 1,
+            },
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+
+    assert resp.status_code == 204
+    assert storage._usage_cache["usage"] is None
+
+
+async def test_a_raise_during_a_done_report_leaves_the_cached_storage_listing_untouched(
+    monkeypatch, client
+):
+    """A rolled-back write must not throw away a cache that is still
+    correct -- the raise path answers 503 (retryable) and never reaches
+    the accepted branch that clears the cache.
+    """
+    from orchestrator.db import queries
+    import orchestrator.storage as storage
+
+    monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
+
+    async def failing_finish_job(conn, job_id, **kwargs):
+        raise RuntimeError("the database hiccuped mid-write")
+
+    monkeypatch.setattr(queries, "finish_job", failing_finish_job, raising=False)
+    storage._usage_cache["usage"] = "stub-usage"
+    storage._usage_cache["expires_at"] = 9_999_999_999.0
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/done",
+            json=_valid_done_body(),
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+
+    assert resp.status_code == 503
+    assert storage._usage_cache["usage"] == "stub-usage"
+
+    storage.invalidate_usage_cache()
+
+
 async def test_the_route_refuses_a_failure_reason_outside_the_allowed_set(client):
     async with client:
         resp = await client.post(

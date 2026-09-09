@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from orchestrator.config import get_settings
 from orchestrator.db import queries
-from orchestrator.storage import delete_object
+from orchestrator.storage import delete_object, invalidate_usage_cache
 
 logger = logging.getLogger(__name__)
 
@@ -466,6 +466,15 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
 
     if not wrote:
         return await _reject_superseded(pool, job_id, delete_key=True)
+    # The converter uploads the object with its own client in its own
+    # pod (D-115) -- this process's cached bucket listing has never seen
+    # that key, and this report is the first moment this process can know
+    # the bucket changed. Called only on this accepted branch, after the
+    # write committed: a rolled-back write above must not throw away a
+    # cache that is still correct, and the superseded branch above needs
+    # nothing of its own -- its own delete_object call clears the cache
+    # again by itself.
+    invalidate_usage_cache()
     return Response(status_code=204)
 
 
@@ -522,6 +531,14 @@ async def failed_route(job_id: uuid.UUID, request: Request, body: FailedBody):
 
     if not wrote:
         return await _reject_superseded(pool, job_id, delete_key=False)
+    # Same reasoning as done_route's own call above -- and this branch
+    # matters in particular: the poster is uploaded before the video
+    # (D-115), so a conversion that dies during the video transfer has
+    # already put an object in the bucket, and this failure report is
+    # the only announcement of it. This direction only ever under-reports
+    # for up to a minute, never claims a delete failed, which is why it
+    # was found late.
+    invalidate_usage_cache()
     return Response(status_code=204)
 
 
@@ -568,4 +585,8 @@ async def cancelled_route(job_id: uuid.UUID, request: Request, body: CancelledBo
 
     if not wrote:
         return await _reject_superseded(pool, job_id, delete_key=False)
+    # Same reasoning as failed_route's own call above -- a cancelled
+    # conversion can just as easily have already uploaded a poster before
+    # the cancellation was noticed.
+    invalidate_usage_cache()
     return Response(status_code=204)
