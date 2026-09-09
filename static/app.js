@@ -61,6 +61,47 @@ document.addEventListener("click", (event) => {
   });
 });
 
+// A disclosure's open state and a focused control's identity both key off
+// data-episode-id plus a control name (05-UI-SPEC.md Screen D item 3):
+// neither the DOM node nor its own identity survive a poll's row
+// replacement, but this pair does, since the fresh fragment carries the
+// identical attributes for the identical episode. data-control (set on
+// each episode row's own actions in partials/episode_row.html)
+// disambiguates otherwise-identical controls (the copy button and the
+// Check link share a class); anything else falls back to its own name or
+// class, which is enough while an episode row offers only those two.
+function _controlKey(el) {
+  if (!el) return null;
+  const scope = el.closest("[data-episode-id]");
+  const id = scope ? scope.getAttribute("data-episode-id") : "";
+  return `${id}::${el.getAttribute("data-control") || el.getAttribute("name") || el.className}`;
+}
+
+// Copies every details[data-episode-id]'s own open state from the row
+// about to be discarded onto the matching details in the fresh fragment,
+// and returns the focused control's key when focus was inside this row --
+// both read before the swap, since the old row is still the one carrying
+// the operator's own state at that point.
+function _syncEpisodeState(oldRow, freshRow) {
+  oldRow.querySelectorAll("details[data-episode-id]").forEach((details) => {
+    const id = details.getAttribute("data-episode-id");
+    const match = freshRow.querySelector(`details[data-episode-id="${id}"]`);
+    if (match) match.open = details.open;
+  });
+  return oldRow.contains(document.activeElement) ? _controlKey(document.activeElement) : null;
+}
+
+// Restores focus onto the element in the fresh fragment sharing the
+// captured key, once that fragment is actually in the document --
+// .focus() on a still-detached node has no effect, so this always runs
+// after row.replaceWith(fresh), never before it.
+function _restoreFocus(freshRow, key) {
+  if (!key) return;
+  for (const el of freshRow.querySelectorAll("[data-episode-id], [data-episode-id] *")) {
+    if (_controlKey(el) === key) return el.focus();
+  }
+}
+
 // Preparing-row poll (D-49, 02-UI-SPEC.md States -> Preparing; 04-UI-
 // SPEC.md Amendment 2): every 4 seconds, fetch a row's own fragment
 // address and replace only that row's element -- never the page, so
@@ -85,7 +126,9 @@ function pollLibraryRow(row) {
         template.innerHTML = html.trim();
         const fresh = template.content.firstElementChild;
         if (!fresh) return row.remove();
+        const focusKey = _syncEpisodeState(row, fresh);
         row.replaceWith(fresh);
+        _restoreFocus(fresh, focusKey);
         if (fresh.getAttribute("data-row-status") === "preparing") {
           setTimeout(() => pollLibraryRow(fresh), 4000);
         }

@@ -91,6 +91,12 @@ class _QueriesStub:
     # defaulting to empty so every test in this file keeps describing a
     # library of videos alone and keeps passing unchanged.
     playlist_rows: list = field(default_factory=list)
+    # Plan 09: episodes_for_library's own stub data, keyed by title_id --
+    # empty by default, so a test that never sets is_series on a row never
+    # triggers the series call at all (episodes_for_library_calls stays 0).
+    episodes_by_title: dict = field(default_factory=dict)
+    episodes_for_library_calls: int = 0
+    episodes_for_library_title_ids: list = field(default_factory=list)
 
 
 @pytest.fixture
@@ -117,6 +123,14 @@ def queries_stub(monkeypatch):
     async def _referenced_objects(conn):
         return stub.referenced
 
+    async def _episodes_for_library(conn, title_ids):
+        stub.episodes_for_library_calls += 1
+        stub.episodes_for_library_title_ids = list(title_ids)
+        rows = []
+        for title_id in title_ids:
+            rows.extend(stub.episodes_by_title.get(title_id, []))
+        return rows
+
     async def _playlist_rows(conn):
         return stub.playlist_rows
 
@@ -127,6 +141,7 @@ def queries_stub(monkeypatch):
     monkeypatch.setattr(queries, "delete_failed_title", _delete_failed_title)
     monkeypatch.setattr(queries, "referenced_objects", _referenced_objects)
     monkeypatch.setattr(queries, "playlist_rows", _playlist_rows, raising=False)
+    monkeypatch.setattr(queries, "episodes_for_library", _episodes_for_library, raising=False)
     return stub
 
 
@@ -229,6 +244,50 @@ def _job(**over) -> dict:
     }
     job.update(over)
     return job
+
+
+def _episode(**over) -> dict:
+    """One raw `episodes_for_library` row -- the shape
+    `routes_titles._group_episodes_by_title` reads, before `derive_job_ui`
+    turns its job/worker columns into `job_stage`. `title_id` is left
+    unset here on purpose: a test assigns it to key the fixture into
+    `queries_stub.episodes_by_title`, exactly the way `_row()`'s own
+    `title_id` is generated fresh per call rather than shared.
+    """
+    episode = {
+        "title_id": None,
+        "episode_id": uuid.uuid4(),
+        "number": 1,
+        "episode_status": "active",
+        "edition_id": uuid.uuid4(),
+        "edition_status": "active",
+        "edition_failure_reason": None,
+        "size_bytes": 500_000_000,
+        "duration_seconds": 1400.0,
+        "width": 1920,
+        "height": 1080,
+        "audio_language": "jpn",
+        "audio_title": None,
+        "audio_reencoded": False,
+        "source_codec": None,
+        "subtitle_burned_language": None,
+        "subtitle_burned_title": None,
+        "stereo_layout": None,
+        "edition_count": 1,
+        "job_id": None,
+        "job_kind": None,
+        "job_status": None,
+        "job_db_stage": None,
+        "job_progress_pct": None,
+        "job_eta_seconds": None,
+        "job_cancel_requested": False,
+        "job_queued_ahead": 0,
+        "worker_name": None,
+        "worker_last_seen_at": None,
+        "worker_status": None,
+    }
+    episode.update(over)
+    return episode
 
 
 # --- Task 1: technical detail, address, copy button, header, empty ------
@@ -1130,15 +1189,18 @@ def test_app_js_has_a_poll_timer_and_stays_short():
     # SPEC.md States -> Preview) landed alongside them; raised again from
     # 180 once the preview-disabled gate, the manual audio/subtitle path
     # join and the sidecar/audio picker's own open/choose handlers (T-05-14)
-    # landed alongside them -- still well under a vendored drag-and-drop or
-    # lightbox library's own line count, so the guard still catches what it
-    # was built to catch.
+    # landed alongside them; raised again from 260 once the series row's
+    # disclosure-state-and-focus survival (05-UI-SPEC.md Screen D item 3)
+    # landed -- the poller itself gained three lines, the rest is the two
+    # small helpers those lines call -- still well under a vendored drag-
+    # and-drop or lightbox library's own line count, so the guard still
+    # catches what it was built to catch.
     code = [
         line
         for line in text.splitlines()
         if line.strip() and not line.strip().startswith("//")
     ]
-    assert len(code) < 260
+    assert len(code) < 300
 
 
 def test_no_htmx_or_cdn_references():
@@ -1524,3 +1586,422 @@ async def test_a_read_from_another_site_is_still_served(client, queries_stub):
         resp = await client.get("/library", headers={"Origin": "http://evil.example"})
 
     assert resp.status_code == 200
+
+
+# --- Plan 09 Task 1: the whole hierarchy in one round trip ----------------
+
+
+async def test_a_one_episode_title_film_row_context_is_unchanged(client, queries_stub):
+    """D-162: a film (episode_count defaults to 1 via derive_series_ui,
+    the same as a stub row that never sets it) renders exactly today's
+    row -- no series class, no disclosure -- even though library_rows now
+    always returns the new aggregate columns.
+    """
+    queries_stub.rows = [_row(episode_count=1, ready_count=1, failed_count=0)]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "library-row--series" not in resp.text
+    assert "<details" not in resp.text
+    # Called once regardless -- with an empty title id list, since no row
+    # here is a series -- never skipped outright, matching the "two
+    # queries per screen" arithmetic for every screen, not only one with
+    # a series on it.
+    assert queries_stub.episodes_for_library_calls == 1
+    assert queries_stub.episodes_for_library_title_ids == []
+
+
+async def test_library_route_query_count_does_not_scale_with_episode_count(client, queries_stub):
+    """However many series a screen holds, and however many episodes each
+    one has, GET /library calls queries.episodes_for_library exactly
+    once -- never once per title and never once per episode.
+    """
+    for _ in range(3):
+        title_id = uuid.uuid4()
+        queries_stub.rows.append(_row(title_id=title_id, episode_count=5, ready_count=5))
+        queries_stub.episodes_by_title[title_id] = [
+            _episode(title_id=title_id, number=n) for n in range(1, 6)
+        ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert resp.status_code == 200
+    assert queries_stub.episodes_for_library_calls == 1
+    assert len(queries_stub.episodes_for_library_title_ids) == 3
+
+
+async def test_episode_size_and_duration_round_trip_into_the_episode_row(client, queries_stub):
+    """The technical detail `episodes_for_library` reads per episode
+    (size, duration) survives all the way to the rendered row -- the
+    facts D-163 moves down from the title row.
+    """
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1, size_bytes=1_073_741_824, duration_seconds=125),
+        _episode(title_id=title_id, number=2, size_bytes=1_073_741_824, duration_seconds=125),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert resp.text.count("1.0 GB") == 2
+    assert resp.text.count("2:05") == 2
+
+
+async def test_aggregate_chip_shows_ready_of_total_and_current_episode(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(
+        title_id=title_id, title_status="active", episode_count=12, ready_count=3,
+        job_episode_number=4, **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=57.0),
+    )]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=n) for n in range(1, 13)
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "3 of 12 ready, episode 4" in resp.text
+
+
+async def test_aggregate_chip_absent_once_settled(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=4, ready_count=4)]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=n) for n in range(1, 5)
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "ready, episode" not in resp.text
+
+
+async def test_aggregate_sentence_names_the_in_flight_episode_number(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(
+        title_id=title_id, title_status="active", episode_count=12, ready_count=4,
+        job_episode_number=5, **_job(job_kind="transcode", job_db_stage="queued"),
+    )]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=n) for n in range(1, 13)
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "4 of 12 ready, episode 5" in resp.text
+
+
+# --- Plan 09 Task 2: the row that opens ------------------------------------
+
+
+async def test_disclosure_renders_with_the_right_episode_count_when_settled(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=3, ready_count=3)]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=n) for n in (1, 2, 3)
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "<details" in resp.text
+    assert "3 episodes" in resp.text
+    assert f'data-episode-id="{title_id}"' in resp.text
+
+
+async def test_disclosure_is_closed_by_default_when_everything_is_settled(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(title_id=title_id, number=2),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    details_tag = re.search(r"<details[^>]*>", resp.text).group(0)
+    assert " open" not in details_tag
+
+
+async def test_disclosure_is_open_by_default_when_an_episode_is_in_flight(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(
+        title_id=title_id, title_status="active", episode_count=2, ready_count=1,
+        job_episode_number=2, **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
+    )]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(
+            title_id=title_id, number=2, edition_status="preparing",
+            **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
+        ),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    details_tag = re.search(r"<details[^>]*>", resp.text).group(0)
+    assert " open" in details_tag
+
+
+async def test_disclosure_is_open_by_default_when_an_episode_has_failed(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(title_id=title_id, number=2, edition_status="failed", edition_failure_reason="failed.reason.upload"),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    details_tag = re.search(r"<details[^>]*>", resp.text).group(0)
+    assert " open" in details_tag
+
+
+async def test_disclosure_summary_shows_failed_count_and_chip(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(title_id=title_id, number=2, edition_status="failed"),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "2 episodes, 1 failed" in resp.text
+    assert "chip--refused" in resp.text
+
+
+async def test_two_chips_render_together_while_the_title_is_already_active(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(
+        title_id=title_id, title_status="active", slug="my-season",
+        episode_count=2, ready_count=1, job_episode_number=2,
+        **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=57.0, job_eta_seconds=200),
+    )]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(
+            title_id=title_id, number=2, edition_status="preparing",
+            **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=57.0, job_eta_seconds=200),
+        ),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "https://mytube.example/v/my-season" in resp.text
+    assert "1 of 2 ready, episode 2" in resp.text
+    assert "57%" in resp.text
+
+
+async def test_episode_row_shows_its_own_address_copy_button_chip_size_and_duration(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", slug="my-show", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1, size_bytes=1_073_741_824, duration_seconds=125),
+        _episode(title_id=title_id, number=2, size_bytes=1_073_741_824, duration_seconds=125),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "https://mytube.example/v/my-show/1" in resp.text
+    assert "https://mytube.example/v/my-show/2" in resp.text
+    assert "data-copy-text=\"https://mytube.example/v/my-show/1\"" in resp.text
+    assert resp.text.count("1.0 GB") == 2
+
+
+async def test_episode_row_carries_its_own_data_episode_id_attribute(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep1 = _episode(title_id=title_id, number=1)
+    ep2 = _episode(title_id=title_id, number=2)
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [ep1, ep2]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert f'data-episode-id="{ep1["episode_id"]}"' in resp.text
+    assert f'data-episode-id="{ep2["episode_id"]}"' in resp.text
+
+
+async def test_episode_row_in_flight_collapses_actions_to_cancel_only(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep2 = _episode(
+        title_id=title_id, number=2, edition_status="preparing",
+        **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
+    )
+    queries_stub.rows = [_row(
+        title_id=title_id, title_status="active", episode_count=2, ready_count=1,
+        job_episode_number=2, **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
+    )]
+    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split("</li>")[0]
+    assert 'data-control="cancel"' in section
+    assert 'data-control="check"' not in section
+
+
+async def test_episode_row_failed_variant_and_reason_line(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep2 = _episode(title_id=title_id, number=2, edition_status="failed", edition_failure_reason="failed.reason.upload")
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)]
+    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = re.search(
+        rf'<li class="episode-row[^>]*data-episode-id="{ep2["episode_id"]}"[^>]*>.*?</li>',
+        resp.text,
+        re.S,
+    ).group(0)
+    assert "episode-row--failed" in section
+    assert "did not finish" in section
+
+
+async def test_episode_row_ready_and_settled_shows_check_link(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", slug="settled-show", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(title_id=title_id, number=2),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert 'href="/check/settled-show"' in resp.text
+    assert 'data-control="check"' in resp.text
+
+
+# --- Plan 09 Task 3: the poll that does not throw away what the operator did
+
+
+async def test_poll_status_follows_in_flight_episodes_for_an_already_active_series(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(
+        title_id=title_id, title_status="active", episode_count=2, ready_count=1,
+        job_episode_number=2, **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
+    )]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(
+            title_id=title_id, number=2, edition_status="preparing",
+            **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
+        ),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    li_tag = re.search(r'<li class="library-row[^>]*>', resp.text).group(0)
+    assert 'data-row-status="preparing"' in li_tag
+
+
+async def test_poll_status_is_the_title_status_once_a_series_settles(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(title_id=title_id, number=2),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    li_tag = re.search(r'<li class="library-row[^>]*>', resp.text).group(0)
+    assert 'data-row-status="active"' in li_tag
+
+
+async def test_in_flight_active_row_renders_address_copy_button_and_chips_together(client, queries_stub):
+    title_id = uuid.uuid4()
+    queries_stub.rows = [_row(
+        title_id=title_id, title_status="active", slug="in-flight-show",
+        episode_count=2, ready_count=1, job_episode_number=2,
+        **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=40.0),
+    )]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(
+            title_id=title_id, number=2, edition_status="preparing",
+            **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=40.0),
+        ),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    assert "https://mytube.example/v/in-flight-show" in resp.text
+    assert "data-copy-text=\"https://mytube.example/v/in-flight-show\"" in resp.text
+    assert "1 of 2 ready, episode 2" in resp.text
+    assert "40%" in resp.text
+
+
+async def test_fragment_route_never_emits_the_open_attribute_on_the_episode_list(client, queries_stub):
+    """The default-open rule is initial-render only (05-UI-SPEC.md Screen D
+    item 3) -- a fragment carries a failed episode (which would default-
+    open on a full render) and still never sets `open`, since the poller
+    already copied the operator's own choice onto it before the swap.
+    """
+    title_id = uuid.uuid4()
+    row = _row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)
+    queries_stub.row_by_id[title_id] = row
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(title_id=title_id, number=2, edition_status="failed"),
+    ]
+
+    async with client:
+        resp = await client.get(f"/library/{title_id}/row")
+
+    details_tag = re.search(r"<details[^>]*>", resp.text).group(0)
+    assert " open" not in details_tag
+
+
+async def test_fragment_route_renders_the_same_episode_content_as_the_full_page(client, queries_stub):
+    title_id = uuid.uuid4()
+    row = _row(title_id=title_id, title_status="active", slug="parity-show", episode_count=2, ready_count=2)
+    queries_stub.rows = [row]
+    queries_stub.row_by_id[title_id] = dict(row)
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        _episode(title_id=title_id, number=2),
+    ]
+
+    async with client:
+        full_resp = await client.get("/library")
+        fragment_resp = await client.get(f"/library/{title_id}/row")
+
+    assert "https://mytube.example/v/parity-show/1" in full_resp.text
+    assert "https://mytube.example/v/parity-show/1" in fragment_resp.text
+    assert "2 episodes" in full_resp.text
+    assert "2 episodes" in fragment_resp.text
+
+
+def test_poller_syncs_episode_disclosure_state_and_restores_focus_by_data_episode_id():
+    """Reads the script rather than driving a browser (this codebase has
+    none) -- the poller's own three added lines, and the two small
+    helpers they call, both keyed off data-episode-id per 05-UI-SPEC.md
+    Screen D item 3.
+    """
+    text = (REPO_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    assert "_syncEpisodeState(row, fresh)" in text
+    assert "_restoreFocus(fresh, focusKey)" in text
+    assert 'details[data-episode-id' in text
+    # The poller's existing entry points are unchanged -- same signature,
+    # same fetch/redirect/remove/catch shape around the three new lines.
+    assert "function pollLibraryRow(row) {" in text
+    assert "row.replaceWith(fresh);" in text
