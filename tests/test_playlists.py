@@ -499,6 +499,133 @@ async def test_assembly_picker_lists_every_active_video_with_an_add_button(
     assert "Add" in resp.text
 
 
+# --- Plan 11 Task 2: the picker says which episode and which edition -------
+
+
+async def _get_picker(monkeypatch, client, picker_rows):
+    async def fake_playlist_detail(conn, playlist_id):
+        return {"id": PLAYLIST_ID, "name": "Vecher klipov", "slug": "vecher-klipov"}
+
+    async def fake_playlist_members(conn, playlist_id):
+        return []
+
+    async def fake_active_editions_for_picker(conn):
+        return picker_rows
+
+    _patch(monkeypatch, "playlist_detail", fake_playlist_detail)
+    _patch(monkeypatch, "playlist_members", fake_playlist_members)
+    monkeypatch.setattr(
+        queries, "active_editions_for_picker", fake_active_editions_for_picker, raising=False
+    )
+
+    async with client:
+        return await client.get(f"/playlists/{PLAYLIST_ID}/edit")
+
+
+async def test_picker_label_film_shows_bare_title_name(monkeypatch, client, signed_in):
+    resp = await _get_picker(
+        monkeypatch,
+        client,
+        [
+            {
+                "edition_id": uuid.uuid4(),
+                "title_name": "A Lone Film",
+                "duration_seconds": 60.0,
+                "episode_number": 1,
+                "edition_slug": None,
+                "is_default": True,
+                "title_edition_count": 1,
+            }
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert "<span class=\"share-row__name\">A Lone Film</span>" in resp.text
+
+
+async def test_picker_label_series_default_edition_shows_title_and_number(
+    monkeypatch, client, signed_in
+):
+    resp = await _get_picker(
+        monkeypatch,
+        client,
+        [
+            {
+                "edition_id": uuid.uuid4(),
+                "title_name": "A Season",
+                "duration_seconds": 60.0,
+                "episode_number": 5,
+                "edition_slug": None,
+                "is_default": True,
+                "title_edition_count": 2,
+            }
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert "<span class=\"share-row__name\">A Season 5</span>" in resp.text
+
+
+async def test_picker_label_series_non_default_edition_shows_title_number_and_slug(
+    monkeypatch, client, signed_in
+):
+    resp = await _get_picker(
+        monkeypatch,
+        client,
+        [
+            {
+                "edition_id": uuid.uuid4(),
+                "title_name": "A Season",
+                "duration_seconds": 60.0,
+                "episode_number": 5,
+                "edition_slug": "dub-ru",
+                "is_default": False,
+                "title_edition_count": 2,
+            }
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert "<span class=\"share-row__name\">A Season 5 (dub-ru)</span>" in resp.text
+
+
+async def test_picker_two_editions_of_the_same_episode_render_as_distinguishable_rows(
+    monkeypatch, client, signed_in
+):
+    edition1 = uuid.uuid4()
+    edition2 = uuid.uuid4()
+    resp = await _get_picker(
+        monkeypatch,
+        client,
+        [
+            {
+                "edition_id": edition1,
+                "title_name": "A Season",
+                "duration_seconds": 60.0,
+                "episode_number": 5,
+                "edition_slug": None,
+                "is_default": True,
+                "title_edition_count": 2,
+            },
+            {
+                "edition_id": edition2,
+                "title_name": "A Season",
+                "duration_seconds": 60.0,
+                "episode_number": 5,
+                "edition_slug": "dub-ru",
+                "is_default": False,
+                "title_edition_count": 2,
+            },
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert "<span class=\"share-row__name\">A Season 5</span>" in resp.text
+    assert "<span class=\"share-row__name\">A Season 5 (dub-ru)</span>" in resp.text
+    assert f'value="{edition1}"' in resp.text
+    assert f'value="{edition2}"' in resp.text
+
+
 async def test_assembly_allows_the_same_video_twice(monkeypatch, client, signed_in):
     calls = []
 

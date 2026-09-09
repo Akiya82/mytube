@@ -769,7 +769,11 @@ async def episodes_for_library(
     or fails. `edition_count` is a plain per-episode count of its own
     editions, read for a later plan's own nested edition disclosure
     (D-164) -- unused by this plan's own row, carried now so that plan
-    adds no second query either.
+    adds no second query either. `source_path` (plan 11) is the default
+    edition's own share-relative path, read here for the "Add edition"
+    row action to build its target href from -- the same field `library_
+    rows`'s own `_LIBRARY_ROW_COLUMNS` already exposes for a title's own
+    Rename/Delete row, now carried one level down for an episode's own row.
     """
     if not title_ids:
         return []
@@ -792,6 +796,7 @@ async def episodes_for_library(
             e.subtitle_burned_language AS subtitle_burned_language,
             e.subtitle_burned_title AS subtitle_burned_title,
             e.stereo_layout AS stereo_layout,
+            e.source_path AS source_path,
             (SELECT count(*) FROM editions e2 WHERE e2.episode_id = ep.id) AS edition_count,
             job.job_id AS job_id, job.job_kind AS job_kind, job.job_status AS job_status,
             job.job_db_stage AS job_db_stage, job.job_progress_pct AS job_progress_pct,
@@ -2761,33 +2766,41 @@ async def playlist_members(conn: asyncpg.Connection, playlist_id) -> list[dict]:
 
 
 async def active_editions_for_picker(conn: asyncpg.Connection) -> list[dict]:
-    """Every active title's default edition, newest first -- the assembly
-    screen's member picker. Same default-edition-per-title shape
-    `library_rows` already establishes (`_LIBRARY_ROW_FROM`'s own LATERAL
-    join), restricted to active titles and narrowed to the three fields
-    the picker row needs.
+    """Every active edition of every active, non-deleted episode, newest
+    title first then in episode/creation order within it -- the assembly
+    screen's member picker (plan 11: this query's own one-edition-per-
+    title assumption stopped being true the moment this phase's first
+    edition existed).
+
+    `title_edition_count` (a plain `count(*) OVER (PARTITION BY t.id)`, no
+    second query) is what lets the picker's own label rule tell a genuine
+    film (a title contributing exactly one row here: one episode, one
+    edition) from a series or a multi-edition episode with no per-caller
+    Python grouping -- both this function's callers already pass this
+    list straight to `partials/playlist_members.html` unchanged, so a
+    window function computed once here is cheaper than teaching either of
+    them to group rows by title themselves. `episode_number` and
+    `edition_slug` are the other two pieces that label composes from,
+    exactly as the query's own picker template already gets `duration_
+    seconds` and `title_name` for the identical row.
     """
     rows = await conn.fetch(
         """
-        SELECT e.id AS edition_id, t.name AS title_name,
-               e.duration_seconds AS duration_seconds
-        FROM titles t
-        JOIN LATERAL (
-            -- "lowest episode" tiebreak reads episode_number_history, not
-            -- the legacy episodes.number column -- see resolve_slug's own
-            -- docstring (plan 10 fix).
-            SELECT ep.default_edition_id
-            FROM episodes ep
-            JOIN seasons s ON s.id = ep.season_id
-            LEFT JOIN episode_number_history enh
-                ON enh.episode_id = ep.id AND enh.is_current
-            WHERE s.title_id = t.id
-            ORDER BY s.number, COALESCE(enh.number, ep.number)
-            LIMIT 1
-        ) first_ep ON true
-        JOIN editions e ON e.id = first_ep.default_edition_id
-        WHERE t.status = 'active'
-        ORDER BY t.created_at DESC
+        SELECT
+            e.id AS edition_id, t.name AS title_name,
+            e.duration_seconds AS duration_seconds,
+            enh.number AS episode_number,
+            e.slug AS edition_slug,
+            (e.id = ep.default_edition_id) AS is_default,
+            count(*) OVER (PARTITION BY t.id) AS title_edition_count
+        FROM editions e
+        JOIN episodes ep ON ep.id = e.episode_id
+        JOIN seasons s ON s.id = ep.season_id
+        JOIN titles t ON t.id = s.title_id
+        LEFT JOIN episode_number_history enh
+            ON enh.episode_id = ep.id AND enh.is_current
+        WHERE t.status = 'active' AND e.status = 'active' AND ep.status != 'deleted'
+        ORDER BY t.created_at DESC, enh.number, e.created_at
         """
     )
     return [dict(row) for row in rows]

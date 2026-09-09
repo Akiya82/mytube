@@ -93,7 +93,21 @@
     <li class="share-row">
       <div class="picker-row">
         <span class="share-row__meta">
-          <span class="share-row__name">{{ edition.title_name }}</span>
+          {# 05-UI-SPEC.md "Playlist picker labelling": a film (this title's
+             only row here -- one episode, one edition, `queries.active_
+             editions_for_library`'s own window-function count) keeps the
+             bare title, exactly as before this phase; a series episode on
+             its own default edition adds its number; a non-default edition
+             adds its own slug in brackets -- two rows of the same show are
+             no longer indistinguishable. No new sentence key: every piece
+             already rides in on this same row. #}
+          {% if edition.title_edition_count == 1 %}
+            <span class="share-row__name">{{ edition.title_name }}</span>
+          {% elif edition.is_default %}
+            <span class="share-row__name">{{ edition.title_name }} {{ edition.episode_number }}</span>
+          {% else %}
+            <span class="share-row__name">{{ edition.title_name }} {{ edition.episode_number }} ({{ edition.edition_slug }})</span>
+          {% endif %}
         </span>
         {% if edition.duration_seconds is not none %}
           <span class="share-row__size">{{ edition.duration_seconds | duration_hms }}</span>

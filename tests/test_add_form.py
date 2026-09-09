@@ -532,6 +532,34 @@ async def test_accepting_the_edition_offer_enters_edition_mode_with_no_gate(
     assert "disabled" not in add_tag
 
 
+async def test_opened_from_library_add_edition_link_enters_edition_mode_with_no_gate(
+    web_client, monkeypatch, db_stub
+):
+    """The episode row's own "Add edition" action (05-UI-SPEC.md Component
+    Inventory, D-176) is a plain link carrying `target_episode_id` -- the
+    exact same query param `test_accepting_the_edition_offer_enters_
+    edition_mode_with_no_gate` above exercises from the confirm-gate's own
+    CTA, reached here the other way round: no prior "already added" state
+    at all, since the library's own link states the intent directly and
+    never depends on this exact path having been added before.
+    """
+    monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
+    db_stub.episode_with_title_result = {
+        "episode_id": "33333333-3333-3333-3333-333333333333",
+        "episode_status": "active",
+        "title_id": "existing-id",
+        "title_name": "Existing Title",
+        "number": 3,
+    }
+
+    async with web_client:
+        resp = await web_client.get("/add/a-video.mp4?target_episode_id=33333333-3333-3333-3333-333333333333")
+
+    assert "Adding an edition of episode 3 of Existing Title" in resp.text
+    add_tag = resp.text.split('name="add"')[1].split(">")[0]
+    assert "disabled" not in add_tag
+
+
 # --- title match, D-159's single-file case ---------------------------------
 
 

@@ -102,11 +102,20 @@
       <form method="post" action="/library/episode/{{ episode.episode_id }}/retry">
         <button type="submit" class="btn btn--secondary" data-control="retry">{{ t("library.cta.retry") }}</button>
       </form>
+      <a class="btn btn--ghost" href="{{ episode.add_edition_href }}" data-control="add-edition">{{ t("library.cta.add_edition") }}</a>
       <form method="post" action="/library/episode/{{ episode.episode_id }}/dismiss">
         <button type="submit" class="btn btn--ghost" data-control="dismiss">{{ t("library.cta.dismiss") }}</button>
       </form>
     {% else %}
       <a class="btn btn--ghost" href="/check/{{ row.slug }}/{{ episode.number }}" data-control="check">{{ t("library.cta.check") }}</a>
+      {# Add edition (05-UI-SPEC.md Component Inventory, D-176): one click
+         from this row into the add form, already targeted at this
+         episode's own default edition's source file and already in
+         edition mode -- add_edition_href (routes_titles._group_episodes_
+         by_title) carries both the percent-encoded share path and the
+         target_episode_id query param the add form's own GET route
+         (routes_share.py) already understands. #}
+      <a class="btn btn--ghost" href="{{ episode.add_edition_href }}" data-control="add-edition">{{ t("library.cta.add_edition") }}</a>
       <form method="post" action="/library/episode/{{ episode.episode_id }}/delete">
         <button type="submit" class="btn btn--destructive-outline" data-control="delete">{{ t("library.cta.delete_episode") }}</button>
       </form>

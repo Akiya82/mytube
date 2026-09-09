@@ -289,6 +289,7 @@ def _episode(**over) -> dict:
         "subtitle_burned_title": None,
         "stereo_layout": None,
         "edition_count": 1,
+        "source_path": "episode-source.mkv",
         "job_id": None,
         "job_kind": None,
         "job_status": None,
@@ -1982,6 +1983,38 @@ async def test_episode_row_failed_shows_retry_and_dismiss(client, queries_stub):
     assert f'action="/library/episode/{ep2["episode_id"]}/dismiss"' in section
     assert 'data-control="retry"' in section
     assert 'data-control="dismiss"' in section
+
+
+# --- Plan 11 Task 2: one click to add an edition ----------------------------
+
+
+async def test_episode_row_ready_and_settled_shows_add_edition_control_with_right_target(
+    client, queries_stub
+):
+    title_id = uuid.uuid4()
+    ep1 = _episode(title_id=title_id, number=1, source_path="ep-01.mkv")
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.episodes_by_title[title_id] = [ep1, _episode(title_id=title_id, number=2)]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split("</li>")[0]
+    assert 'data-control="add-edition"' in section
+    assert f'href="/add/ep-01.mkv?target_episode_id={ep1["episode_id"]}"' in section
+
+
+async def test_episode_row_failed_also_shows_add_edition_control(client, queries_stub):
+    title_id = uuid.uuid4()
+    ep2 = _episode(title_id=title_id, number=2, edition_status="failed", edition_failure_reason="failed.reason.upload")
+    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)]
+    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split("</li>")[0]
+    assert 'data-control="add-edition"' in section
 
 
 async def test_episode_row_pending_delete_shows_countdown_and_undo_purge(client, queries_stub):

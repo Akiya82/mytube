@@ -72,6 +72,7 @@ from orchestrator.slugs import EditionSlugRefused, SlugError
 from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
 from orchestrator.web.routes_share import (
     _folder_segments_relative_to,
+    _href,
     _resolve_share_path,
     _unreachable_response,
 )
@@ -719,15 +720,23 @@ def _group_episodes_by_title(rows, settings) -> dict:
     in the number order that query already sorted them in. Each episode
     gets its own `job_stage` (`derive_job_ui`, reused verbatim -- an
     episode's stage chip is composed from the identical six keys a
-    title's own job chip already uses) and `failed` (its own default
+    title's own job chip already uses), `failed` (its own default
     edition's status, the fact the episode row's failed variant and the
-    series summary's failed count both read).
+    series summary's failed count both read), and `add_edition_href`
+    (plan 11, D-176): the add form's own address for this episode's
+    default edition's source file, `_href` (`routes_share.py`, the exact
+    percent-encoding every other share-opened address in this project
+    already goes through) plus `target_episode_id` so the form opens
+    already in edition mode on the same file, one click from this row.
     """
     by_title: dict = {}
     for row in rows:
         data = dict(row)
         derive_job_ui(data, settings)
         data["failed"] = data.get("edition_status") == "failed"
+        data["add_edition_href"] = (
+            _href(data.get("source_path") or "") + f"?target_episode_id={data['episode_id']}"
+        )
         by_title.setdefault(data["title_id"], []).append(data)
     return by_title
 
