@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% from "partials/icons.html" import warning %}
 
-{% block title %}{{ t("folder.heading") }} - MyTube{% endblock %}
+{% block title %}{{ t("folder.edition.heading") if edition_mode else t("folder.heading") }} - MyTube{% endblock %}
 
-{% block heading %}{{ t("folder.heading") }}{% endblock %}
+{% block heading %}{{ t("folder.edition.heading") if edition_mode else t("folder.heading") }}{% endblock %}
 
 {% block content %}
 {# --- 1. Breadcrumb -- unchanged component, same as the share listing
@@ -20,8 +20,10 @@
 </nav>
 
 {# --- 2. Season-grouping banner -- only when this folder's own files
-   parsed into more than one (name, season) group (D-152). --- #}
-{% if group_summaries | length > 1 %}
+   parsed into more than one (name, season) group (D-152). Never shown in
+   edition mode (Screen B'): the title is already known, so there is
+   nothing here to group by name/season for. --- #}
+{% if not edition_mode and group_summaries | length > 1 %}
   <div class="banner banner--info" role="status">
     {{ warning(cls="banner__icon") }}
     <div class="banner__text">
@@ -35,7 +37,31 @@
 
 <form class="add-form" method="post" action="{{ form_action }}">
   <input type="hidden" name="group" value="{{ active_index }}">
+  {% if edition_mode %}<input type="hidden" name="edition_mode" value="1">{% endif %}
 
+  {% if edition_mode %}
+    {# --- Screen B': the title is already known -- a read-only line
+       naming it stands in for the title-mode radio and the Name/Address
+       fields items 3-4 give the ordinary screen (05-UI-SPEC.md Screen B'). --- #}
+    <p class="audio-note">{{ t("folder.title.mode.existing").format(title=title_name) }}</p>
+
+    {# --- One edition slug field (D-177), suggested from what differs
+       against the episodes' own existing default editions -- same
+       suggestion mechanics as the single-file edition field. --- #}
+    <div class="form-field">
+      <label class="form-field__label" for="edition-slug">{{ t("edition.field.slug") }}</label>
+      <input class="form-field__input" type="text" id="edition-slug" name="edition_slug" value="{{ edition_slug_value }}">
+      <p class="audio-note">{{ t("edition.field.slug_hint") }}</p>
+    </div>
+
+    {# --- One "make this the default edition when ready" checkbox
+       (D-178), off by default, applied identically to every episode's
+       new edition in the batch. --- #}
+    <label class="radio-group__option">
+      <input type="checkbox" name="make_default" value="1"{% if make_default_checked %} checked{% endif %}>
+      <span>{{ t("edition.field.make_default") }}</span>
+    </label>
+  {% else %}
   {# --- 3. Title-mode radio (D-159). The existing-title option renders
      only when a name match exists at all; which one is checked is the
      server's own preselection, computed once at render time -- neither
@@ -80,6 +106,7 @@
   {% else %}
     <input type="hidden" name="target_title_id" value="{{ title_match.title_id }}">
     <p class="audio-note">{{ t(season_provenance_key) }}</p>
+  {% endif %}
   {% endif %}
 
   {# --- 5. Folder-wide track fieldsets, above the files they apply to. --- #}

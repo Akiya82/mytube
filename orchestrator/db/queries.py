@@ -1838,6 +1838,57 @@ async def audio_languages_on_episode(conn: asyncpg.Connection, episode_id) -> se
     return {row["audio_language"] for row in rows}
 
 
+async def audio_languages_on_episodes(conn: asyncpg.Connection, episode_ids: list) -> set[str]:
+    """The season-wide twin of `audio_languages_on_episode` (plan 11): every
+    non-null audio language already used by *any* edition of *any* episode
+    in `episode_ids` -- the folder-wide edition batch's own tie-break, since
+    one suggested slug applies to every episode in the batch identically
+    and a returning studio's dub needs the same folder-slug suffix
+    regardless of which specific episode it lands on first.
+    """
+    if not episode_ids:
+        return set()
+    rows = await conn.fetch(
+        "SELECT DISTINCT audio_language FROM editions "
+        "WHERE episode_id = ANY($1::uuid[]) AND audio_language IS NOT NULL",
+        episode_ids,
+    )
+    return {row["audio_language"] for row in rows}
+
+
+async def default_editions_technical(
+    conn: asyncpg.Connection, episode_ids: list
+) -> list[asyncpg.Record]:
+    """The batched twin of `default_edition_technical` (plan 11): one row
+    per episode in `episode_ids`, each carrying its own current default
+    edition's technical facts -- what the folder-wide edition batch's one
+    suggested slug (D-177) compares its own folder-wide choice against, for
+    every target episode in one round trip rather than one query per row.
+    """
+    if not episode_ids:
+        return []
+    return await conn.fetch(
+        """
+        SELECT
+            ep.id AS episode_id,
+            e.audio_language AS audio_language,
+            e.width AS width, e.height AS height,
+            e.subtitle_burned_language AS subtitle_language,
+            e.subtitle_burned_signs_only AS subtitle_signs_only,
+            (
+                SELECT j.kind FROM jobs j
+                WHERE j.edition_id = e.id
+                ORDER BY j.created_at
+                LIMIT 1
+            ) = 'transcode' AS is_transcode
+        FROM episodes ep
+        JOIN editions e ON e.id = ep.default_edition_id
+        WHERE ep.id = ANY($1::uuid[])
+        """,
+        episode_ids,
+    )
+
+
 async def edition_slug_taken_on_episode(
     conn: asyncpg.Connection, episode_id, slug: str
 ) -> bool:

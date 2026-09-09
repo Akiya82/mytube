@@ -111,6 +111,16 @@ def folder_share_root(tmp_path):
     mixed.mkdir()
     (mixed / "Mixed - 01.mkv").write_bytes(b"stub video bytes")
     (mixed / "Mixed - 02.mkv").write_bytes(b"stub video bytes")
+
+    # Plan 11 Task 3: a twelve-episode season, every file already an
+    # edition of the same title -- the edition-only mode's own folder,
+    # kept separate so a studio-folder-covers-eleven-of-twelve test can
+    # tick 12 files without perturbing Task 1/2's fixed three-episode
+    # "Horimiya" shape above.
+    season = root / "Season"
+    season.mkdir()
+    for n in range(1, 13):
+        (season / f"Season - {n:02d}.mkv").write_bytes(b"stub video bytes")
     return root
 
 
@@ -149,6 +159,12 @@ def db_stub(monkeypatch):
         reparent_edition_to_episode_calls: list[dict] = []
         enqueue_job_calls: list[dict] = []
         touch_title_changed_calls: list = []
+        # Plan 11 Task 3: the edition-only folder mode's own reads/writes.
+        default_editions_technical_result: list = []
+        audio_languages_on_episodes_result: set = set()
+        slug_taken_episode_ids: set = set()
+        episode_with_title_result = None
+        add_edition_to_episode_calls: list[dict] = []
 
     stub = _Stub()
     stub.already_added_rows = []
@@ -160,6 +176,11 @@ def db_stub(monkeypatch):
     stub.reparent_edition_to_episode_calls = []
     stub.enqueue_job_calls = []
     stub.touch_title_changed_calls = []
+    stub.default_editions_technical_result = []
+    stub.audio_languages_on_episodes_result = set()
+    stub.slug_taken_episode_ids = set()
+    stub.episode_with_title_result = None
+    stub.add_edition_to_episode_calls = []
 
     async def _editions_by_source_paths(conn, paths):
         return [row for row in stub.already_added_rows if row["source_path"] in paths]
@@ -199,6 +220,36 @@ def db_stub(monkeypatch):
     async def _touch_title_changed(conn, title_id):
         stub.touch_title_changed_calls.append(title_id)
 
+    async def _default_editions_technical(conn, episode_ids):
+        return [
+            row for row in stub.default_editions_technical_result
+            if row["episode_id"] in episode_ids
+        ]
+
+    async def _audio_languages_on_episodes(conn, episode_ids):
+        return stub.audio_languages_on_episodes_result
+
+    async def _edition_slug_taken_on_episode(conn, episode_id, slug):
+        return episode_id in stub.slug_taken_episode_ids
+
+    async def _episode_with_title(conn, episode_id):
+        if stub.episode_with_title_result is not None:
+            return stub.episode_with_title_result
+        if stub.already_added_rows:
+            return {"title_id": stub.already_added_rows[0]["title_id"]}
+        return None
+
+    async def _add_edition_to_episode(conn, episode_id, slug, edition_id, object_key, **kwargs):
+        stub.add_edition_to_episode_calls.append(
+            {
+                "episode_id": episode_id,
+                "slug": slug,
+                "edition_id": edition_id,
+                "object_key": object_key,
+                **kwargs,
+            }
+        )
+
     monkeypatch.setattr(queries, "editions_by_source_paths", _editions_by_source_paths)
     monkeypatch.setattr(queries, "resolve_slug", _resolve_slug)
     monkeypatch.setattr(queries, "taken_slugs", _taken_slugs)
@@ -209,6 +260,11 @@ def db_stub(monkeypatch):
     monkeypatch.setattr(queries, "reparent_edition_to_episode", _reparent_edition_to_episode)
     monkeypatch.setattr(queries, "enqueue_job", _enqueue_job)
     monkeypatch.setattr(queries, "touch_title_changed", _touch_title_changed)
+    monkeypatch.setattr(queries, "default_editions_technical", _default_editions_technical)
+    monkeypatch.setattr(queries, "audio_languages_on_episodes", _audio_languages_on_episodes)
+    monkeypatch.setattr(queries, "edition_slug_taken_on_episode", _edition_slug_taken_on_episode)
+    monkeypatch.setattr(queries, "episode_with_title", _episode_with_title)
+    monkeypatch.setattr(queries, "add_edition_to_episode", _add_edition_to_episode)
     return stub
 
 
@@ -1422,3 +1478,292 @@ async def test_atomic_refusal_leaves_both_new_and_moved_rows_unwritten(
     assert db_stub.create_title_with_episodes_calls == []
     assert db_stub.reparent_edition_to_episode_calls == []
     assert db_stub.enqueue_job_calls == []
+
+
+# --- Plan 11 Task 3: a whole season gains an edition in one press ----------
+
+
+def _edition_mode_rows(
+    title_id: str = "same-title", *, count: int = 3, prefix: str = "Horimiya"
+) -> list[dict]:
+    return [
+        {
+            "source_path": f"{prefix}/{prefix} - {n:02d}.mkv",
+            "title_id": title_id,
+            "title_name": prefix,
+            "status": "active",
+            "slug": prefix.lower(),
+            "episode_id": f"ep{n}",
+            "edition_id": f"ed{n}",
+            "number": n,
+            "edition_kind": "remux",
+        }
+        for n in range(1, count + 1)
+    ]
+
+
+def _edition_form(**overrides) -> dict:
+    """A minimal, otherwise-valid edition-mode submission for the three-
+    file Horimiya fixture folder -- every row ticked, the folder's own
+    single audio track chosen, no subtitle burn, 2D, as-is. Each test
+    overrides only the fields its own scenario cares about, the same
+    convention `_horimiya_form` already establishes.
+    """
+    form = {
+        "group": "0",
+        "edition_mode": "1",
+        "edition_slug": "dub-ru",
+        "audio_choice": "embedded:0",
+        "subtitle_choice": "none",
+        "stereo_layout": "2d",
+        "include_0": "1",
+        "include_1": "1",
+        "include_2": "1",
+        "add": "1",
+    }
+    form.update(overrides)
+    for key, value in list(form.items()):
+        if value == "" and key.startswith("include_"):
+            del form[key]
+    return form
+
+
+async def test_edition_mode_reached_only_when_every_file_resolves_to_one_title(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = _edition_mode_rows()
+
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya?mode=edition")
+
+    assert resp.status_code == 200
+    assert "New edition for these episodes" in resp.text
+    assert 'name="edition_mode"' in resp.text
+
+
+async def test_edition_mode_falls_back_to_ordinary_screen_when_titles_differ(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    rows = _edition_mode_rows()
+    rows[1]["title_id"] = "a-different-title"
+    db_stub.already_added_rows = rows
+
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya?mode=edition")
+
+    assert resp.status_code == 200
+    assert 'name="edition_mode"' not in resp.text
+    assert "Confirm this series" in resp.text
+
+
+async def test_edition_mode_removes_season_banner_title_radio_and_name_fields(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = _edition_mode_rows()
+
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya?mode=edition")
+
+    assert 'name="title_mode"' not in resp.text
+    assert 'id="folder-name"' not in resp.text
+    assert 'id="folder-slug"' not in resp.text
+    assert 'id="edition-slug"' in resp.text
+    assert 'name="make_default"' in resp.text
+
+
+async def test_edition_mode_numbers_render_read_only(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = _edition_mode_rows()
+
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya?mode=edition")
+
+    assert resp.text.count("readonly") >= 3
+
+
+async def test_edition_mode_every_row_ticked_by_default(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = _edition_mode_rows()
+
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya?mode=edition")
+
+    assert resp.text.count("checked") >= 3  # three include boxes, no problem row
+
+
+async def test_edition_mode_mismatched_audio_row_is_highlighted_and_unticked(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(
+        routes_folder,
+        "probe",
+        _probe_dispatch(
+            {
+                "Horimiya - 01.mkv": "compatible.json",
+                "Horimiya - 02.mkv": "multitrack.json",
+                "Horimiya - 03.mkv": "compatible.json",
+            }
+        ),
+    )
+    db_stub.already_added_rows = _edition_mode_rows()
+
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya?mode=edition")
+
+    assert "folder-file-row--highlighted" in resp.text
+    assert "track differs from the folder" in resp.text
+
+
+async def test_edition_mode_incompatible_row_shows_its_own_reason(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(
+        routes_folder,
+        "probe",
+        _probe_dispatch(
+            {
+                "Horimiya - 01.mkv": "compatible.json",
+                "Horimiya - 02.mkv": "hevc.json",
+                "Horimiya - 03.mkv": "compatible.json",
+            }
+        ),
+    )
+    db_stub.already_added_rows = _edition_mode_rows()
+
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya?mode=edition")
+
+    section = re.search(
+        r'data-preview-path="Horimiya/Horimiya - 02\.mkv".*?</div>\s*</div>',
+        resp.text,
+        re.S,
+    ).group(0)
+    assert "Only H.264 can be added as-is" in section
+
+
+async def test_edition_mode_slug_taken_row_shows_its_own_reason_and_is_unticked(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = _edition_mode_rows()
+    db_stub.slug_taken_episode_ids = {"ep2"}
+
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya?mode=edition")
+
+    assert "This episode already has an edition" in resp.text
+
+
+async def test_edition_mode_slug_is_checked_against_every_target_episode_at_render_time(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = _edition_mode_rows()
+    db_stub.slug_taken_episode_ids = {"ep1", "ep3"}
+
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya?mode=edition")
+
+    assert resp.text.count("This episode already has an edition") == 2
+
+
+async def test_edition_mode_default_when_ready_checkbox_off_by_default(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = _edition_mode_rows()
+
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya?mode=edition")
+
+    make_default_tag = resp.text.split('name="make_default"')[1].split(">")[0]
+    assert "checked" not in make_default_tag
+
+
+async def test_edition_mode_save_writes_one_edition_and_one_job_per_ticked_row(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = _edition_mode_rows()
+    form = _edition_form(include_1="")  # row 2 (episode 2) unticked
+
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+
+    assert resp.status_code == 302
+    assert len(db_stub.add_edition_to_episode_calls) == 2
+    assert len(db_stub.enqueue_job_calls) == 2
+    written_episodes = {c["episode_id"] for c in db_stub.add_edition_to_episode_calls}
+    assert written_episodes == {"ep1", "ep3"}
+    for call in db_stub.add_edition_to_episode_calls:
+        assert call["slug"] == "dub-ru"
+        assert call["status"] == "preparing"
+
+
+async def test_edition_mode_default_when_ready_applies_per_episode_not_at_save(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = _edition_mode_rows()
+    form = _edition_form(make_default="1")
+
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+
+    assert resp.status_code == 302
+    # The pointer request rides on the job, not on the edition write --
+    # add_edition_to_episode never touches default_edition_id (D-178).
+    assert len(db_stub.enqueue_job_calls) == 3
+    for call in db_stub.enqueue_job_calls:
+        assert call["make_default_when_ready"] is True
+    for call in db_stub.add_edition_to_episode_calls:
+        assert "default_edition_id" not in call
+
+
+async def test_edition_mode_eleven_of_twelve_produces_eleven_editions_and_leaves_one_out(
+    web_client, monkeypatch, db_stub
+):
+    probe_map = {f"Season - {n:02d}.mkv": "compatible.json" for n in range(1, 13)}
+    monkeypatch.setattr(routes_folder, "probe", _probe_dispatch(probe_map))
+    db_stub.already_added_rows = _edition_mode_rows(count=12, prefix="Season")
+
+    form = {
+        "group": "0",
+        "edition_mode": "1",
+        "edition_slug": "dub-ru",
+        "audio_choice": "embedded:0",
+        "subtitle_choice": "none",
+        "stereo_layout": "2d",
+        "add": "1",
+        **{f"include_{i}": "1" for i in range(11)},  # every row but the twelfth
+    }
+
+    async with web_client:
+        get_resp = await web_client.get("/add-folder/Season?mode=edition")
+        resp = await web_client.post("/add-folder/Season", data=form)
+
+    assert get_resp.status_code == 200
+    assert "New edition for these episodes" in get_resp.text
+    assert resp.status_code == 302
+    assert len(db_stub.add_edition_to_episode_calls) == 11
+    assert len(db_stub.enqueue_job_calls) == 11
+    written_episodes = {c["episode_id"] for c in db_stub.add_edition_to_episode_calls}
+    assert "ep12" not in written_episodes
+    assert len(written_episodes) == 11
+
+
+async def test_edition_mode_refusal_preserves_the_batchs_choices(web_client, monkeypatch, db_stub):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = _edition_mode_rows()
+    # Nothing ticked at all -- the simplest save-blocked case -- with a
+    # hand-typed slug that must survive the re-render.
+    form = _edition_form(include_0="", include_1="", include_2="", edition_slug="dub-ru-signed")
+
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+
+    assert resp.status_code == 200
+    assert db_stub.add_edition_to_episode_calls == []
+    assert 'value="dub-ru-signed"' in resp.text
+    assert "No files selected." in resp.text

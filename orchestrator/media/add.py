@@ -436,3 +436,68 @@ async def plan_edition_slug(conn: asyncpg.Connection, episode_id, explicit_slug:
     if await queries.edition_slug_taken_on_episode(conn, episode_id, chosen):
         raise EditionSlugTaken(chosen)
     return chosen
+
+
+# --- The folder confirmation screen's edition-only mode (plan 11, D-176) ---
+
+
+def validate_edition_folder_submission(
+    *, target_ok: bool, action: str, rows: list[dict]
+) -> FolderValidation:
+    """The folder confirmation screen's edition-only mode (Screen B',
+    D-176), its own save-blocked rule -- the narrower twin of
+    `validate_folder_submission`: every row here already names a real,
+    existing episode of the one target title (there is no title mode, no
+    "moved" row and no missing/duplicate number to check, since a read-only
+    number came straight off an episode that already claims it), so only
+    three things can still block a save.
+
+    `rows` is one plain dict per row in the folder's own listing order, the
+    same shape `validate_folder_submission`'s own docstring describes for
+    `ticked`/`highlighted`/`audio_resolved`/`subtitle_resolved`/
+    `compatible`, plus `slug_taken` (D-177: this batch's one edition slug
+    already names an edition of this row's own target episode).
+
+    Checked in save-blocked order, first violation wins:
+
+    1. Nothing ticked at all -> `folder.action.none_checked`.
+    2. The target title is no longer real or no longer active (a stale
+       page, or a submission bypassing the page entirely) ->
+       `folder.validation.blocked`, no row singled out.
+    3. A highlighted row, still ticked, with no explicit track choice yet
+       for either kind -> same key.
+    4. A ticked row whose target episode already has an edition under this
+       batch's own slug -> same key (`edition.slug.taken_on_episode` is the
+       inline per-row reason, read in the template rather than here, the
+       same way `library.renumber.taken` already is on Screen B).
+    5. Only for `action == "add"` (D-174's identical rule): a ticked,
+       incompatible row -> `folder.incompatible.hint`.
+
+    `ok=True` only once every ticked row has cleared every rule above.
+    """
+    ticked = [row for row in rows if row["ticked"]]
+
+    if not ticked:
+        return FolderValidation(False, "folder.action.none_checked", frozenset())
+
+    if not target_ok:
+        return FolderValidation(False, "folder.validation.blocked", frozenset())
+
+    unresolved = frozenset(
+        row["index"]
+        for row in ticked
+        if row["highlighted"] and not (row["audio_resolved"] and row["subtitle_resolved"])
+    )
+    if unresolved:
+        return FolderValidation(False, "folder.validation.blocked", unresolved)
+
+    taken = frozenset(row["index"] for row in ticked if row.get("slug_taken"))
+    if taken:
+        return FolderValidation(False, "folder.validation.blocked", taken)
+
+    if action == "add":
+        incompatible = frozenset(row["index"] for row in ticked if not row["compatible"])
+        if incompatible:
+            return FolderValidation(False, "folder.incompatible.hint", incompatible)
+
+    return FolderValidation(True)
