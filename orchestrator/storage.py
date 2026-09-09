@@ -20,10 +20,18 @@ from orchestrator.config import get_settings
 logger = logging.getLogger(__name__)
 
 # D-67: storage_usage() lists the whole bucket, which is too expensive to
-# do on every page render. Sixty seconds is short enough that a fresh add
-# shows up in the header within one reload, long enough that navigating
-# the library never triggers a second full enumeration.
+# do on every page render. This process's own writes clear the cache
+# themselves (see invalidate_usage_cache, called from put_object_from_file
+# and delete_object below), so sixty seconds is no longer the window in
+# which a write this process just made stays invisible -- it is now only
+# the ceiling on how stale a listing can get from a change this process
+# never saw: another writer's upload or delete.
 _USAGE_CACHE_SECONDS = 60.0
+# ponytail: this cache lives in one process. A second interface replica
+# would keep its own copy and stay up to sixty seconds behind the bucket
+# -- exactly as stale as every replica already is today, and the
+# namespace runs one. Upgrade path if that ever changes: a shared store
+# (Redis, a DB row) or no cache at all.
 _usage_cache: dict = {"usage": None, "expires_at": 0.0}
 
 
@@ -52,6 +60,10 @@ def put_object_from_file(path: str, key: str, content_type: str = "video/mp4") -
     get_s3_client().upload_file(
         path, settings.s3_bucket, key, ExtraArgs={"ContentType": content_type}
     )
+    # The bucket just changed under this process -- see
+    # invalidate_usage_cache's own docstring for why the call lives here
+    # rather than at every caller.
+    invalidate_usage_cache()
 
 
 def get_object_bytes(key: str) -> bytes:
@@ -91,6 +103,10 @@ def head_object(key: str) -> dict:
 def delete_object(key: str) -> None:
     settings = get_settings()
     get_s3_client().delete_object(Bucket=settings.s3_bucket, Key=key)
+    # The bucket just changed under this process -- see
+    # invalidate_usage_cache's own docstring for why the call lives here
+    # rather than at every caller.
+    invalidate_usage_cache()
 
 
 def abort_dangling_multipart(key: str) -> None:
@@ -225,6 +241,22 @@ def storage_usage() -> StorageUsage:
     _usage_cache["usage"] = usage
     _usage_cache["expires_at"] = now + _USAGE_CACHE_SECONDS
     return usage
+
+
+def invalidate_usage_cache() -> None:
+    """Clears the cached bucket listing so the next `storage_usage()`
+    call re-lists the bucket instead of returning a stale answer.
+
+    Called from inside `put_object_from_file` and `delete_object`, never
+    at their call sites. Every path that changes this bucket from this
+    process -- the reaper's delete sweep, the purge route, the
+    failed-title cleanup, the CLI, the in-process remux consumer, the
+    poster upload -- reaches the bucket only through those two functions,
+    so one call inside each covers all of them, and a caller written
+    later is covered without ever being told this problem exists.
+    """
+    _usage_cache["usage"] = None
+    _usage_cache["expires_at"] = 0.0
 
 
 @dataclass(frozen=True)
