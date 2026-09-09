@@ -974,3 +974,87 @@ async def test_the_queue_position_is_counted_within_a_kind(db_conn):
 
     ahead = await queries.count_queued_ahead(db_conn, transcode_id)
     assert ahead == 0
+
+
+# --- Queue order across a one-transaction batch (migration 0008) --------
+
+
+async def test_eleven_jobs_enqueued_in_one_transaction_get_distinct_positions_through_library_rows(
+    db_conn,
+):
+    """A folder save enqueues every episode's job inside one transaction,
+    which used to tie every job's `created_at` to the same frozen instant
+    -- "created earlier" then counted nothing, for any of them, and the
+    position rendered on the screen read zero on every row. Asserted
+    through `library_rows`, the query the screen actually reads:
+    `count_queued_ahead` has no production caller at all, and a
+    regression aimed only at it can pass while the screen still shows
+    zeros. `db_conn`'s own wrapping transaction is what freezes the clock
+    here -- the exact condition being regressed, not something extra
+    arranged for the test.
+    """
+    title_ids = []
+    for i in range(11):
+        title_id, edition_id = await _title_and_edition(db_conn, f"batch-{i}")
+        title_ids.append(title_id)
+        await queries.enqueue_job(
+            db_conn, kind="transcode", title_id=title_id, edition_id=edition_id
+        )
+
+    rows = await queries.library_rows(db_conn)
+    positions = [row["job_queued_ahead"] for row in rows if row["title_id"] in title_ids]
+
+    assert len(positions) == 11
+    assert sorted(positions) == list(range(11))
+
+
+async def test_count_queued_ahead_also_resolves_ties_on_the_two_column_key(db_conn):
+    """Companion to the row-level test above: nothing in production calls
+    `count_queued_ahead`, but its own tie-breaking on `(created_at, id)`
+    is exercised directly too, against the identical one-transaction tie.
+    """
+    job_ids = []
+    for i in range(4):
+        title_id, edition_id = await _title_and_edition(db_conn, f"count-tie-{i}")
+        job_id = await queries.enqueue_job(
+            db_conn, kind="transcode", title_id=title_id, edition_id=edition_id
+        )
+        job_ids.append(job_id)
+
+    ahead = [await queries.count_queued_ahead(db_conn, job_id) for job_id in job_ids]
+    assert sorted(ahead) == [0, 1, 2, 3]
+
+
+async def test_claim_order_matches_the_promised_positions(db_conn):
+    """The claim order is asserted behaviourally, never by matching source
+    text: with tied rows seeded (the same one-transaction condition as the
+    tests above), repeated `claim_job` calls return them in exactly the
+    sequence the promised positions predicted. Claims until the queue is
+    empty, on the same single connection that seeded the batch -- a second
+    connection would open a second transaction and un-freeze the clock,
+    making the tie this test needs unreproducible (see this module's own
+    `worker_conns` fixture docstring for why the claiming tests need two
+    connections for a different reason: neither reason applies here).
+    """
+    entries = []
+    for i in range(5):
+        title_id, edition_id = await _title_and_edition(db_conn, f"claim-order-{i}")
+        job_id = await queries.enqueue_job(
+            db_conn, kind="transcode", title_id=title_id, edition_id=edition_id
+        )
+        entries.append((title_id, job_id))
+
+    ahead = {
+        job_id: await queries.count_queued_ahead(db_conn, job_id) for _, job_id in entries
+    }
+    expected_order = [job_id for job_id, _ in sorted(ahead.items(), key=lambda kv: kv[1])]
+
+    claimed_order = []
+    for _ in entries:
+        claimed = await queries.claim_job(
+            db_conn, kind="transcode", worker_name="order-checker"
+        )
+        assert claimed is not None
+        claimed_order.append(claimed["id"])
+
+    assert claimed_order == expected_order

@@ -671,9 +671,14 @@ _LIBRARY_ROW_FROM = """
                j.eta_seconds AS job_eta_seconds,
                j.cancel_requested AS job_cancel_requested,
                (
+                   -- (created_at, id), not created_at alone (migration
+                   -- 0008): a folder save enqueues every episode's job in
+                   -- one transaction, tying created_at for the whole
+                   -- batch, so a single-column "created earlier" counts
+                   -- nothing for any of them. See count_queued_ahead.
                    SELECT count(*) FROM jobs j2
                    WHERE j2.status = 'queued' AND j2.kind = j.kind
-                     AND j2.created_at < j.created_at
+                     AND (j2.created_at, j2.id) < (j.created_at, j.id)
                ) AS job_queued_ahead,
                (
                    SELECT enh.number FROM editions je
@@ -2768,9 +2773,12 @@ _PLAYLIST_ROW_FROM = """
                j.eta_seconds AS job_eta_seconds,
                j.cancel_requested AS job_cancel_requested,
                (
+                   -- (created_at, id), not created_at alone -- see the
+                   -- identical comment on the job LATERAL of
+                   -- _LIBRARY_ROW_FROM above and count_queued_ahead.
                    SELECT count(*) FROM jobs j2
                    WHERE j2.status = 'queued' AND j2.kind = j.kind
-                     AND j2.created_at < j.created_at
+                     AND (j2.created_at, j2.id) < (j.created_at, j.id)
                ) AS job_queued_ahead
         FROM jobs j
         WHERE j.playlist_id = p.id AND j.status IN ('queued', 'running')
@@ -3657,13 +3665,18 @@ async def claim_job(
     (WORK-03). Skipping locked rows rather than waiting on them means a
     slow or wedged claimer never blocks any other claimer behind it
     (T-04-15).
+
+    Ordered by `(created_at, id)`, the same two-column key
+    `count_queued_ahead` and every live-job reader compare on (migration
+    0008) -- the row this hands to a worker is always the row the
+    interface just told an operator was next.
     """
     return await conn.fetchrow(
         """
         WITH next_job AS (
             SELECT id FROM jobs
             WHERE status = 'queued' AND kind = $1
-            ORDER BY created_at
+            ORDER BY created_at, id
             FOR UPDATE SKIP LOCKED
             LIMIT 1
         )
@@ -3912,13 +3925,26 @@ async def count_queued_ahead(conn: asyncpg.Connection, job_id) -> int:
     one (D-118) -- counted within a kind so a playlist assembly never
     appears to be ahead of a conversion in the position an operator is
     told.
+
+    Compared on the two-column key `(created_at, id)`, not `created_at`
+    alone (migration 0008): a folder save enqueues every episode's job
+    inside one transaction, and the frozen clock ties every row of that
+    batch to one timestamp, so "created earlier" alone counts nothing for
+    any of them. The identifier only ever breaks a genuine tie, and
+    `claim_job` below claims in this exact order, so a position shown here
+    is never a promise the converter breaks. The reference row's kind,
+    timestamp and id are read together in one subquery rather than three
+    separate ones.
     """
     return await conn.fetchval(
         """
-        SELECT count(*) FROM jobs
-        WHERE status = 'queued'
-          AND kind = (SELECT kind FROM jobs WHERE id = $1)
-          AND created_at < (SELECT created_at FROM jobs WHERE id = $1)
+        WITH ref AS (
+            SELECT kind AS ref_kind, created_at AS ref_created_at, id AS ref_id
+            FROM jobs WHERE id = $1
+        )
+        SELECT count(*) FROM jobs, ref
+        WHERE status = 'queued' AND kind = ref_kind
+          AND (created_at, id) < (ref_created_at, ref_id)
         """,
         job_id,
     )
