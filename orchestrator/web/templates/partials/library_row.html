@@ -1,4 +1,4 @@
-{% from "partials/icons.html" import copy as copy_icon, film_placeholder, queue_placeholder %}
+{% from "partials/icons.html" import copy as copy_icon, film_placeholder, queue_placeholder, chevron_down %}
 {#
   One Library row. Two kinds share this partial (D-108): a video row, in
   all four of its own states (D-60, 02-UI-SPEC.md Screen 3 and States),
@@ -28,6 +28,20 @@
   stage in a second attribute, data-job-stage, which is what the chip
   dispatch below actually reads. Teaching the poller a word per stage
   would be more code for identical behaviour.
+
+  A video row with more than one episode (row.is_series, 05-UI-SPEC.md
+  Screen D) is the one place data-row-status stops being a plain copy of
+  row.title_status: readiness lives on the episode and its edition now
+  (D-157), so a series can be "active" (its first episode is ready)
+  while a later one is still converting, and the row must keep polling
+  through that combination rather than stopping the moment the title
+  itself turns active. `row.episodes` (partials/episode_row.html, one
+  {% include %} per entry) and the outer `<details class="episode-list">`
+  wrapping them each carry `data-episode-id` -- the outer disclosure
+  carries the title id (there is exactly one such disclosure per row in
+  this phase), each episode row its own episode id -- which is the key
+  static/app.js's poller matches an open state and a focused control
+  against across every 4-second replacement.
 #}
 {% if row.kind == "playlist" %}
 {# The pending-delete state reuses the video row's markup verbatim, and
@@ -155,7 +169,7 @@
   {% endif %}
 </li>
 {% else %}
-<li class="library-row{% if row.title_status == 'failed' %} library-row--failed{% endif %}" data-title-id="{{ row.title_id }}" data-row-status="{{ row.title_status }}"{% if row.job_stage %} data-job-stage="{{ row.job_stage }}"{% endif %} data-row-url="/library/{{ row.title_id }}/row"{% if row.title_status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
+<li class="library-row{% if row.title_status == 'failed' %} library-row--failed{% endif %}{% if row.is_series %} library-row--series{% endif %}" data-title-id="{{ row.title_id }}" data-row-status="{{ 'preparing' if row.is_series and row.job_stage else row.title_status }}"{% if row.job_stage %} data-job-stage="{{ row.job_stage }}"{% endif %} data-row-url="/library/{{ row.title_id }}/row"{% if row.title_status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
 {% if row.title_status == "failed" %}
   {# No thumbnail slot at all on a failed row (02-UI-SPEC.md States ->
      Failed): a failed add is heading for dismissal, not a future
@@ -188,7 +202,50 @@
   <div class="library-row__body">
     <h2 class="library-row__title">{{ row.title_name }}</h2>
 
-    {% if row.title_status == "active" %}
+    {% if row.is_series and row.job_stage %}
+      {# The one combination the pre-05-09 mutually-exclusive dispatch
+         below could not render (05-UI-SPEC.md Screen D item 2/3): a
+         series already playable from its first ready episode while
+         another one keeps converting. The address (once the title
+         itself is active) and the two chips render together -- the
+         aggregate sentence in the Preparing tint, then the in-flight
+         episode's own stage chip, composed from the identical six job-
+         progress keys the single-episode Preparing branch below already
+         uses verbatim. #}
+      {% if row.title_status == "active" %}
+        <p class="library-row__address">
+          {{ public_base_url }}/v/{{ row.slug }}
+          <button
+            type="button"
+            class="btn btn--ghost library-row__copy"
+            data-copy-text="{{ public_base_url }}/v/{{ row.slug }}"
+            data-copy-done-label="{{ t('library.cta.copy_link_done') }}"
+          >{{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}</button>
+        </p>
+      {% endif %}
+      <span class="chip chip--preparing">{{ t("library.status.aggregate").format(ready=row.ready_count, total=row.episode_count, number=row.job_episode_number) }}</span>
+      {% if row.job_stage == "waiting_for_converter" %}
+        <span class="chip chip--waiting">
+          {% if row.worker_name %}{{ t("library.status.waiting_for_converter_named").format(worker=row.worker_name, ago=row.worker_ago_text) }}
+          {% else %}{{ t("library.status.waiting_for_converter_none") }}{% endif %}
+        </span>
+      {% elif row.job_stage == "waiting_for_gpu" %}
+        <span class="chip chip--waiting">{{ t("library.status.waiting_for_gpu") }}</span>
+      {% elif row.job_stage == "working" %}
+        <span class="chip chip--preparing">{% if row.job_remaining_text %}{{ t("library.status.working").format(percent=row.job_percent, remaining=row.job_remaining_text) }}{% else %}{{ t("library.status.working_no_eta").format(percent=row.job_percent) }}{% endif %}</span>
+      {% elif row.job_stage == "uploading" %}
+        <span class="chip chip--preparing">{{ t("library.status.uploading").format(percent=row.job_percent) }}</span>
+      {% elif row.job_stage == "cancelling" %}
+        <span class="chip chip--cancelling">{{ t("library.status.cancelling") }}</span>
+      {% else %}
+        <span class="chip chip--preparing">{{ t("library.status.queued").format(n=row.job_queued_ahead or 0) }}</span>
+      {% endif %}
+      {% if row.title_status != "active" %}
+        <button type="button" class="btn btn--ghost library-row__copy" disabled aria-disabled="true">
+          {{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}
+        </button>
+      {% endif %}
+    {% elif row.title_status == "active" %}
       {# The absence of a status chip on a finished row IS the done
          signal (02-UI-SPEC.md Color, Active/done row). #}
       <p class="library-row__address">
@@ -240,27 +297,44 @@
        write. Rendering the line anyway raises on the first format filter,
        and because the page renders rows in a loop, one such title takes
        the whole Library down rather than just its own row. The address
-       above is the row's reason to exist and shows either way. #}
-    {% if row.title_status in ("active", "pending_delete")
-          and row.size_bytes is not none and row.duration_seconds is not none
-          and row.width and row.height %}
-      <p class="library-row__detail">
-        {{ row.size_bytes | filesizeformat_binary }}
-        &middot; {{ row.duration_seconds | duration_hms }}
-        &middot; {{ row.width }}&times;{{ row.height }}
-        &middot; {{ row.audio_language or t("add.track.language_unknown") }}{% if row.audio_title %} - {{ row.audio_title }}{% endif %}
-        &middot; {% if row.audio_reencoded %}{{ t("library.detail.audio_reencoded") }}{% else %}{{ t("library.detail.audio_untouched") }}{% endif %}
-        {% if row.source_codec %}
-          &middot; {{ t("library.detail.converted_from").format(codec=row.source_codec) }}
-          {% if row.output_bytes_per_second is not none %}&middot; {{ row.output_bytes_per_second | filesizeformat_binary }}/s{% endif %}
-          {% if row.subtitle_burned_language or row.subtitle_burned_title %}
-            &middot; {{ t("library.detail.subtitles_burned").format(language=row.subtitle_burned_language or t("add.track.language_unknown"), title=row.subtitle_burned_title or "") }}
+       above is the row's reason to exist and shows either way.
+
+       A series (row.is_series) re-scopes this line to the facts true of
+       the whole season -- resolution, audio language, episode count
+       (05-UI-SPEC.md Screen D item 1) -- size and duration are per-
+       edition facts and move down to each episode row instead, since the
+       lowest episode's own size read as the season's would simply be
+       wrong. #}
+    {% if not row.is_series %}
+      {% if row.title_status in ("active", "pending_delete")
+            and row.size_bytes is not none and row.duration_seconds is not none
+            and row.width and row.height %}
+        <p class="library-row__detail">
+          {{ row.size_bytes | filesizeformat_binary }}
+          &middot; {{ row.duration_seconds | duration_hms }}
+          &middot; {{ row.width }}&times;{{ row.height }}
+          &middot; {{ row.audio_language or t("add.track.language_unknown") }}{% if row.audio_title %} - {{ row.audio_title }}{% endif %}
+          &middot; {% if row.audio_reencoded %}{{ t("library.detail.audio_reencoded") }}{% else %}{{ t("library.detail.audio_untouched") }}{% endif %}
+          {% if row.source_codec %}
+            &middot; {{ t("library.detail.converted_from").format(codec=row.source_codec) }}
+            {% if row.output_bytes_per_second is not none %}&middot; {{ row.output_bytes_per_second | filesizeformat_binary }}/s{% endif %}
+            {% if row.subtitle_burned_language or row.subtitle_burned_title %}
+              &middot; {{ t("library.detail.subtitles_burned").format(language=row.subtitle_burned_language or t("add.track.language_unknown"), title=row.subtitle_burned_title or "") }}
+            {% endif %}
           {% endif %}
-        {% endif %}
-        {% if row.stereo_layout and row.stereo_layout != "2d" %}
-          <span class="chip chip--3d">{{ t("layout.badge.sbs") if row.stereo_layout.startswith("sbs") else t("layout.badge.ou") }}</span>
-        {% endif %}
-      </p>
+          {% if row.stereo_layout and row.stereo_layout != "2d" %}
+            <span class="chip chip--3d">{{ t("layout.badge.sbs") if row.stereo_layout.startswith("sbs") else t("layout.badge.ou") }}</span>
+          {% endif %}
+        </p>
+      {% endif %}
+    {% else %}
+      {% if row.title_status in ("active", "pending_delete") and row.width and row.height %}
+        <p class="library-row__detail">
+          {{ row.width }}&times;{{ row.height }}
+          &middot; {{ row.audio_language or t("add.track.language_unknown") }}{% if row.audio_title %} - {{ row.audio_title }}{% endif %}
+          &middot; {{ t("library.row.episode_count").format(n=row.episode_count) }}
+        </p>
+      {% endif %}
     {% endif %}
   </div>
 
@@ -287,6 +361,37 @@
         <button type="submit" class="btn btn--destructive-outline">{{ t("library.cta.cancel") }}</button>
       </form>
     </div>
+  {% endif %}
+
+  {% if row.is_series %}
+    {# The series' own disclosure (05-UI-SPEC.md Screen D item 3): a full-
+       width flex child of this <li> (library-row--series above sets
+       flex-wrap: wrap so it drops to a line of its own under the
+       thumbnail/body/actions trio), never nested inside .library-row__body.
+       Default-open only on the initial page render (row.episode_list_
+       default_open, unset -- and so falsy -- on a poll fragment, see
+       routes_titles._attach_series_episodes): open when any episode is
+       in-flight or has failed, closed otherwise, so a conversion is never
+       hidden and a settled season stays dense. data-episode-id here holds
+       the title id -- this row has exactly one disclosure -- and is what
+       static/app.js matches an open state against across a poll's
+       row.replaceWith(). #}
+    <details class="episode-list" data-episode-id="{{ row.title_id }}"{% if row.episode_list_default_open %} open{% endif %}>
+      <summary>
+        {{ chevron_down(cls="episode-list__chevron") }}
+        {% if row.failed_count %}
+          {{ t("episode.list.summary_failed").format(n=row.episode_count, m=row.failed_count) }}
+          <span class="chip chip--refused">{{ row.failed_count }}</span>
+        {% else %}
+          {{ t("episode.list.summary").format(n=row.episode_count) }}
+        {% endif %}
+      </summary>
+      <ul class="episode-list__body">
+        {% for episode in row.episodes %}
+          {% include "partials/episode_row.html" %}
+        {% endfor %}
+      </ul>
+    </details>
   {% endif %}
 {% endif %}
 </li>

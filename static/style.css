@@ -594,6 +594,96 @@ button.site-nav__link {
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+/* Series row expansion (05-UI-SPEC.md Screen D items 1-4). No new colour
+   or spacing token anywhere below -- every tint and gap already exists
+   for a matching meaning elsewhere in this file. */
+.library-row--series {
+  flex-wrap: wrap;
+}
+
+/* Full-width flex child of .library-row, not nested in .library-row__body
+   -- library-row--series's own flex-wrap is what drops it to a line of
+   its own under the thumbnail/body/actions trio. */
+.episode-list {
+  flex-basis: 100%;
+}
+
+.episode-list > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  cursor: pointer;
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+}
+
+/* The reused chevron_down icon rotates to chevron_up's own orientation on
+   [open] -- no second icon macro needed (05-UI-SPEC.md Screen D item 3). */
+.episode-list__chevron {
+  transition: transform 0.15s ease;
+}
+
+.episode-list[open] > summary .episode-list__chevron {
+  transform: rotate(180deg);
+}
+
+.episode-list__body {
+  list-style: none;
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  border-top: 1px solid var(--surface-secondary-border);
+}
+
+/* Episode row (Component Inventory): the .member-row density (44px
+   floor), two lines instead of one. */
+.episode-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-height: 44px;
+  padding: var(--space-sm) var(--space-xs);
+  border-bottom: 1px solid var(--surface-secondary-border);
+}
+
+/* The failed left-border-plus-tint only -- never library-row--failed,
+   whose thumbnail removal and min-height reset mean nothing here. */
+.episode-row--failed {
+  border-left: 4px solid var(--destructive);
+  background: var(--status-failed-bg);
+}
+
+.episode-row__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.episode-row__number {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.episode-row__address {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.episode-row__detail {
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+}
+
+.episode-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-sm);
 }
 

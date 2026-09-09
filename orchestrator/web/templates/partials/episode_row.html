@@ -1,0 +1,84 @@
+{#
+  One episode inside a series' <details class="episode-list"> (05-UI-
+  SPEC.md Screen D item 4) -- always included from partials/library_row.html
+  inside a `{% for episode in row.episodes %}` loop, so `row` (the title)
+  and `episode` (this one entry) are both in scope, the same context-
+  sharing {% include %} already used elsewhere in this codebase.
+
+  Two lines. `.episode-row__head` carries the episode number, the default
+  edition's own address (this episode's own number, not the title's
+  bare address -- copyable and, once ready, playable on its own), its
+  copy button, its own stage chip (the identical six-key job-progress
+  dispatch the title row's own Preparing branch already uses, reused
+  verbatim per episode rather than composed into a new key) and, once
+  settled, its size and duration -- the per-edition facts D-163 moves
+  down from the title row. `.episode-row__actions` carries what this
+  plan gives an episode row today: Check. Edit number, Add edition and
+  Delete episode are a later plan's own slots into this same cluster,
+  which is why the actions line is already `flex-wrap: wrap` and each
+  control carries `data-control` rather than relying on name/class
+  alone to stay distinguishable once more controls land beside it.
+  During an in-flight stage the actions line collapses to Cancel alone,
+  the identical rule the title row's own actions already follow.
+
+  `episode` carries the raw columns `queries.episodes_for_library`
+  fetches, plus `job_stage`/`job_percent`/`job_remaining_text`/
+  `worker_ago_text` (`derive_job_ui`, applied per episode by
+  `routes_titles._group_episodes_by_title`) and `failed` (this episode's
+  own default edition status). `data-episode-id` is this episode's own
+  id -- static/app.js's poller scopes a focused control's identity to
+  the nearest ancestor carrying this attribute, so two episodes' own
+  otherwise-identical copy buttons are never confused for one another
+  across a poll's row replacement.
+#}
+{% set address = public_base_url ~ "/v/" ~ row.slug ~ "/" ~ episode.number %}
+<li class="episode-row{% if episode.failed %} episode-row--failed{% endif %}" data-episode-id="{{ episode.episode_id }}">
+  <div class="episode-row__head">
+    <span class="episode-row__number">{{ episode.number }}</span>
+    <span class="episode-row__address">{{ address }}</span>
+    <button
+      type="button"
+      class="btn btn--ghost library-row__copy"
+      data-control="copy"
+      data-copy-text="{{ address }}"
+      data-copy-done-label="{{ t('library.cta.copy_link_done') }}"
+      {% if episode.edition_status != "active" %}disabled aria-disabled="true"{% endif %}
+    >{{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}</button>
+
+    {% if episode.job_stage == "waiting_for_converter" %}
+      <span class="chip chip--waiting">
+        {% if episode.worker_name %}{{ t("library.status.waiting_for_converter_named").format(worker=episode.worker_name, ago=episode.worker_ago_text) }}
+        {% else %}{{ t("library.status.waiting_for_converter_none") }}{% endif %}
+      </span>
+    {% elif episode.job_stage == "waiting_for_gpu" %}
+      <span class="chip chip--waiting">{{ t("library.status.waiting_for_gpu") }}</span>
+    {% elif episode.job_stage == "working" %}
+      <span class="chip chip--preparing">{% if episode.job_remaining_text %}{{ t("library.status.working").format(percent=episode.job_percent, remaining=episode.job_remaining_text) }}{% else %}{{ t("library.status.working_no_eta").format(percent=episode.job_percent) }}{% endif %}</span>
+    {% elif episode.job_stage == "uploading" %}
+      <span class="chip chip--preparing">{{ t("library.status.uploading").format(percent=episode.job_percent) }}</span>
+    {% elif episode.job_stage == "cancelling" %}
+      <span class="chip chip--cancelling">{{ t("library.status.cancelling") }}</span>
+    {% elif episode.job_stage %}
+      <span class="chip chip--preparing">{{ t("library.status.queued").format(n=episode.job_queued_ahead or 0) }}</span>
+    {% elif episode.failed %}
+      <span class="chip chip--refused">{{ t("failed.reason_prefix").format(reason=t(episode.edition_failure_reason or "failed.reason.unknown")) }}</span>
+    {% endif %}
+
+    {% if not episode.job_stage and episode.size_bytes is not none and episode.duration_seconds is not none %}
+      <span class="episode-row__detail">
+        {{ episode.size_bytes | filesizeformat_binary }}
+        &middot; {{ episode.duration_seconds | duration_hms }}
+      </span>
+    {% endif %}
+  </div>
+
+  <div class="episode-row__actions">
+    {% if episode.job_stage and episode.job_stage != "cancelling" %}
+      <form method="post" action="/library/{{ row.title_id }}/cancel" data-confirm="{{ t('library.cancel.confirm') }}">
+        <button type="submit" class="btn btn--destructive-outline" data-control="cancel">{{ t("library.cta.cancel") }}</button>
+      </form>
+    {% elif episode.job_stage != "cancelling" %}
+      <a class="btn btn--ghost" href="/check/{{ row.slug }}" data-control="check">{{ t("library.cta.check") }}</a>
+    {% endif %}
+  </div>
+</li>
