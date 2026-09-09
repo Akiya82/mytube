@@ -173,14 +173,21 @@ button.site-nav__link {
   font-weight: var(--text-heading-weight);
 }
 
+/* The page is fluid (05-UI-SPEC.md Design System, page width): no maximum
+   width, the viewport minus one --space-lg on each side, at 1024px,
+   1920px and 3440px alike. The 960px cap that lived here from the first
+   library screen on was never part of any contract; it left half of a
+   1080p monitor empty and, once the library row grew a fourth action,
+   crushed the row's text column to a sliver. The only surfaces that cap
+   their own width are reading surfaces: .page--narrow below and the check
+   page's player and captions. */
 .page {
-  max-width: 960px;
   margin: 0 auto;
   padding: var(--space-xl) var(--space-lg) var(--space-3xl);
 }
 
 /* The login and create-password screens (02.1-UI-SPEC.md Screens A/B).
-   Without this, the heading and error banner span the full 960px page
+   Without this, the heading and error banner span the full-width page
    while the .auth-card sits at 400px in the middle -- three widths on two
    axes, reading as a broken layout rather than a chosen one. One class
    puts the heading, the banner and the card in one 400px column. */
@@ -514,8 +521,13 @@ button.site-nav__link {
   gap: var(--space-sm);
 }
 
+/* The row wraps (05-UI-SPEC.md Design System, row layout rule): when the
+   thumbnail, the text column and the action cluster do not fit on one
+   line, the actions drop to a line of their own under the text, rather
+   than the text column giving way. */
 .library-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-md);
   min-height: 104px;
@@ -553,10 +565,16 @@ button.site-nav__link {
 }
 
 .library-row__body {
-  flex: 1;
+  /* The text column is the one that grows, and it never shrinks below
+     320px: with a basis of 0 it took whatever four non-shrinking action
+     buttons left over, which inside a 960px page was 77px. */
+  flex: 1 1 320px;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* Children keep their own width: a status chip is a chip, not a bar
+     across a 1920px (or 3440px) column. */
+  align-items: flex-start;
   gap: var(--space-xs);
 }
 
@@ -592,6 +610,8 @@ button.site-nav__link {
 
 .library-row__actions {
   flex-shrink: 0;
+  /* Right-aligned on a line of its own too, once the row has wrapped. */
+  margin-left: auto;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -600,14 +620,13 @@ button.site-nav__link {
 
 /* Series row expansion (05-UI-SPEC.md Screen D items 1-4). No new colour
    or spacing token anywhere below -- every tint and gap already exists
-   for a matching meaning elsewhere in this file. */
-.library-row--series {
-  flex-wrap: wrap;
-}
+   for a matching meaning elsewhere in this file. library-row--series
+   itself needs no rule: every .library-row wraps, and the class stays in
+   the markup as the marker the template and the tests read. */
 
 /* Full-width flex child of .library-row, not nested in .library-row__body
-   -- library-row--series's own flex-wrap is what drops it to a line of
-   its own under the thumbnail/body/actions trio. */
+   -- the row's own flex-wrap is what drops it to a line of its own under
+   the thumbnail/body/actions trio. */
 .episode-list {
   flex-basis: 100%;
 }
