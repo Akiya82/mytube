@@ -324,6 +324,23 @@ async def heartbeat_route(job_id: uuid.UUID, request: Request, body: HeartbeatBo
                 eta_seconds=body.eta_seconds,
                 realtime_factor=body.realtime_factor,
             )
+            if row is not None:
+                # This is the fix for the stale-while-busy defect: while
+                # a converter holds a job it stops polling /worker/claim,
+                # so claim_route's own check-in call freezes at the
+                # moment of the claim and the interface reads a busy
+                # converter as one that vanished about a minute in. The
+                # guard above is the whole superseded-worker protection
+                # -- heartbeat_job's own WHERE clause returns a row only
+                # when the job id, the worker name, the attempt and the
+                # running state all still match, so an attempt that lost
+                # its job never reaches here to refresh a check-in its
+                # successor now owns. The status is a literal this route
+                # chooses, never the request body's own status field --
+                # a crafted body can carry a value the check-in's own
+                # CHECK constraint would reject, and this route accepts
+                # no status from the converter at all.
+                await queries.record_worker_seen(conn, worker_name=body.worker, status="working")
     except Exception:
         logger.exception("heartbeat: could not write progress for job %s", job_id)
         row = None
@@ -416,6 +433,16 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
                     outcome="done",
                     realtime_factor=body.realtime_factor,
                 )
+                if wrote:
+                    # Alongside the terminal write, inside this same
+                    # transaction, not after it: the write is what
+                    # proves this report legitimate, and a rolled-back
+                    # report must leave no trace of a check-in it never
+                    # earned. Closes the window between the converter's
+                    # last heartbeat and its next claim poll -- a
+                    # converter that just finished and is about to ask
+                    # for work again is idle, not still "working".
+                    await queries.record_worker_seen(conn, worker_name=body.worker, status="idle")
                 if wrote and job_row is not None and job_row["title_id"] is not None:
                     await queries.set_edition_conversion_detail(
                         conn,
@@ -514,6 +541,10 @@ async def failed_route(job_id: uuid.UUID, request: Request, body: FailedBody):
                     outcome="failed",
                     reason_key=body.reason_key,
                 )
+                if wrote:
+                    # Same placement and reasoning as done_route's own
+                    # call above.
+                    await queries.record_worker_seen(conn, worker_name=body.worker, status="idle")
                 if wrote and job_row is not None and job_row["title_id"] is not None:
                     # D-157: the edition this job would have produced is
                     # what actually fails; the title's own aggregate
@@ -574,6 +605,10 @@ async def cancelled_route(job_id: uuid.UUID, request: Request, body: CancelledBo
                     attempt=body.attempt,
                     outcome="cancelled",
                 )
+                if wrote:
+                    # Same placement and reasoning as done_route's own
+                    # call above.
+                    await queries.record_worker_seen(conn, worker_name=body.worker, status="idle")
                 if wrote and job_row is not None and job_row["title_id"] is not None:
                     try:
                         await queries.delete_never_active_title(conn, job_row["title_id"])

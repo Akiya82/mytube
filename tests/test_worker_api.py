@@ -58,6 +58,16 @@ class _DummyConn:
     def transaction(self):
         return _DummyTransactionCtx()
 
+    async def execute(self, *args, **kwargs):
+        """`record_worker_seen` issues `conn.execute` for its upsert --
+        without this, every route that now reaches the check-in call
+        raises `AttributeError` inside the route's own broad exception
+        handler, turning heartbeats into false not-founds and terminal
+        reports into false retryable errors. Returns a plain command
+        status string, the shape asyncpg's own `execute` returns.
+        """
+        return "INSERT 0 1"
+
 
 class _DummyAcquireCtx:
     async def __aenter__(self):
@@ -607,6 +617,103 @@ async def test_a_conflict_on_a_job_that_is_already_done_deletes_nothing(monkeypa
     assert edition_object_key_called == [], "the key is never even looked up for a done job"
 
 
+# --- The check-in stops freezing at the moment of the claim (05-17) -----
+#
+# Each terminal report closes the window between the converter's last
+# heartbeat and its next claim poll: a converter that just finished (or
+# was cancelled, or gave up) is idle, not still "working" as the last
+# heartbeat left it. Refreshed only on the branch where the terminal
+# write itself was accepted, inside the same transaction -- a rolled-back
+# report must leave no trace of a check-in it never earned.
+
+
+@pytest.mark.parametrize("outcome", ["done", "failed", "cancelled"])
+async def test_an_accepted_terminal_report_refreshes_the_check_in_with_the_idle_status(
+    monkeypatch, client, outcome
+):
+    from orchestrator.db import queries
+
+    monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
+
+    async def fake_finish_job(conn, job_id, **kwargs):
+        return True
+
+    monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
+
+    seen = []
+
+    async def _fake_record_worker_seen(conn, *, worker_name, status):
+        seen.append((worker_name, status))
+
+    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+
+    if outcome == "done":
+        body = _valid_done_body()
+    else:
+        body = {"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server", "attempt": 1}
+        if outcome == "failed":
+            body["reason_key"] = "failed.reason.upload"
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/{outcome}",
+            json=body,
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 204
+    assert seen == [("ml-server", "idle")]
+
+
+@pytest.mark.parametrize("outcome", ["done", "failed", "cancelled"])
+async def test_a_superseded_terminal_report_refreshes_no_check_in(monkeypatch, client, outcome):
+    from orchestrator.db import queries
+    from orchestrator.web import routes_worker
+
+    fake_job_row = {
+        "id": STUB_JOB_ID,
+        "title_id": None,
+        "edition_id": uuid.uuid4(),
+        "stereo_layout": None,
+        "status": "running",
+    }
+
+    async def fake_job_by_id(conn, job_id):
+        return fake_job_row
+
+    async def fake_finish_job(conn, job_id, **kwargs):
+        return False
+
+    async def fake_edition_object_key(conn, edition_id):
+        return "x.mp4"
+
+    seen = []
+
+    async def _fake_record_worker_seen(conn, *, worker_name, status):
+        seen.append((worker_name, status))
+
+    monkeypatch.setattr(queries, "job_by_id", fake_job_by_id, raising=False)
+    monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
+    monkeypatch.setattr(queries, "edition_object_key", fake_edition_object_key, raising=False)
+    monkeypatch.setattr(routes_worker, "delete_object", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+
+    if outcome == "done":
+        body = _valid_done_body()
+    else:
+        body = {"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server", "attempt": 1}
+        if outcome == "failed":
+            body["reason_key"] = "failed.reason.upload"
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/{outcome}",
+            json=body,
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 409
+    assert seen == [], "a superseded terminal report must refresh no check-in"
+
+
 # --- Every terminal report announces the bucket this process never saw --
 #
 # The converter uploads its object with its own client, in its own pod --
@@ -801,6 +908,111 @@ async def test_a_heartbeat_returns_the_cancel_flag(monkeypatch, client, cancel_r
         )
     assert resp.status_code == 200
     assert resp.json()["cancel_requested"] == cancel_requested
+
+
+# --- The check-in stops freezing at the moment of the claim (05-17) -----
+#
+# A converter that holds a job stops polling /worker/claim -- the only
+# route that used to write worker_checkins -- so about a minute into
+# every conversion the interface read a busy converter as one that had
+# vanished. The heartbeat and every accepted terminal report now refresh
+# the same row, guarded by the same accepted-write condition their own
+# database call already enforces.
+
+
+async def test_an_accepted_heartbeat_refreshes_the_check_in_with_the_working_status(
+    monkeypatch, client
+):
+    from orchestrator.db import queries
+
+    async def _fake_heartbeat_job(conn, job_id, **kwargs):
+        return {"cancel_requested": False}
+
+    seen = []
+
+    async def _fake_record_worker_seen(conn, *, worker_name, status):
+        seen.append((worker_name, status))
+
+    monkeypatch.setattr(queries, "heartbeat_job", _fake_heartbeat_job, raising=False)
+    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
+            json={
+                "protocol": WORKER_PROTOCOL_VERSION,
+                "worker": "ml-server",
+                "attempt": 1,
+                "stage": "working",
+            },
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 200
+    assert seen == [("ml-server", "working")]
+
+
+async def test_a_superseded_heartbeat_refreshes_no_check_in(monkeypatch, client):
+    """The negative case matters more than the positive one: an attempt
+    that lost its job must not be able to refresh a check-in its
+    successor now owns.
+    """
+    from orchestrator.db import queries
+
+    async def _fake_heartbeat_job(conn, job_id, **kwargs):
+        return None
+
+    seen = []
+
+    async def _fake_record_worker_seen(conn, *, worker_name, status):
+        seen.append((worker_name, status))
+
+    monkeypatch.setattr(queries, "heartbeat_job", _fake_heartbeat_job, raising=False)
+    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
+            json={
+                "protocol": WORKER_PROTOCOL_VERSION,
+                "worker": "ml-server",
+                "attempt": 1,
+                "stage": "working",
+            },
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 404
+    assert seen == [], "a superseded heartbeat must refresh no check-in"
+
+
+async def test_a_heartbeat_whose_write_raises_is_refused_and_refreshes_no_check_in(
+    monkeypatch, client
+):
+    from orchestrator.db import queries
+
+    async def _failing_heartbeat_job(conn, job_id, **kwargs):
+        raise RuntimeError("the database hiccuped mid-write")
+
+    seen = []
+
+    async def _fake_record_worker_seen(conn, *, worker_name, status):
+        seen.append((worker_name, status))
+
+    monkeypatch.setattr(queries, "heartbeat_job", _failing_heartbeat_job, raising=False)
+    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
+            json={
+                "protocol": WORKER_PROTOCOL_VERSION,
+                "worker": "ml-server",
+                "attempt": 1,
+                "stage": "working",
+            },
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+    assert resp.status_code == 404
+    assert seen == [], "a heartbeat whose write raised must refresh no check-in"
 
 
 async def test_an_unknown_job_identifier_answers_a_refusal_rather_than_an_error(client):
