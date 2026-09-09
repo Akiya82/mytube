@@ -118,6 +118,15 @@ document.addEventListener("submit", (event) => {
   if (message && !confirm(message)) return event.preventDefault();
   if (event.target.hasAttribute("data-submit-once"))
     event.target.querySelector('[type="submit"]').disabled = true;
+  // The folder button's own disable-and-relabel (05-UI-SPEC.md Screen A):
+  // any submit button carrying data-loading-label swaps to it and
+  // disables, so a wait for N probes has feedback from the first
+  // millisecond and a second click cannot start a second burst of them.
+  const loadingButton = event.target.querySelector("[data-loading-label]");
+  if (loadingButton) {
+    loadingButton.disabled = true;
+    loadingButton.textContent = loadingButton.getAttribute("data-loading-label");
+  }
 });
 
 // Delete countdown tick (D-62): computed every second from the

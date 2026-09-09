@@ -17,6 +17,18 @@
   {% endfor %}
 </nav>
 
+{% if folder_button %}
+  <div class="add-form__actions">
+    <form method="get" action="{{ folder_button.href }}">
+      <button
+        type="submit"
+        class="btn btn--secondary"
+        data-loading-label="{{ t('folder.cta.probing').format(n=folder_button.count) }}"
+      >{% if folder_button.is_edition %}{{ t("share.cta.add_edition_folder") }}{% else %}{{ t("share.cta.add_folder") }}{% endif %}</button>
+    </form>
+  </div>
+{% endif %}
+
 {% if share_unreachable %}
   <div class="banner banner--error" role="alert">
     {{ warning(cls="banner__icon") }}

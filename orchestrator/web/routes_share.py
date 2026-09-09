@@ -67,6 +67,76 @@ router = APIRouter()
 # the two searches.
 _PICKER_KINDS = frozenset({"subtitle", "audio"})
 
+# What the folder button's own gate (and the folder confirmation screen
+# behind it) treats as a video file at all. This project's own library is
+# entirely MKV/MP4 remuxes and the odd untouched rip; the rest of this list
+# is the same standalone-container family a release could plausibly arrive
+# in, kept narrow rather than every extension a media player recognises --
+# a stray .txt or .nfo sitting beside the episodes must never be offered a
+# checkbox on the folder screen.
+VIDEO_EXTENSIONS = frozenset({"mp4", "mkv", "avi", "webm", "mov", "wmv", "m4v", "ts", "m2ts"})
+
+# Below this count the folder button does not render at all -- a single
+# video file already has its own one-at-a-time add form, and a folder
+# holding one has nothing for the confirmation screen to group.
+MIN_VIDEO_FILES_FOR_FOLDER_ADD = 2
+
+
+def _is_video_file(name: str) -> bool:
+    return Path(name).suffix.lstrip(".").lower() in VIDEO_EXTENSIONS
+
+
+def _folder_href(rel_path: str) -> str:
+    """`/add-folder/{rel_path}`, the same per-segment percent-encoding
+    `_href` already applies for `/add/{rel_path}` -- a second, one-line
+    function rather than a shared helper taking a prefix, since the two
+    routes' own path prefixes are the only thing that would ever differ
+    between them.
+    """
+    if not rel_path:
+        return "/add-folder"
+    return "/add-folder/" + "/".join(quote(part, safe="") for part in rel_path.split("/"))
+
+
+def _folder_button_context(rel_path: str, entries, already_added_by_path: dict) -> dict | None:
+    """`None` when the folder button does not render at all (T-05-27's own
+    gate, D-166): fewer than `MIN_VIDEO_FILES_FOR_FOLDER_ADD` video files
+    directly in this listing. Otherwise the button's own label key, href
+    and file count -- computed once, here, from data
+    `share_listing_route` already has (its own entries and the
+    already-added lookup it already ran for this exact folder), so the
+    gate costs no extra filesystem or database read and nothing is probed
+    before the click.
+
+    D-176: the label (and the href it points at) switches to the
+    edition-folder variant only when *every* video file in this listing
+    already resolves to an episode of one and the same title -- the
+    target that variant points at is wired here so the gate is decided in
+    one place, even though the screen it reaches is a later plan's own
+    work.
+    """
+    video_entries = [e for e in entries if not e.is_dir and _is_video_file(e.name)]
+    if len(video_entries) < MIN_VIDEO_FILES_FOR_FOLDER_ADD:
+        return None
+
+    title_ids = set()
+    for entry in video_entries:
+        row = already_added_by_path.get(entry.rel_path)
+        if row is None:
+            title_ids = None
+            break
+        title_ids.add(row["title_id"])
+
+    is_edition = bool(title_ids) and len(title_ids) == 1
+    href = _folder_href(rel_path)
+    if is_edition:
+        href += "?mode=edition"
+    return {
+        "href": href,
+        "is_edition": is_edition,
+        "count": len(video_entries),
+    }
+
 
 def _folder_segments_relative_to(source: Path, candidate: Path) -> tuple[str, ...]:
     """The folder names between `source`'s own directory and `candidate`
@@ -550,6 +620,7 @@ async def share_listing_route(request: Request, path: str = ""):
         share_unreachable=False,
         entries=rows,
         breadcrumb=_breadcrumb(rel_path),
+        folder_button=_folder_button_context(rel_path, entries, already_added_by_path),
     )
 
 
