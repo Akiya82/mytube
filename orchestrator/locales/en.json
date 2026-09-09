@@ -155,6 +155,7 @@
   "library.status.aggregate": "{ready} of {total} ready, episode {number}",
   "library.status.cancelling": "Cancelling…",
   "library.status.queued": "Waiting, {n} ahead of you",
+  "library.status.queued_no_position": "Queued",
   "library.status.uploading": "Uploading, {percent}%",
   "library.status.waiting_for_converter_named": "Waiting for a converter ({worker}, last seen {ago})",
   "library.status.waiting_for_converter_none": "Waiting for a converter (none connected yet)",

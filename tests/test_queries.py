@@ -1459,6 +1459,98 @@ async def test_library_row_aggregate_counts_ready_failed_and_current_episode(raw
     await queries.request_job_cancel(raw_conn, job_id)
 
 
+async def test_library_row_prefers_the_running_job_over_a_newer_queued_one(raw_conn):
+    """The collapsed title row must describe the episode actually
+    converting, not merely the newest job of the season (D-188 gap
+    closure): a real order (migration 0008) makes "newest" mean "this
+    season's last episode" the moment a folder save enqueues every job in
+    one transaction, so the pre-existing newest-first pick becomes
+    deterministically wrong rather than harmless the moment task 1 lands.
+    """
+    first_edition = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Running First Season", "running-first-season-slug", first_edition,
+        f"{first_edition}.mp4",
+    )
+    ep2_edition = uuid.uuid4()
+    await queries.attach_episode_to_title(
+        raw_conn, title_id, 2, ep2_edition, f"{ep2_edition}.mp4", status="preparing",
+    )
+    ep3_edition = uuid.uuid4()
+    await queries.attach_episode_to_title(
+        raw_conn, title_id, 3, ep3_edition, f"{ep3_edition}.mp4", status="preparing",
+    )
+
+    running_job = await queries.enqueue_job(
+        raw_conn, kind="transcode", title_id=title_id, edition_id=first_edition,
+    )
+    await queries.claim_job(raw_conn, kind="transcode", worker_name="ml-server")
+    await queries.enqueue_job(
+        raw_conn, kind="transcode", title_id=title_id, edition_id=ep2_edition,
+    )
+    await queries.enqueue_job(
+        raw_conn, kind="transcode", title_id=title_id, edition_id=ep3_edition,
+    )
+
+    row = await queries.library_row(raw_conn, title_id)
+    assert row["job_id"] == running_job
+    assert row["job_status"] == "running"
+    assert row["job_episode_number"] == 1
+
+    await queries.finish_job(
+        raw_conn, running_job, worker_name="ml-server", attempt=1, outcome="cancelled",
+    )
+    for row in await raw_conn.fetch(
+        "SELECT id FROM jobs WHERE title_id = $1 AND status = 'queued'", title_id
+    ):
+        await queries.request_job_cancel(raw_conn, row["id"])
+
+
+async def test_job_for_title_returns_the_running_job_over_queued_siblings(raw_conn):
+    """The reader behind Cancel on a title row
+    (`routes_titles.cancel_route`) must pick the same job the row itself
+    describes -- otherwise the row shows episode one converting while
+    Cancel stops episode eleven, turning a display defect into a
+    destructive one (D-188 gap closure).
+    """
+    first_edition = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Cancel Target Season", "cancel-target-season-slug", first_edition,
+        f"{first_edition}.mp4",
+    )
+    ep2_edition = uuid.uuid4()
+    await queries.attach_episode_to_title(
+        raw_conn, title_id, 2, ep2_edition, f"{ep2_edition}.mp4", status="preparing",
+    )
+    ep3_edition = uuid.uuid4()
+    await queries.attach_episode_to_title(
+        raw_conn, title_id, 3, ep3_edition, f"{ep3_edition}.mp4", status="preparing",
+    )
+
+    running_job = await queries.enqueue_job(
+        raw_conn, kind="transcode", title_id=title_id, edition_id=ep2_edition,
+    )
+    await queries.claim_job(raw_conn, kind="transcode", worker_name="ml-server")
+    await queries.enqueue_job(
+        raw_conn, kind="transcode", title_id=title_id, edition_id=first_edition,
+    )
+    await queries.enqueue_job(
+        raw_conn, kind="transcode", title_id=title_id, edition_id=ep3_edition,
+    )
+
+    live = await queries.job_for_title(raw_conn, title_id)
+    assert live["id"] == running_job
+    assert live["status"] == "running"
+
+    await queries.finish_job(
+        raw_conn, running_job, worker_name="ml-server", attempt=1, outcome="cancelled",
+    )
+    for row in await raw_conn.fetch(
+        "SELECT id FROM jobs WHERE title_id = $1 AND status = 'queued'", title_id
+    ):
+        await queries.request_job_cancel(raw_conn, row["id"])
+
+
 async def test_episodes_for_library_returns_every_episode_in_number_order_with_its_own_state(raw_conn):
     """`episodes_for_library` -- the expanded list's own data source --
     returns one row per episode, in number order, each carrying its own

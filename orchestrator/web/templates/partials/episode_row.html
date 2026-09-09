@@ -69,7 +69,10 @@
     {% elif episode.job_stage == "cancelling" %}
       <span class="chip chip--cancelling">{{ t("library.status.cancelling") }}</span>
     {% elif episode.job_stage %}
-      <span class="chip chip--preparing">{{ t("library.status.queued").format(n=episode.job_queued_ahead or 0) }}</span>
+      {# A season's queue position belongs on the title row once, not
+         repeated on every queued episode of it (D-188, 2026-09-09) -- see
+         05-UI-SPEC.md Screen D item 4. #}
+      <span class="chip chip--preparing">{{ t("library.status.queued_no_position") }}</span>
     {% elif episode.failed %}
       <span class="chip chip--refused">{{ t("failed.reason_prefix").format(reason=t(episode.edition_failure_reason or "failed.reason.unknown")) }}</span>
     {% endif %}

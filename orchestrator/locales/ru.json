@@ -155,6 +155,7 @@
   "library.status.aggregate": "{ready} из {total} готово, серия {number}",
   "library.status.cancelling": "Отмена…",
   "library.status.queued": "В очереди, впереди ещё {n}",
+  "library.status.queued_no_position": "В очереди",
   "library.status.uploading": "Загрузка в хранилище, {percent}%",
   "library.status.waiting_for_converter_named": "Ожидание конвертера ({worker}, последний раз на связи {ago})",
   "library.status.waiting_for_converter_none": "Ожидание конвертера (пока никто не подключался)",

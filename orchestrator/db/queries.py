@@ -635,6 +635,16 @@ _LIBRARY_ROW_COLUMNS = """
 # alive" fact, so one LATERAL with no correlation to `t` is cheaper than
 # resolving it once per row and passing it down by hand.
 #
+# The job LATERAL orders running before queued, then by the same
+# `(created_at, id)` key `count_queued_ahead` and `claim_job` use, and
+# takes one (D-188 gap closure): a real order (migration 0008) makes the
+# newest-first tiebreak this row used before deterministically wrong, not
+# merely harmless -- the newest job of a season saved in one folder move
+# is its *last* episode, so a season with episode one converting would
+# have advertised episode eleven's queued state on this collapsed row.
+# Running first, falling back to the job that will run next, describes
+# what is actually happening instead.
+#
 # `agg` and `job.job_episode_number` (05-09/D-163): a series is legible
 # while collapsed only if the title row itself carries how many episodes
 # exist, how many are ready and how many failed, plus which episode the
@@ -688,7 +698,7 @@ _LIBRARY_ROW_FROM = """
                ) AS job_episode_number
         FROM jobs j
         WHERE j.title_id = t.id AND j.status IN ('queued', 'running')
-        ORDER BY j.created_at DESC
+        ORDER BY (j.status = 'running') DESC, j.created_at, j.id
         LIMIT 1
     ) job ON true
     LEFT JOIN LATERAL (
@@ -807,7 +817,6 @@ async def episodes_for_library(
             job.job_db_stage AS job_db_stage, job.job_progress_pct AS job_progress_pct,
             job.job_eta_seconds AS job_eta_seconds,
             job.job_cancel_requested AS job_cancel_requested,
-            job.job_queued_ahead AS job_queued_ahead,
             wc.worker_name AS worker_name, wc.worker_last_seen_at AS worker_last_seen_at,
             wc.worker_status AS worker_status
         FROM episodes ep
@@ -816,19 +825,23 @@ async def episodes_for_library(
             ON enh.episode_id = ep.id AND enh.is_current
         LEFT JOIN editions e ON e.id = ep.default_edition_id
         LEFT JOIN LATERAL (
+            -- No per-episode queue-position count here (D-188 gap
+            -- closure): the per-episode chip carries no position at all
+            -- now, so a correlated count computed on every four-second
+            -- poll for a column nothing renders is worth deleting rather
+            -- than fixing. Running first, then the same (created_at, id)
+            -- key the title row's own job LATERAL now uses -- an
+            -- in-flight edition of an already-ready episode must
+            -- describe the one actually converting, not a queued
+            -- sibling edition.
             SELECT j.id AS job_id, j.kind AS job_kind, j.status AS job_status,
                    j.stage AS job_db_stage, j.progress_pct AS job_progress_pct,
                    j.eta_seconds AS job_eta_seconds,
-                   j.cancel_requested AS job_cancel_requested,
-                   (
-                       SELECT count(*) FROM jobs j2
-                       WHERE j2.status = 'queued' AND j2.kind = j.kind
-                         AND j2.created_at < j.created_at
-                   ) AS job_queued_ahead
+                   j.cancel_requested AS job_cancel_requested
             FROM jobs j
             JOIN editions je ON je.id = j.edition_id
             WHERE je.episode_id = ep.id AND j.status IN ('queued', 'running')
-            ORDER BY j.created_at DESC
+            ORDER BY (j.status = 'running') DESC, j.created_at, j.id
             LIMIT 1
         ) job ON true
         LEFT JOIN LATERAL (
@@ -2782,7 +2795,11 @@ _PLAYLIST_ROW_FROM = """
                ) AS job_queued_ahead
         FROM jobs j
         WHERE j.playlist_id = p.id AND j.status IN ('queued', 'running')
-        ORDER BY j.created_at DESC
+        -- Running first, then (created_at, id) -- consistency with the
+        -- other three live-job readers (D-188 gap closure), not a
+        -- repaired defect: no path in this codebase is known to leave
+        -- two live jobs on one playlist.
+        ORDER BY (j.status = 'running') DESC, j.created_at, j.id
         LIMIT 1
     ) job ON true
 """
@@ -3952,13 +3969,24 @@ async def count_queued_ahead(conn: asyncpg.Connection, job_id) -> int:
 
 async def job_for_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
     """The live (queued or running) job for a title, if any -- lets the
-    library render a stage without the caller knowing a job id.
+    library render a stage without the caller knowing a job id, and what
+    Cancel on a title row acts on (`routes_titles.cancel_route`).
+
+    Ordered the same way the job LATERAL of `_LIBRARY_ROW_FROM` picks the
+    live job for that same row's own chip: running first, then
+    `(created_at, id)` (D-188 gap closure). This one has to agree with
+    that row query for a reason stronger than consistency -- before this
+    ordering, both picked the newest job, which under a real order
+    (migration 0008) is a season's *last* episode. A season with episode
+    one converting would have shown episode one on the row and cancelled
+    episode eleven instead: a display defect and a destructive one from
+    the same stale rule.
     """
     return await conn.fetchrow(
         """
         SELECT * FROM jobs
         WHERE title_id = $1 AND status IN ('queued', 'running')
-        ORDER BY created_at DESC
+        ORDER BY (status = 'running') DESC, created_at, id
         LIMIT 1
         """,
         title_id,

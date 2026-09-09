@@ -1901,6 +1901,36 @@ async def test_episode_row_in_flight_collapses_actions_to_cancel_only(client, qu
     assert 'data-control="check"' not in section
 
 
+async def test_episode_row_queued_chip_carries_no_number(client, queries_stub):
+    """D-188 gap closure, 2026-09-09: a season's queue position belongs
+    on the title row once, not repeated on every queued episode of it --
+    05-UI-SPEC.md Screen D item 4.
+    """
+    title_id = uuid.uuid4()
+    ep2 = _episode(
+        title_id=title_id,
+        number=2,
+        **_job(job_kind="remux", job_status="queued", job_db_stage="queued"),
+    )
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=1)
+    ]
+    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+
+    async with client:
+        resp = await client.get("/library")
+
+    section = re.search(
+        rf'<li class="episode-row[^>]*data-episode-id="{ep2["episode_id"]}"[^>]*>.*?</li>',
+        resp.text,
+        re.S,
+    ).group(0)
+    chip = re.search(r'<span class="chip chip--preparing">([^<]*)</span>', section)
+    assert chip is not None
+    assert chip.group(1).strip() == "Queued"
+    assert not re.search(r"\d", chip.group(1))
+
+
 async def test_episode_row_failed_variant_and_reason_line(client, queries_stub):
     title_id = uuid.uuid4()
     ep2 = _episode(title_id=title_id, number=2, edition_status="failed", edition_failure_reason="failed.reason.upload")
