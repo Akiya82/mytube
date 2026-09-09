@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import warning %}
+{#
+  Screen F (05-UI-SPEC.md): change one episode's own number without
+  breaking the address it already handed out (D-161). Reuses
+  rename_form.html's exact shape one field over -- a read-only current-
+  address line, the field itself, an inline refusal/gate, and the same
+  "old address still works" done state, worded here for a number instead
+  of a slug (D-10's own reuse-confirmation mechanic, applied to a number
+  handover instead of a slug).
+#}
+
+{% block title %}{{ t("library.renumber.heading") }} - MyTube{% endblock %}
+
+{% block heading %}{{ t("library.renumber.heading") }}{% endblock %}
+
+{% block content %}
+{% if done %}
+  <div class="banner banner--info" role="status">
+    <div class="banner__text">
+      <p class="banner__body">{{ t("library.renumber.old_still_works") }}</p>
+      <p class="banner__body">
+        {{ public_base_url }}/v/{{ slug }}/{{ old_number | pad_episode_number }}
+        &rarr;
+        {{ public_base_url }}/v/{{ slug }}/{{ new_number | pad_episode_number }}
+      </p>
+    </div>
+  </div>
+  <a class="btn btn--secondary" href="/library">{{ t("nav.library") }}</a>
+  <a class="btn btn--ghost" href="/check/{{ slug }}/{{ new_number }}">{{ t("library.cta.check") }}</a>
+{% else %}
+  {# 1. The current address, read-only -- address continuity is the whole
+     point of this form, so it is visible before anything can be typed. #}
+  <p class="form-field__label">
+    {{ t("add.field.slug") }}: {{ public_base_url }}/v/{{ slug }}/{{ current_number | pad_episode_number }}
+  </p>
+
+  {% if history_warning %}
+    {# 4. The gate: a number that is only a sibling's *former* number --
+       not refused, asked about, on the identical hidden-confirm_reuse
+       mechanic a reused slug already uses (D-10). #}
+    <div class="banner banner--warning" role="alert">
+      {{ warning(cls="banner__icon") }}
+      <div class="banner__text">
+        <p class="banner__body">
+          {{ t("library.renumber.history_warning").format(n=history_warning.number, old=history_warning.old_episode_number, slug=slug) }}
+        </p>
+      </div>
+    </div>
+  {% endif %}
+
+  <form class="add-form" method="post" action="/library/episode/{{ episode_id }}/renumber">
+    <div class="form-field">
+      <label class="form-field__label" for="renumber-number">{{ t("add.field.episode_number") }}</label>
+      {# 2. Narrow variant, text + inputmode="numeric" (no spinner arrows),
+         not type="number" -- Keyboard and Accessibility's own stated
+         preference for the simplest input that captures the value.
+         Leading zeros are accepted on input; canonical padding (D-155)
+         is a display-only rule applied above and in the preview below,
+         never demanded of what is typed here. #}
+      <input
+        class="form-field__input form-field__input--narrow"
+        type="text"
+        inputmode="numeric"
+        id="renumber-number"
+        name="number"
+        value="{{ number_value }}"
+      >
+      {# 3. The resulting-address preview, rendered from the field's own
+         current value at render time -- the operator sees what the link
+         becomes before confirming, with no script computing it live. #}
+      <p class="audio-note">
+        {{ t("library.renumber.preview").format(address=public_base_url ~ "/v/" ~ slug ~ "/" ~ (number_value | pad_episode_number)) }}
+      </p>
+    </div>
+    {% if error_key %}
+      {# 4. Refusals, inline in the same place under the field: a blank,
+         negative or non-numeric value, or a number a sibling currently
+         holds. #}
+      <div class="banner banner--error" role="alert">
+        {{ warning(cls="banner__icon") }}
+        <div class="banner__text">
+          <p class="banner__body">{{ t(error_key).format(n=number_value) }}</p>
+        </div>
+      </div>
+    {% endif %}
+    {% if history_warning %}
+      <input type="hidden" name="confirm_reuse" value="true">
+      <button type="submit" class="btn btn--primary">{{ t("add.cta.reuse_slug") }}</button>
+    {% else %}
+      <button type="submit" class="btn btn--primary">{{ t("library.renumber.cta") }}</button>
+    {% endif %}
+  </form>
+{% endif %}
+{% endblock %}

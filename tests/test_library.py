@@ -2418,3 +2418,181 @@ def test_poller_syncs_episode_disclosure_state_and_restores_focus_by_data_episod
     # same fetch/redirect/remove/catch shape around the three new lines.
     assert "function pollLibraryRow(row) {" in text
     assert "row.replaceWith(fresh);" in text
+
+
+# --- An episode's number can be corrected without breaking its link
+# --- (Screen F, D-161) -- real Postgres, the same action_client/raw_conn
+# --- split every other action test above draws -----------------------------
+
+
+async def _create_two_episode_series(conn, name: str, slug: str):
+    """A two-episode series, episode 2 added directly through the query
+    layer -- no folder-add flow exists to drive this through in a route
+    test, mirroring test_resolve_episode.py's own `_add_episode`. Returns
+    (title_id, slug, episode_1_id, episode_2_id).
+    """
+    edition1 = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        conn, name, slug, edition1, f"{edition1}.mp4"
+    )
+    episode1 = await queries.episode_by_number(conn, title_id, 1)
+    episode1_id = episode1["episode_id"]
+
+    season_id = await conn.fetchval("SELECT id FROM seasons WHERE title_id = $1", title_id)
+    edition2 = uuid.uuid4()
+    episode2_id = await conn.fetchval(
+        "INSERT INTO episodes (season_id) VALUES ($1) RETURNING id", season_id
+    )
+    await conn.execute(
+        "INSERT INTO editions (id, episode_id, object_key, status) VALUES ($1, $2, $3, 'active')",
+        edition2,
+        episode2_id,
+        f"{edition2}.mp4",
+    )
+    await conn.execute(
+        "UPDATE episodes SET default_edition_id = $1 WHERE id = $2", edition2, episode2_id
+    )
+    await queries.claim_episode_number(conn, title_id, episode2_id, 2)
+    return title_id, slug, episode1_id, episode2_id
+
+
+@pytest.mark.integration
+async def test_renumber_form_shows_current_address_prefilled_number_and_padded_preview(
+    action_client, raw_conn
+):
+    _title_id, slug, episode1_id, _episode2_id = await _create_two_episode_series(
+        raw_conn, "Renumber Form", "renumber-form-slug"
+    )
+
+    resp = await action_client.get(f"/library/episode/{episode1_id}/renumber")
+
+    assert resp.status_code == 200
+    # The current address line and the preview both show the canonical
+    # zero-padded form (D-155), never the bare "1".
+    assert f"{slug}/01" in resp.text
+    assert 'value="1"' in resp.text
+
+
+@pytest.mark.integration
+async def test_renumber_confirm_refuses_a_blank_number_inline(action_client, raw_conn):
+    _title_id, _slug, episode1_id, _episode2_id = await _create_two_episode_series(
+        raw_conn, "Renumber Invalid", "renumber-invalid-slug"
+    )
+
+    resp = await action_client.post(
+        f"/library/episode/{episode1_id}/renumber", data={"number": ""}
+    )
+
+    assert resp.status_code == 200
+    assert "Enter a whole number" in resp.text
+
+
+@pytest.mark.integration
+async def test_renumber_confirm_refuses_a_number_a_sibling_currently_holds(action_client, raw_conn):
+    _title_id, _slug, episode1_id, _episode2_id = await _create_two_episode_series(
+        raw_conn, "Renumber Taken", "renumber-taken-slug"
+    )
+
+    resp = await action_client.post(
+        f"/library/episode/{episode1_id}/renumber", data={"number": "2"}
+    )
+
+    assert resp.status_code == 200
+    assert "already exists in this title" in resp.text
+    # Refused -- episode_1 is still at its own original number.
+    row = await queries.episode_for_number(raw_conn, _title_id, 1)
+    assert row["episode_id"] == episode1_id
+    assert row["is_current"] is True
+
+
+@pytest.mark.integration
+async def test_renumber_gate_appears_for_a_siblings_former_number_and_not_for_a_free_one(
+    action_client, raw_conn
+):
+    title_id, _slug, episode1_id, episode2_id = await _create_two_episode_series(
+        raw_conn, "Renumber Gate", "renumber-gate-slug"
+    )
+    # episode_2 moves off 2, onto 20 -- 2 is now only its *former* number.
+    await queries.claim_episode_number(raw_conn, title_id, episode2_id, 20)
+
+    gated_resp = await action_client.post(
+        f"/library/episode/{episode1_id}/renumber", data={"number": "2"}
+    )
+    assert gated_resp.status_code == 200
+    assert "used to belong to episode" in gated_resp.text
+    # Not saved yet -- episode_1 is still at 1 until the gate is confirmed.
+    still_one = await queries.episode_for_number(raw_conn, title_id, 1)
+    assert still_one["episode_id"] == episode1_id
+    assert still_one["is_current"] is True
+
+    free_resp = await action_client.post(
+        f"/library/episode/{episode1_id}/renumber", data={"number": "55"}
+    )
+    assert free_resp.status_code == 200
+    assert "used to belong to episode" not in free_resp.text
+    # A genuinely free number is not gated -- it saves immediately.
+    assert "The old number keeps working" in free_resp.text
+
+
+@pytest.mark.integration
+async def test_renumber_confirmed_gate_saves_and_old_number_still_resolves_to_the_same_episode(
+    action_client, raw_conn
+):
+    title_id, slug, episode1_id, episode2_id = await _create_two_episode_series(
+        raw_conn, "Renumber Confirm", "renumber-confirm-slug"
+    )
+    await queries.claim_episode_number(raw_conn, title_id, episode2_id, 20)
+
+    resp = await action_client.post(
+        f"/library/episode/{episode1_id}/renumber",
+        data={"number": "2", "confirm_reuse": "true"},
+    )
+
+    assert resp.status_code == 200
+    assert "The old number keeps working" in resp.text
+    # Done state prints both addresses, canonically padded.
+    assert f"{slug}/01" in resp.text
+    assert f"{slug}/02" in resp.text
+    assert "/library" in resp.text
+    assert f"/check/{slug}/2" in resp.text
+
+    new_row = await queries.resolve_episode_slug(raw_conn, slug, 2)
+    assert new_row["episode_id"] == episode1_id
+    old_row = await queries.resolve_episode_slug(raw_conn, slug, 1)
+    assert old_row["episode_id"] == episode1_id
+
+
+@pytest.mark.integration
+async def test_renumber_after_a_later_episode_claims_the_old_number_the_newer_claim_wins(
+    action_client, raw_conn
+):
+    title_id, slug, episode1_id, episode2_id = await _create_two_episode_series(
+        raw_conn, "Renumber Handover", "renumber-handover-slug"
+    )
+
+    # episode_1 (number 1) moves to 9, freeing 1 as its own former number.
+    resp = await action_client.post(
+        f"/library/episode/{episode1_id}/renumber", data={"number": "9"}
+    )
+    assert resp.status_code == 200
+
+    # episode_2 (currently 2) now claims 1 -- only a former number of a
+    # *different* episode (episode_1), never episode_2's own, so no gate.
+    resp2 = await action_client.post(
+        f"/library/episode/{episode2_id}/renumber", data={"number": "1"}
+    )
+    assert resp2.status_code == 200
+    assert "used to belong to episode" in resp2.text
+
+    resp3 = await action_client.post(
+        f"/library/episode/{episode2_id}/renumber",
+        data={"number": "1", "confirm_reuse": "true"},
+    )
+    assert resp3.status_code == 200
+
+    winner = await queries.resolve_episode_slug(raw_conn, slug, 1)
+    assert winner["episode_id"] == episode2_id
+    # episode_1 is still reachable at its own current number.
+    still_reachable = await queries.resolve_episode_slug(raw_conn, slug, 9)
+    assert still_reachable["episode_id"] == episode1_id
+

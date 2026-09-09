@@ -108,6 +108,9 @@
       </form>
     {% else %}
       <a class="btn btn--ghost" href="/check/{{ row.slug }}/{{ episode.number }}" data-control="check">{{ t("library.cta.check") }}</a>
+      {# Edit number (05-UI-SPEC.md Screen F, D-161): opens the renumber
+         form already targeted at this exact episode. #}
+      <a class="btn btn--ghost" href="/library/episode/{{ episode.episode_id }}/renumber" data-control="edit-number">{{ t("library.cta.edit_number") }}</a>
       {# Add edition (05-UI-SPEC.md Component Inventory, D-176): one click
          from this row into the add form, already targeted at this
          episode's own default edition's source file and already in

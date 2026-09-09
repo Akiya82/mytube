@@ -224,3 +224,14 @@ def parse_public_address(path: str) -> PublicAddress:
         raise AddressRefused(f"second segment of {path!r} is not a number")
     edition_slug = _parse_edition_segment(segments[2])
     return PublicAddress(slug=slug, number=number, edition_slug=edition_slug)
+
+
+def format_episode_number(number: int) -> str:
+    """The canonical display form of an episode number (D-155): zero-padded
+    to two digits, three from 100. This is a rendering rule only -- what an
+    operator types (a renumber form's own number field, a leading-zero
+    address segment) is never required to already look like this;
+    `_parse_number_segment` above accepts any leading-zero form and
+    collapses it to the same integer before this function ever runs.
+    """
+    return f"{number:03d}" if number >= 100 else f"{number:02d}"

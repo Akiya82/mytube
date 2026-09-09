@@ -495,6 +495,88 @@ async def test_claim_episode_number_renumber_keeps_the_old_number_until_a_second
     assert row_reclaimed["episode_id"] == episode_2
 
 
+async def test_renumber_episode_old_number_still_resolves_after_a_renumber(raw_conn):
+    """`renumber_episode` is the number equivalent of `rename_slug`. The
+    old row is never deleted, so the old number keeps answering exactly
+    as D-161 promises -- proven here directly against `renumber_episode`
+    itself, not the lower-level `claim_episode_number` the query wraps.
+    """
+    title_id, slug, episodes = await _seed_series(raw_conn, "renumber-episode", episode_count=1)
+    episode_id = episodes[1]
+
+    await queries.renumber_episode(raw_conn, episode_id=episode_id, title_id=title_id, number=7)
+
+    row_new = await queries.resolve_episode_slug(raw_conn, slug, 7)
+    assert row_new["episode_id"] == episode_id
+    row_old = await queries.resolve_episode_slug(raw_conn, slug, 1)
+    assert row_old["episode_id"] == episode_id
+
+
+async def test_renumber_episode_refuses_when_a_sibling_currently_holds_the_number(raw_conn):
+    title_id, _slug, episodes = await _seed_series(raw_conn, "renumber-refuse", episode_count=2)
+    episode_1, episode_2 = episodes[1], episodes[2]
+
+    with pytest.raises(queries.EpisodeNumberTaken):
+        await queries.renumber_episode(raw_conn, episode_id=episode_1, title_id=title_id, number=2)
+
+    # Refused -- episode_2 still holds 2, episode_1 is untouched at 1.
+    assert await queries.taken_episode_numbers(raw_conn, title_id) == {1, 2}
+    row = await queries.episode_for_number(raw_conn, title_id, 2)
+    assert row["episode_id"] == episode_2
+
+
+async def test_renumber_episode_succeeds_onto_a_siblings_former_number_and_newest_claim_wins(
+    raw_conn,
+):
+    """The query itself never refuses a number that is only a sibling's
+    *former* claim (D-161) -- that gate is the caller's own job
+    (`routes_episodes.renumber_confirm_route`), never this query's. Once
+    claimed, the newest row wins, exactly as slug reuse already works.
+    """
+    title_id, slug, episodes = await _seed_series(raw_conn, "renumber-history", episode_count=2)
+    episode_1, episode_2 = episodes[1], episodes[2]
+
+    # episode_2 moves off 2 first, onto 20 -- 2 is now only its *former*
+    # number, still resolving through history but no longer current.
+    await queries.renumber_episode(raw_conn, episode_id=episode_2, title_id=title_id, number=20)
+
+    # episode_1 can now take 2 -- the query does not refuse a former
+    # number the way it refuses a currently-held one.
+    await queries.renumber_episode(raw_conn, episode_id=episode_1, title_id=title_id, number=2)
+
+    row = await queries.resolve_episode_slug(raw_conn, slug, 2)
+    assert row["episode_id"] == episode_1
+
+
+async def test_renumber_episode_lets_an_episode_reclaim_its_own_former_number(raw_conn):
+    title_id, slug, episodes = await _seed_series(raw_conn, "renumber-reclaim", episode_count=1)
+    episode_id = episodes[1]
+
+    await queries.renumber_episode(raw_conn, episode_id=episode_id, title_id=title_id, number=5)
+    # Renumbering back onto a number this same episode held before hits
+    # the ON CONFLICT upsert claim_episode_number already documents --
+    # this must not raise.
+    await queries.renumber_episode(raw_conn, episode_id=episode_id, title_id=title_id, number=1)
+
+    row = await queries.resolve_episode_slug(raw_conn, slug, 1)
+    assert row["episode_id"] == episode_id
+    row_still_five = await queries.resolve_episode_slug(raw_conn, slug, 5)
+    assert row_still_five["episode_id"] == episode_id
+
+
+async def test_renumber_episode_twice_in_a_row_and_every_old_number_still_resolves(raw_conn):
+    title_id, slug, episodes = await _seed_series(raw_conn, "renumber-twice", episode_count=1)
+    episode_id = episodes[1]
+
+    await queries.renumber_episode(raw_conn, episode_id=episode_id, title_id=title_id, number=3)
+    await queries.renumber_episode(raw_conn, episode_id=episode_id, title_id=title_id, number=9)
+
+    for number in (1, 3, 9):
+        row = await queries.resolve_episode_slug(raw_conn, slug, number)
+        assert row is not None
+        assert row["episode_id"] == episode_id
+
+
 async def test_taken_episode_numbers_and_episode_for_number_read_the_current_history(raw_conn):
     title_id, _slug_value, episodes = await _seed_series(raw_conn, "number-history", episode_count=2)
     episode_1, episode_2 = episodes[1], episodes[2]

@@ -61,6 +61,22 @@ def humanize_seconds(seconds) -> str:
     return f"{hours} hour" + ("" if hours == 1 else "s")
 
 
+def pad_episode_number(value) -> str:
+    """The renumber and move forms' own display filter for D-155's
+    canonical zero-padded number -- every address either form prints goes
+    through this, never the raw column value. Tolerant of a value that
+    is not a plain non-negative integer (a form re-rendering a refused,
+    still-being-typed number) rather than raising mid-template: an address
+    preview simply shows the typed text back until it parses.
+    """
+    from orchestrator.slugs import format_episode_number
+
+    try:
+        return format_episode_number(int(str(value).strip()))
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def urlencode_strict(value) -> str:
     """Percent-encode `value` for embedding as a single query-string value.
 
@@ -79,6 +95,7 @@ _templates.env.filters["filesizeformat_binary"] = filesizeformat_binary
 _templates.env.filters["duration_hms"] = duration_hms
 _templates.env.filters["humanize_seconds"] = humanize_seconds
 _templates.env.filters["urlencode"] = urlencode_strict
+_templates.env.filters["pad_episode_number"] = pad_episode_number
 
 
 def reason_text_for(t):

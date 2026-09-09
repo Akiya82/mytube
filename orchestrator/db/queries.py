@@ -1274,6 +1274,34 @@ async def episode_for_number(
     )
 
 
+async def renumber_episode(
+    conn: asyncpg.Connection, *, episode_id, title_id, number: int
+) -> None:
+    """Give one episode a different number (D-161, T-05-53) -- the number
+    equivalent of `rename_slug`, going through `claim_episode_number`
+    exactly as a fresh creation does, inside its own claim-locked
+    transaction (the same `SLUG_CLAIM_LOCK_KEY` discipline every other
+    number- or slug-claiming write in this module already follows).
+
+    Refuses (`EpisodeNumberTaken`) only when `number` is a *different*
+    episode's own **current** claim right now. A number that is only a
+    sibling's **former** claim (still resolving through history, but
+    superseded by a later renumber of that same sibling) is not refused
+    here -- that is the operator-facing gate
+    (`routes_episodes.renumber_confirm_route`), decided by the caller
+    before this function is ever called, never by this query. Re-checked
+    inside this function's own lock regardless of what the caller already
+    checked, so a race between two renumbers can never silently let two
+    episodes both believe they hold the same number.
+    """
+    async with conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
+        current = await episode_for_number(conn, title_id, number)
+        if current is not None and current["is_current"] and current["episode_id"] != episode_id:
+            raise EpisodeNumberTaken(number)
+        await claim_episode_number(conn, title_id, episode_id, number)
+
+
 async def resolve_episode_slug(
     conn: asyncpg.Connection, slug: str, number: int, edition_slug: str | None = None
 ) -> asyncpg.Record | None:

@@ -24,7 +24,7 @@ behind the session gate -- the check page has never been public.
 import asyncio
 import uuid
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse, Response
 
 from orchestrator.config import get_settings
@@ -361,6 +361,146 @@ async def purge_edition_route(edition_id: str, request: Request):
     await reap_once(pool)
 
     return RedirectResponse("/library", status_code=302)
+
+
+# --- An episode's own number can be corrected without breaking its own
+# --- link (D-161), and a standalone one-episode title can move into a
+# --- series from the library (D-160) ---------------------------------------
+
+
+async def _renumber_target_row(conn, episode_id) -> dict | None:
+    """The renumber form's own read (Screen F), fresh on every request
+    (T-05-43): only an episode whose own status is 'active', belonging to
+    a title that is itself 'active', has a live numbered address worth
+    correcting -- the same T-02-10 guard `routes_titles._rename_target_
+    row` already applies one action over. `queries.episode_with_title`
+    gives the episode's own current number and title id; `queries.
+    library_row` gives that title's own current slug and status -- no
+    single existing query carries both facts together.
+    """
+    row = await queries.episode_with_title(conn, episode_id)
+    if row is None or row["episode_status"] != "active":
+        return None
+    title = await queries.library_row(conn, row["title_id"])
+    if title is None or title["title_status"] != "active":
+        return None
+    return {
+        "episode_id": row["episode_id"],
+        "title_id": row["title_id"],
+        "slug": title["slug"],
+        "number": row["number"],
+    }
+
+
+@router.get("/library/episode/{episode_id}/renumber")
+async def renumber_form_route(episode_id: str, request: Request):
+    """Screen F (05-UI-SPEC.md): the episode's current address, its number
+    field prefilled with its own current number, and a preview of the
+    resulting address, all rendered before anything is saved -- address
+    continuity is the whole point of this form (D-161).
+    """
+    parsed = _parse_uuid(episode_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        target = await _renumber_target_row(conn, parsed)
+    if target is None:
+        return Response(status_code=404)
+
+    return render(
+        request,
+        "renumber_form.html",
+        done=False,
+        episode_id=parsed,
+        slug=target["slug"],
+        current_number=target["number"],
+        number_value=str(target["number"]),
+        error_key=None,
+        history_warning=None,
+    )
+
+
+@router.post("/library/episode/{episode_id}/renumber")
+async def renumber_confirm_route(
+    episode_id: str,
+    request: Request,
+    number: str = Form(""),
+    confirm_reuse: str = Form("false"),
+):
+    """Save Screen F (D-161, T-05-53): claim the new number through
+    `queries.renumber_episode`, which never deletes the superseded
+    `episode_number_history` row -- the old number keeps resolving to
+    this same episode until a different episode's own later claim
+    outranks it (the identical newest-wins rule slug reuse already
+    follows).
+
+    Refuses inline when a sibling episode currently holds the submitted
+    number. Gates, rather than refuses, a number that is only a sibling's
+    **former** number: the tombstone-shaped warning banner, unlocked by
+    the same `confirm_reuse` hidden-field mechanic a reused slug already
+    uses (D-10). The gate is enforced here, in the route, before
+    `queries.renumber_episode` is ever called -- never only by which
+    banner the template happens to show.
+    """
+    parsed = _parse_uuid(episode_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        target = await _renumber_target_row(conn, parsed)
+        if target is None:
+            return Response(status_code=404)
+
+        def _refuse(error_key: str | None = None, history_warning: dict | None = None):
+            return render(
+                request,
+                "renumber_form.html",
+                done=False,
+                episode_id=parsed,
+                slug=target["slug"],
+                current_number=target["number"],
+                number_value=number,
+                error_key=error_key,
+                history_warning=history_warning,
+            )
+
+        clean = number.strip()
+        if not clean.isdigit():
+            return _refuse(error_key="library.renumber.invalid")
+        new_number = int(clean)
+
+        existing = await queries.episode_for_number(conn, target["title_id"], new_number)
+        if existing is not None and existing["episode_id"] != parsed:
+            if existing["is_current"]:
+                return _refuse(error_key="library.renumber.taken")
+            if confirm_reuse != "true":
+                former = await queries.episode_with_title(conn, existing["episode_id"])
+                return _refuse(
+                    history_warning={
+                        "number": new_number,
+                        "old_episode_number": former["number"] if former is not None else None,
+                    }
+                )
+
+        try:
+            await queries.renumber_episode(
+                conn, episode_id=parsed, title_id=target["title_id"], number=new_number
+            )
+        except queries.EpisodeNumberTaken:
+            return _refuse(error_key="library.renumber.taken")
+
+    return render(
+        request,
+        "renumber_form.html",
+        done=True,
+        episode_id=parsed,
+        slug=target["slug"],
+        old_number=target["number"],
+        new_number=new_number,
+    )
 
 
 # --- Task 2: a check page for every episode and every edition --------------
