@@ -210,3 +210,16 @@ revision `0007`, login page 200. Measured on the live library afterwards: the pa
 width equals the viewport at 1024, 1920 and 3440px; the text column of a row with
 four actions measures 798, 1209 and 2729px respectively; at 1024px the action
 cluster sits on a line of its own; no horizontal scroll at any width.
+
+Refined the same day: the full-width page ran the row actions to the far edge of a
+wide monitor, a walk away from the text they act on. Commit `0978aef` sizes the page
+to its content instead: as wide as its widest line needs, never narrower than 960px
+and never wider than the viewport, centered, and the sign-in card keeps an explicit
+400px. Rolled as `registry.example.com/mytube/mytube:0978aef` (index digest
+`sha256:c8e303a7b62d96bb12b5d8e38c50b0cd67d5c4749616f3a7cb1c124e68982824`), again
+interface only with the converter still on `5d27962`; pod `mytube-68ccdd6f6c-lx7mt`
+2/2, schema revision `0007`, login page 200. Measured on the live library afterwards,
+in the Russian locale: the page is 1781px wide with 69px on each side at 1920px and
+829px on each side at 3440px, and fills the viewport at 1024px; a row with four
+actions keeps an 899px text column beside a 641px action cluster; no horizontal
+scroll at any width.
