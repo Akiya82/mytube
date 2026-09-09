@@ -1272,6 +1272,7 @@ async def test_convert_payload_carries_only_the_operators_choices(post_client, d
     assert job["subtitle_path"] is None
     assert job["stereo_layout"] == "2d"
     assert job["external_audio_path"] is None
+    assert job["make_default_when_ready"] is False
     # Nothing derived -- no command, no encoder settings, no filter string.
     assert set(job.keys()) == {
         "kind",
@@ -1284,6 +1285,7 @@ async def test_convert_payload_carries_only_the_operators_choices(post_client, d
         "subtitle_path",
         "stereo_layout",
         "external_audio_path",
+        "make_default_when_ready",
     }
 
 

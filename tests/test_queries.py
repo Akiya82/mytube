@@ -765,3 +765,253 @@ async def test_finish_delete_episode_hard_deletes_an_episode_that_was_never_acti
         "SELECT id FROM editions WHERE id = $1", new_edition_id
     )
     assert edition_row is None
+
+
+# --- Growing an existing title, attaching an edition (0006, plan 05) -------
+
+
+async def _first_episode_id(conn, title_id) -> uuid.UUID:
+    return await conn.fetchval(
+        "SELECT ep.id FROM episodes ep JOIN seasons s ON s.id = ep.season_id "
+        "WHERE s.title_id = $1",
+        title_id,
+    )
+
+
+async def test_title_by_current_slug_matches_an_active_title(raw_conn):
+    edition_id = uuid.uuid4()
+    await queries.create_title_with_edition(
+        raw_conn, "Slug Match Show", "slug-match-show", edition_id, f"{edition_id}.mp4"
+    )
+
+    row = await queries.title_by_current_slug(raw_conn, "slug-match-show")
+
+    assert row is not None
+    assert row["title_name"] == "Slug Match Show"
+
+
+async def test_title_by_current_slug_excludes_a_pending_delete_title(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Pending Delete Match Show", "pending-delete-match-show", edition_id,
+        f"{edition_id}.mp4",
+    )
+    await queries.mark_for_delete(raw_conn, title_id, grace_seconds=3600)
+
+    row = await queries.title_by_current_slug(raw_conn, "pending-delete-match-show")
+
+    assert row is None
+    await queries.cancel_delete(raw_conn, title_id)
+
+
+async def test_episode_by_number_returns_none_for_a_free_number(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Free Number Show", "free-number-show", edition_id, f"{edition_id}.mp4"
+    )
+
+    assert await queries.episode_by_number(raw_conn, title_id, 7) is None
+
+
+async def test_episode_by_number_returns_the_episode_holding_it(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Held Number Show", "held-number-show", edition_id, f"{edition_id}.mp4"
+    )
+    episode_id = await _first_episode_id(raw_conn, title_id)
+
+    row = await queries.episode_by_number(raw_conn, title_id, 1)
+
+    assert row is not None
+    assert row["episode_id"] == episode_id
+
+
+async def test_episode_with_title_returns_title_and_current_number(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Episode Context Show", "episode-context-show", edition_id,
+        f"{edition_id}.mp4",
+    )
+    episode_id = await _first_episode_id(raw_conn, title_id)
+
+    row = await queries.episode_with_title(raw_conn, episode_id)
+
+    assert row["title_id"] == title_id
+    assert row["title_name"] == "Episode Context Show"
+    assert row["number"] == 1
+
+
+async def test_edition_slug_taken_on_episode_is_scoped_to_one_episode(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Slug Scope Show", "slug-scope-show", edition_id, f"{edition_id}.mp4"
+    )
+    episode_id = await _first_episode_id(raw_conn, title_id)
+    second_edition_id = uuid.uuid4()
+    await queries.add_edition_to_episode(
+        raw_conn, episode_id, "dub-ru", second_edition_id, f"{second_edition_id}.mp4"
+    )
+
+    assert await queries.edition_slug_taken_on_episode(raw_conn, episode_id, "dub-ru") is True
+    assert await queries.edition_slug_taken_on_episode(raw_conn, episode_id, "dub-en") is False
+
+
+async def test_set_default_edition_moves_the_pointer(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Default Pointer Show", "default-pointer-show", edition_id,
+        f"{edition_id}.mp4",
+    )
+    episode_id = await _first_episode_id(raw_conn, title_id)
+    second_edition_id = uuid.uuid4()
+    await queries.add_edition_to_episode(
+        raw_conn, episode_id, "dub-ru", second_edition_id, f"{second_edition_id}.mp4"
+    )
+
+    await queries.set_default_edition(raw_conn, second_edition_id)
+
+    default_now = await raw_conn.fetchval(
+        "SELECT default_edition_id FROM episodes WHERE id = $1", episode_id
+    )
+    assert default_now == second_edition_id
+
+
+async def test_attach_episode_to_title_creates_an_episode_and_claims_its_number(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Attach Query Show", "attach-query-show", edition_id, f"{edition_id}.mp4"
+    )
+    new_edition_id = uuid.uuid4()
+
+    episode_id = await queries.attach_episode_to_title(
+        raw_conn, title_id, 12, new_edition_id, f"{new_edition_id}.mp4"
+    )
+
+    row = await queries.episode_by_number(raw_conn, title_id, 12)
+    assert row is not None
+    assert row["episode_id"] == episode_id
+    assert row["default_edition_id"] == new_edition_id
+
+
+async def test_attach_episode_to_title_refuses_a_number_a_different_episode_holds(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Attach Taken Show", "attach-taken-show", edition_id, f"{edition_id}.mp4"
+    )
+    new_edition_id = uuid.uuid4()
+
+    with pytest.raises(queries.EpisodeNumberTaken):
+        await queries.attach_episode_to_title(
+            raw_conn, title_id, 1, new_edition_id, f"{new_edition_id}.mp4"
+        )
+
+
+async def test_attach_episode_to_title_refuses_a_title_that_does_not_exist(raw_conn):
+    new_edition_id = uuid.uuid4()
+
+    with pytest.raises(LookupError):
+        await queries.attach_episode_to_title(
+            raw_conn, uuid.uuid4(), 1, new_edition_id, f"{new_edition_id}.mp4"
+        )
+
+
+async def test_add_edition_to_episode_never_touches_the_default_pointer(raw_conn):
+    edition_id = uuid.uuid4()
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "No Default Touch Show", "no-default-touch-show", edition_id,
+        f"{edition_id}.mp4",
+    )
+    episode_id = await _first_episode_id(raw_conn, title_id)
+    second_edition_id = uuid.uuid4()
+
+    await queries.add_edition_to_episode(
+        raw_conn, episode_id, "dub-ru", second_edition_id, f"{second_edition_id}.mp4"
+    )
+
+    default_still = await raw_conn.fetchval(
+        "SELECT default_edition_id FROM episodes WHERE id = $1", episode_id
+    )
+    assert default_still == edition_id
+
+
+async def test_add_edition_to_episode_refuses_an_episode_that_does_not_exist(raw_conn):
+    new_edition_id = uuid.uuid4()
+
+    with pytest.raises(LookupError):
+        await queries.add_edition_to_episode(
+            raw_conn, uuid.uuid4(), "dub-ru", new_edition_id, f"{new_edition_id}.mp4"
+        )
+
+
+async def test_concurrent_attach_same_number_one_wins_one_raises(migrated_db_url):
+    """Two connections race to attach episode 7 of the same title -- the
+    same claim-lock discipline `test_concurrent_create_with_same_
+    candidate_gets_two_different_slugs` already proves for a title slug,
+    one level down for an episode number.
+    """
+    setup_conn = await asyncpg.connect(migrated_db_url)
+    try:
+        edition_id = uuid.uuid4()
+        title_id = await queries.create_title_with_edition(
+            setup_conn, "Concurrent Attach Show", "concurrent-attach-show", edition_id,
+            f"{edition_id}.mp4",
+        )
+    finally:
+        await setup_conn.close()
+
+    async def worker():
+        conn = await asyncpg.connect(migrated_db_url)
+        try:
+            new_edition_id = uuid.uuid4()
+            await queries.attach_episode_to_title(
+                conn, title_id, 7, new_edition_id, f"{new_edition_id}.mp4"
+            )
+            return "ok"
+        except queries.EpisodeNumberTaken:
+            return "taken"
+        finally:
+            await conn.close()
+
+    results = await asyncio.gather(worker(), worker())
+    assert sorted(results) == ["ok", "taken"]
+
+
+async def test_concurrent_add_edition_same_slug_one_wins_one_raises(migrated_db_url):
+    """The identical race one level down for an edition slug: both workers
+    plan and claim "dub-ru" inside their own locked transaction, the
+    pattern `orchestrator.web.routes_titles.add_confirm_route`'s edition
+    branch itself follows.
+    """
+    from orchestrator.media.add import plan_edition_slug
+
+    setup_conn = await asyncpg.connect(migrated_db_url)
+    try:
+        edition_id = uuid.uuid4()
+        title_id = await queries.create_title_with_edition(
+            setup_conn, "Concurrent Edition Show", "concurrent-edition-show", edition_id,
+            f"{edition_id}.mp4",
+        )
+        episode_id = await _first_episode_id(setup_conn, title_id)
+    finally:
+        await setup_conn.close()
+
+    async def worker():
+        conn = await asyncpg.connect(migrated_db_url)
+        try:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)", queries.SLUG_CLAIM_LOCK_KEY
+                )
+                chosen = await plan_edition_slug(conn, episode_id, "dub-ru")
+                new_edition_id = uuid.uuid4()
+                await queries.add_edition_to_episode(
+                    conn, episode_id, chosen, new_edition_id, f"{new_edition_id}.mp4"
+                )
+                return "ok"
+        except Exception as exc:
+            return type(exc).__name__
+        finally:
+            await conn.close()
+
+    results = await asyncio.gather(worker(), worker())
+    assert sorted(results) == ["EditionSlugTaken", "ok"]

@@ -1597,30 +1597,17 @@ async def add_edition_to_episode(
     stereo_layout: str | None = None,
 ) -> None:
     """Create a new edition of an existing episode, under a caller-
-    validated, already-unique `slug` -- the add-an-edition twin of
-    `attach_episode_to_title`, sharing the same claim lock for the same
-    reason: two operators racing to add "the Russian dub" to the same
-    episode must not both insert the same slug and leave one of them
-    silently unaddressable.
+    validated, already-unique `slug` -- add-an-edition twin of
+    `attach_episode_to_title`, same lock, same race (two operators adding
+    "the Russian dub" at once). See that function's own docstring, and
+    `create_title_with_edition`'s, for the lock's full protection and what
+    a caller must do for it to hold.
 
-    **Never touches `episodes.default_edition_id`.** Adding an edition is
-    never itself what makes it the one an episode's own bare address
-    plays (D-178) -- that only ever happens through `set_default_edition`,
-    called separately once this edition is actually ready and only when
-    the caller's own request asked for it.
-
-    Raises `LookupError` when `episode_id` names no episode. The caller
-    is expected to have already validated and claimed `slug` through
-    `orchestrator.media.add.plan_edition_slug` inside this same locked
-    transaction -- the same discipline `create_title_with_edition`
-    documents for a title slug -- so this function re-checks nothing
-    about the slug itself and simply inserts it.
-
-    An edition slug gets no rename path, ever: it is fixed the moment
-    this INSERT commits, exactly like the object key already is (D-179).
-    A mistake means adding the edition again and deleting the wrong one,
-    never a third kind of alias alongside slug_history and
-    episode_number_history.
+    Never touches `episodes.default_edition_id` (D-178) -- only
+    `set_default_edition` does that, separately. Raises `LookupError` for
+    a missing episode. The caller must have already validated/claimed
+    `slug` via `orchestrator.media.add.plan_edition_slug` inside this same
+    locked transaction; no rename path, ever (D-179).
     """
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
@@ -2655,24 +2642,30 @@ async def enqueue_job(
     subtitle_path: str | None = None,
     stereo_layout: str | None = None,
     external_audio_path: str | None = None,
+    make_default_when_ready: bool = False,
 ):
     """Insert a queued job of `kind` and return its id.
 
     Carries only what the operator chose (D-119) -- source path, audio
-    track, subtitle choice, 3D layout, and now an external audio choice
-    (D-180) beside the embedded one. The worker re-probes the file and
-    builds its own ffmpeg command at claim time with the same shared code
-    the add form used, so shipping a command across the network here would
-    only guarantee the two disagree.
+    track, subtitle choice, 3D layout, an external audio choice (D-180)
+    beside the embedded one, and now the default-edition request (D-178):
+    `make_default_when_ready` is stored on the job rather than applied at
+    save time, read back and acted on only once the job's own terminal
+    write finds the edition it produced actually ready
+    (`queries.sync_title_status`'s own callers). The worker re-probes the
+    file and builds its own ffmpeg command at claim time with the same
+    shared code the add form used, so shipping a command across the
+    network here would only guarantee the two disagree.
     """
     return await conn.fetchval(
         """
         INSERT INTO jobs (
             kind, title_id, playlist_id, edition_id, source_path,
             audio_stream_index, subtitle_kind, subtitle_stream_index,
-            subtitle_path, stereo_layout, external_audio_path
+            subtitle_path, stereo_layout, external_audio_path,
+            make_default_when_ready
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id
         """,
         kind,
@@ -2686,6 +2679,7 @@ async def enqueue_job(
         subtitle_path,
         stereo_layout,
         external_audio_path,
+        make_default_when_ready,
     )
 
 

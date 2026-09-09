@@ -58,15 +58,17 @@ from orchestrator.db import queries
 from orchestrator.language import resolve_track_kind
 from orchestrator.media.add import (
     AudioChoiceRefused,
+    EditionSlugTaken,
     SlugPlan,
     SubtitleChoiceRefused,
     embedded_subtitle_kind,
     parse_audio_choice,
     parse_subtitle_choice,
+    plan_edition_slug,
     plan_slug,
 )
 from orchestrator.reaper import reap_once
-from orchestrator.slugs import SlugError
+from orchestrator.slugs import EditionSlugRefused, SlugError
 from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
 from orchestrator.web.routes_share import (
     _folder_segments_relative_to,
@@ -91,6 +93,33 @@ def _resolve_signs_only(source: Path, subtitle_target: Path) -> bool | None:
         if kind in ("signs_only", "full"):
             return kind == "signs_only"
     return None
+
+
+def _parse_optional_uuid(value: str) -> uuid.UUID | None:
+    """A `target_title_id`/`target_episode_id` hidden field, re-derived and
+    re-validated on every submission (T-05-18) -- an empty, malformed, or
+    otherwise untrustworthy value is simply "not naming a target", never
+    an error the operator sees; the branch that reads it falls back to
+    the new-title path exactly as if the field had never been present.
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
+
+
+def _parse_episode_number(value: str) -> int | None:
+    """D-168: episode numbers stay integers. `None` for a blank field
+    (D-169's "leave blank to add as a standalone title") or anything not
+    a plain non-negative integer -- never a guess, never a raise.
+    """
+    value = (value or "").strip()
+    if not value or not value.isdigit():
+        return None
+    return int(value)
 
 
 router = APIRouter()
@@ -125,21 +154,34 @@ async def convert_estimate_seconds(conn, duration_seconds, settings) -> float | 
 async def add_confirm_route(
     request: Request,
     path: str,
-    name: str = Form(...),
-    slug: str = Form(...),
+    name: str = Form(""),
+    slug: str = Form(""),
     audio_choice: str = Form(...),
     stereo_layout: str = Form("2d"),
     subtitle_choice: str = Form("none"),
     subtitle_manual_path: str = Form(""),
     confirm_reuse: str = Form("false"),
     confirm_add_anyway: str = Form("false"),
+    episode_number: str = Form(""),
+    target_title_id: str = Form(""),
+    target_episode_id: str = Form(""),
+    edition_slug: str = Form(""),
+    make_default: str | None = Form(None),
     add: str | None = Form(None),
     convert: str | None = Form(None),
 ):
-    """One address, two branches (D-145) -- which submit control the
-    browser sent (`add` or `convert`, the two buttons' own `name`) decides
-    which runs; a POST naming neither (every pre-existing caller of this
-    route, before this plan) still takes the as-is branch, unchanged.
+    """Three branches, decided by the form's own target fields, re-derived
+    and re-validated server-side, never trusted from the page that opened
+    (T-05-18): naming a real, currently-free episode number of an
+    existing title attaches a new episode to it (D-159); naming a real
+    episode adds a new edition to it (D-176); naming neither takes the
+    existing new-title branch, unchanged since before this plan except
+    that it now claims `episode_number` for its own single episode
+    instead of always claiming 1.
+
+    Within whichever branch runs, `add`/`convert` (the two buttons' own
+    `name`) still decides remux vs transcode exactly as before (D-145) --
+    a POST naming neither still takes the as-is branch, unchanged.
     """
     settings = get_settings()
     root = Path(settings.share_root)
@@ -156,9 +198,23 @@ async def add_confirm_route(
     if not is_file:
         return _unreachable_response(request, status_code=400)
 
-    clean_name = name.strip()
-    if not clean_name:
-        return _unreachable_response(request, status_code=400)
+    target_title_uuid = _parse_optional_uuid(target_title_id)
+    target_episode_uuid = _parse_optional_uuid(target_episode_id)
+    parsed_episode_number = _parse_episode_number(episode_number)
+    make_default_when_ready = make_default is not None
+
+    # Which of the three branches this submission is: an edition target
+    # takes priority over an attach target over the plain new-title path
+    # -- the same priority the form's own mutually-exclusive banner states
+    # already render in (routes_share._render_add_form).
+    is_edition = target_episode_uuid is not None
+    is_attach = not is_edition and target_title_uuid is not None
+
+    clean_name = ""
+    if not is_edition and not is_attach:
+        clean_name = name.strip()
+        if not clean_name:
+            return _unreachable_response(request, status_code=400)
 
     # T-05-13: the compound audio choice is re-derived from the form on
     # every submission, never trusted from an earlier page render -- a
@@ -260,65 +316,139 @@ async def add_confirm_route(
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # The advisory lock has to be taken before taken_slugs() is
-            # read -- see create_title_with_edition's own docstring for
-            # the race this closes and why the lock alone, taken inside
-            # that function, would not be enough.
+            # The advisory lock has to be taken before any of the three
+            # branches below reads what is taken -- see
+            # create_title_with_edition's own docstring for the race this
+            # closes and why the lock alone, taken inside that function,
+            # would not be enough. attach_episode_to_title and
+            # add_edition_to_episode take the identical lock for the
+            # identical reason one level down (a number, an edition slug);
+            # taking it once here, before branching, covers all three.
             await conn.execute(
                 "SELECT pg_advisory_xact_lock($1)", queries.SLUG_CLAIM_LOCK_KEY
             )
-            try:
-                slug_plan: SlugPlan = await plan_slug(conn, clean_name, explicit_slug=slug)
-            except SlugError:
-                return _unreachable_response(request, status_code=400)
-
-            if slug_plan.is_tombstone and confirm_reuse != "true":
-                # The form's primary button is disabled until "Reuse this
-                # address" is clicked (a GET reload, see routes_share.py);
-                # a POST that arrives without that confirmation is either a
-                # stale form or a direct request bypassing the UI, and is
-                # refused the same way the CLI's --reuse-slug refuses it.
-                return _unreachable_response(request, status_code=400)
-
-            # D-147's second-edition gate, enforced here too -- a form can
-            # be submitted with no page's own control at all, and this is
-            # the check that actually decides. Only fires when the
-            # existing edition's own kind is known and differs from the
-            # action about to be taken; a title this phase never queued a
-            # job for (edition_kind None) is not treated as a mismatch.
-            existing_rows = await queries.editions_by_source_paths(conn, [rel_path])
-            existing = existing_rows[0] if existing_rows else None
-            actioned_kind = "transcode" if is_convert else "remux"
-            if (
-                existing is not None
-                and existing["edition_kind"] is not None
-                and existing["edition_kind"] != actioned_kind
-                and confirm_add_anyway != "true"
-            ):
-                return _unreachable_response(request, status_code=400)
 
             edition_id = uuid.uuid4()
             object_key = f"{edition_id}.mp4"
-            title_id = await queries.create_title_with_edition(
-                conn,
-                clean_name,
-                slug_plan.chosen,
-                edition_id,
-                object_key,
-                status="preparing",
-                source_path=rel_path,
-                audio_stream_index=audio_index,
-                audio_channels=audio_channels,
-                # D-139: both actions carry the layout selector and both
-                # store what it says -- a file that arrives already
-                # stereo-compatible takes this as-is path, and it is the
-                # one that most needs the badge. The convert branch stores
-                # its own layout later, once the conversion reports done
-                # (see routes_worker.done_route's own
-                # set_edition_conversion_detail call) -- not here, so the
-                # edition is never written twice for the same fact.
-                stereo_layout=None if is_convert else stereo_layout,
-            )
+            # D-139: both actions carry the layout selector and both store
+            # what it says for the as-is branch -- a file that arrives
+            # already stereo-compatible takes this path, and it is the one
+            # that most needs the badge. The convert branch stores its own
+            # layout later, once the conversion reports done (see
+            # routes_worker.done_route's own set_edition_conversion_detail
+            # call) -- not here, so the edition is never written twice for
+            # the same fact. Applies identically to all three branches.
+            edition_stereo_layout = None if is_convert else stereo_layout
+
+            if is_edition:
+                # D-176: an edition of an episode the operator already
+                # named (this page's own confirm-gate CTA, or a deep link
+                # from the library's own "Add edition" action).
+                edition_target = await queries.episode_with_title(conn, target_episode_uuid)
+                if edition_target is None:
+                    return _unreachable_response(request, status_code=400)
+                try:
+                    chosen_edition_slug = await plan_edition_slug(
+                        conn, target_episode_uuid, edition_slug
+                    )
+                except (SlugError, EditionSlugRefused, EditionSlugTaken):
+                    return _unreachable_response(request, status_code=400)
+                try:
+                    await queries.add_edition_to_episode(
+                        conn,
+                        target_episode_uuid,
+                        chosen_edition_slug,
+                        edition_id,
+                        object_key,
+                        status="preparing",
+                        source_path=rel_path,
+                        audio_stream_index=audio_index,
+                        audio_channels=audio_channels,
+                        stereo_layout=edition_stereo_layout,
+                    )
+                except LookupError:
+                    return _unreachable_response(request, status_code=400)
+                title_id = edition_target["title_id"]
+
+            elif is_attach:
+                # D-159: a new episode of an existing title, at the number
+                # the operator confirmed (or typed by hand) -- re-derived
+                # from the form field, never trusted from an earlier page
+                # render.
+                if parsed_episode_number is None:
+                    return _unreachable_response(request, status_code=400)
+                try:
+                    await queries.attach_episode_to_title(
+                        conn,
+                        target_title_uuid,
+                        parsed_episode_number,
+                        edition_id,
+                        object_key,
+                        status="preparing",
+                        source_path=rel_path,
+                        audio_stream_index=audio_index,
+                        audio_channels=audio_channels,
+                        stereo_layout=edition_stereo_layout,
+                    )
+                except (LookupError, queries.EpisodeNumberTaken):
+                    return _unreachable_response(request, status_code=400)
+                title_id = target_title_uuid
+
+            else:
+                # The existing new-title branch, unchanged except for one
+                # argument: the number a lone numbered file carries (D-169)
+                # now rides straight through to create_title_with_edition,
+                # which plan 02 already taught to claim it in the same
+                # transaction -- no second number claim here.
+                try:
+                    slug_plan: SlugPlan = await plan_slug(conn, clean_name, explicit_slug=slug)
+                except SlugError:
+                    return _unreachable_response(request, status_code=400)
+
+                if slug_plan.is_tombstone and confirm_reuse != "true":
+                    # The form's primary button is disabled until "Reuse
+                    # this address" is clicked (a GET reload, see
+                    # routes_share.py); a POST that arrives without that
+                    # confirmation is either a stale form or a direct
+                    # request bypassing the UI, and is refused the same way
+                    # the CLI's --reuse-slug refuses it.
+                    return _unreachable_response(request, status_code=400)
+
+                # D-147's second-edition gate, enforced here too -- a form
+                # can be submitted with no page's own control at all, and
+                # this is the check that actually decides. Only fires when
+                # the existing edition's own kind is known and differs from
+                # the action about to be taken; a title this phase never
+                # queued a job for (edition_kind None) is not treated as a
+                # mismatch. D-176 supersedes this gate on the page itself
+                # (an exact match is now always offered as an edition, the
+                # branch above), but the check stays here, unreachable from
+                # the current UI, as a defensive re-check against a
+                # submission bypassing the page entirely.
+                existing_rows = await queries.editions_by_source_paths(conn, [rel_path])
+                existing = existing_rows[0] if existing_rows else None
+                actioned_kind = "transcode" if is_convert else "remux"
+                if (
+                    existing is not None
+                    and existing["edition_kind"] is not None
+                    and existing["edition_kind"] != actioned_kind
+                    and confirm_add_anyway != "true"
+                ):
+                    return _unreachable_response(request, status_code=400)
+
+                title_id = await queries.create_title_with_edition(
+                    conn,
+                    clean_name,
+                    slug_plan.chosen,
+                    edition_id,
+                    object_key,
+                    status="preparing",
+                    source_path=rel_path,
+                    audio_stream_index=audio_index,
+                    audio_channels=audio_channels,
+                    stereo_layout=edition_stereo_layout,
+                    number=parsed_episode_number if parsed_episode_number is not None else 1,
+                )
 
             if subtitle_signs_only is not None:
                 await queries.set_edition_subtitle_signs_only(
@@ -329,9 +459,11 @@ async def add_confirm_route(
             # actual work happens (D-49) -- the durable `jobs` table row
             # is what the matching consumer claims, not an in-memory
             # handle. Inserted inside the same transaction as the
-            # title/edition themselves, so a crash between the two can
-            # never leave a 'preparing' title with nothing queued to work
-            # it.
+            # title/episode/edition themselves, so a crash between the two
+            # can never leave a 'preparing' row with nothing queued to
+            # work it. `make_default_when_ready` (D-178) is stored, never
+            # applied here -- the pointer only moves once the job's own
+            # terminal write finds this edition actually ready.
             if is_convert:
                 await queries.enqueue_job(
                     conn,
@@ -345,6 +477,7 @@ async def add_confirm_route(
                     subtitle_path=clean_subtitle_path,
                     stereo_layout=stereo_layout,
                     external_audio_path=external_audio_rel_path,
+                    make_default_when_ready=make_default_when_ready,
                 )
             else:
                 await queries.enqueue_job(
@@ -355,6 +488,7 @@ async def add_confirm_route(
                     source_path=rel_path,
                     audio_stream_index=audio_index,
                     external_audio_path=external_audio_rel_path,
+                    make_default_when_ready=make_default_when_ready,
                 )
 
     return RedirectResponse("/library", status_code=302)
