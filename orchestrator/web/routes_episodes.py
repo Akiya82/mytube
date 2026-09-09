@@ -23,15 +23,18 @@ behind the session gate -- the check page has never been public.
 """
 import asyncio
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse, Response
 
 from orchestrator.config import get_settings
 from orchestrator.db import queries
+from orchestrator.media.add import plan_slug
 from orchestrator.reaper import reap_once
+from orchestrator.recognize import recognize_filename
 from orchestrator.resolve import _readiness_status_code
-from orchestrator.slugs import AddressRefused, parse_public_address
+from orchestrator.slugs import AddressRefused, SlugError, normalize_slug, parse_public_address
 from orchestrator.storage import delete_object
 from orchestrator.web.templates import render
 
@@ -500,6 +503,261 @@ async def renumber_confirm_route(
         slug=target["slug"],
         old_number=target["number"],
         new_number=new_number,
+    )
+
+
+async def _move_target_row(conn, title_id) -> dict | None:
+    """The move form's own target row (Screen G, D-160), fresh on every
+    request (T-05-43): only a standalone, one-episode, 'active' title has
+    a live "Move into title..." action to reach this from -- the same
+    T-02-10 guard `_renumber_target_row` above already applies to a
+    sibling action.
+    """
+    row = await queries.library_row(conn, title_id)
+    if row is None or row["title_status"] != "active" or (row["episode_count"] or 1) != 1:
+        return None
+    episode = await queries.lowest_episode_of_title(conn, title_id)
+    if episode is None:
+        return None
+    return {
+        "title_id": title_id,
+        "title_name": row["title_name"],
+        "slug": row["slug"],
+        "episode_id": episode["episode_id"],
+        "edition_id": row["edition_id"],
+        "source_path": row["source_path"],
+    }
+
+
+async def _render_move_form(
+    request: Request,
+    conn,
+    target: dict,
+    *,
+    filter_value: str,
+    mode: str | None,
+    name_value: str | None,
+    number_value: str | None,
+    selected_target_title_id: str | None,
+    error_key: str | None = None,
+    slug_plan=None,
+) -> Response:
+    """Shared render for Screen G's not-done state -- the GET route's
+    first render and every re-render a POST refusal produces. The
+    recogniser is re-run over the edition's own stored `source_path` and
+    the candidate list is re-read on every call (T-05-43): a fresh
+    server-side read decides what the page offers, never the client's own
+    submitted values alone (those only fill in what the operator was
+    already typing, via the `*_value`/`mode`/`selected_target_title_id`
+    overrides below).
+    """
+    recognised = recognize_filename(Path(target["source_path"] or "").name)
+    current = await queries.episode_with_title(conn, target["episode_id"])
+    current_number = current["number"] if current is not None else None
+
+    title_match = None
+    try:
+        candidate_slug = normalize_slug(recognised.name)
+    except SlugError:
+        candidate_slug = None
+    if candidate_slug is not None:
+        match = await queries.title_by_current_slug(conn, candidate_slug)
+        if match is not None and match["title_id"] != target["title_id"]:
+            title_match = match
+
+    if mode is None:
+        mode = "existing" if title_match is not None else "new"
+    if name_value is None:
+        name_value = recognised.name
+    if number_value is None:
+        default_number = recognised.episode if recognised.episode is not None else current_number
+        number_value = str(default_number) if default_number is not None else ""
+    if selected_target_title_id is None and title_match is not None:
+        selected_target_title_id = str(title_match["title_id"])
+
+    candidates = [
+        dict(row)
+        for row in await queries.move_target_titles(conn, target["title_id"], filter_value)
+    ]
+    if title_match is not None:
+        candidates.sort(key=lambda row: row["title_id"] != title_match["title_id"])
+
+    return render(
+        request,
+        "move_into_title_form.html",
+        done=False,
+        title_id=target["title_id"],
+        old_slug=target["slug"],
+        mode=mode,
+        filter_value=filter_value,
+        name_value=name_value,
+        number_value=number_value,
+        candidates=candidates,
+        selected_target_title_id=selected_target_title_id,
+        error_key=error_key,
+        slug_plan=slug_plan,
+    )
+
+
+@router.get("/library/title/{title_id}/move")
+async def move_form_route(
+    title_id: str,
+    request: Request,
+    filter: str = "",
+    mode: str | None = None,
+    name: str | None = None,
+    number: str | None = None,
+    target_title_id: str | None = None,
+):
+    """Screen G (05-UI-SPEC.md): arrives prefilled from the recogniser run
+    over the edition's own stored source file (D-160). Every field name
+    read here as a query parameter is the identical name the POST form
+    below reads from its body -- the "Filter titles" button overrides the
+    form's own method to `get` (native `formmethod`, no script), so a
+    filter submission is a plain browser GET carrying the form's whole
+    current state, this route's own job is only to echo it back.
+    """
+    parsed = _parse_uuid(title_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        target = await _move_target_row(conn, parsed)
+        if target is None:
+            return Response(status_code=404)
+
+        return await _render_move_form(
+            request,
+            conn,
+            target,
+            filter_value=filter,
+            mode=mode,
+            name_value=name,
+            number_value=number,
+            selected_target_title_id=target_title_id,
+        )
+
+
+@router.post("/library/title/{title_id}/move")
+async def move_confirm_route(
+    title_id: str,
+    request: Request,
+    mode: str = Form(...),
+    target_title_id: str = Form(""),
+    name: str = Form(""),
+    number: str = Form(""),
+    filter: str = Form(""),
+    confirm_reuse: str = Form("false"),
+):
+    """Save Screen G (D-160, T-05-54): writes through the identical
+    `queries.reparent_edition_to_episode` transaction the folder screen's
+    own single-row move already calls (T-05-37) -- one implementation,
+    two callers, and neither the object key nor the bytes it names are
+    ever touched. The existing-title branch re-reads the submitted target
+    title inside this same request and requires it to still be `active`
+    before repointing anything (T-05-54); the new-title branch creates a
+    bare, already-`active` title first (`queries.create_title_shell`)
+    then repoints into it exactly the same way.
+    """
+    parsed = _parse_uuid(title_id)
+    if parsed is None:
+        return Response(status_code=404)
+
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        target = await _move_target_row(conn, parsed)
+        if target is None:
+            return Response(status_code=404)
+
+        clean_number = number.strip()
+        if not clean_number.isdigit():
+            return Response(status_code=400)
+        parsed_number = int(clean_number)
+
+        if mode == "existing":
+            target_title_parsed = _parse_uuid(target_title_id)
+            if target_title_parsed is None:
+                return Response(status_code=400)
+            existing_target = await queries.library_row(conn, target_title_parsed)
+            if existing_target is None or existing_target["title_status"] != "active":
+                return Response(status_code=400)
+
+            try:
+                await queries.reparent_edition_to_episode(
+                    conn,
+                    edition_id=target["edition_id"],
+                    old_title_id=target["title_id"],
+                    old_episode_id=target["episode_id"],
+                    old_slug=target["slug"],
+                    target_title_id=target_title_parsed,
+                    number=parsed_number,
+                )
+            except queries.EpisodeNumberTaken:
+                return await _render_move_form(
+                    request,
+                    conn,
+                    target,
+                    filter_value=filter,
+                    mode=mode,
+                    name_value=name,
+                    number_value=number,
+                    selected_target_title_id=target_title_id,
+                    error_key="library.renumber.taken",
+                )
+            new_slug = existing_target["slug"]
+
+        elif mode == "new":
+            clean_name = name.strip()
+            if not clean_name:
+                return Response(status_code=400)
+
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)", queries.SLUG_CLAIM_LOCK_KEY
+                )
+                try:
+                    slug_plan = await plan_slug(conn, clean_name)
+                except SlugError:
+                    return Response(status_code=400)
+
+                if slug_plan.is_tombstone and confirm_reuse != "true":
+                    return await _render_move_form(
+                        request,
+                        conn,
+                        target,
+                        filter_value=filter,
+                        mode=mode,
+                        name_value=clean_name,
+                        number_value=number,
+                        selected_target_title_id=None,
+                        slug_plan=slug_plan,
+                    )
+
+                new_title_id = await queries.create_title_shell(conn, clean_name, slug_plan.chosen)
+
+            await queries.reparent_edition_to_episode(
+                conn,
+                edition_id=target["edition_id"],
+                old_title_id=target["title_id"],
+                old_episode_id=target["episode_id"],
+                old_slug=target["slug"],
+                target_title_id=new_title_id,
+                number=parsed_number,
+            )
+            new_slug = slug_plan.chosen
+
+        else:
+            return Response(status_code=400)
+
+    return render(
+        request,
+        "move_into_title_form.html",
+        done=True,
+        title_id=parsed,
+        old_slug=target["slug"],
+        new_slug=new_slug,
+        new_number=parsed_number,
     )
 
 

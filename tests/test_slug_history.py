@@ -68,6 +68,45 @@ async def test_rename_pitfall_1_old_address_keeps_resolving(db_conn):
     assert old["title_id"] == new["title_id"]
 
 
+async def test_move_into_series_keeps_the_old_address_resolving(db_conn):
+    """D-160's own promise for the library's single-row move (Screen G):
+    `reparent_edition_to_episode` never deletes the standalone
+    title's own `slug_history` row, so its old address keeps resolving to
+    the exact episode that moved, through the permanent alias this
+    function writes -- proven directly against the query here, the same
+    query test_add_folder.py already exercises for the folder screen's
+    own batch move.
+    """
+    target_title_id = await _create_title(db_conn, "Move Target Series", "move-target-series-slug")
+    edition_id = uuid.uuid4()
+    source_title_id = await queries.create_title_with_edition(
+        db_conn,
+        "Move Source Standalone",
+        "move-source-standalone-slug",
+        edition_id,
+        f"{edition_id}.mp4",
+    )
+    source_episode = await queries.episode_by_number(db_conn, source_title_id, 1)
+
+    await queries.reparent_edition_to_episode(
+        db_conn,
+        edition_id=edition_id,
+        old_title_id=source_title_id,
+        old_episode_id=source_episode["episode_id"],
+        old_slug="move-source-standalone-slug",
+        target_title_id=target_title_id,
+        number=5,
+    )
+
+    old = await queries.resolve_slug(db_conn, "move-source-standalone-slug")
+    assert old is not None
+    assert old["title_id"] == target_title_id
+
+    new = await queries.resolve_episode_slug(db_conn, "move-target-series-slug", 5)
+    assert new is not None
+    assert new["edition_id"] == edition_id
+
+
 async def test_resolve_deleted_title_returns_non_active_status(db_conn):
     title_id = await _create_title(db_conn, "To Be Deleted", "slug-doomed")
     await queries.mark_for_delete(db_conn, title_id, grace_seconds=0)

@@ -2610,6 +2610,67 @@ async def reparent_edition_to_episode(
     return new_episode_id
 
 
+async def create_title_shell(conn: asyncpg.Connection, name: str, slug: str) -> "uuid.UUID":
+    """A bare title -- one season, no episodes yet, its slug reserved --
+    for the move form's new-title branch (Screen G, D-160): the title
+    itself has nothing of its own to convert or wait on, its only episode
+    arrives a moment later, already `active`, through
+    `reparent_edition_to_episode`. Unlike `create_title_with_episodes`
+    (whose whole point is the web add flow's `preparing` shape while a job
+    runs), this title is born `active` -- there is no job, no worker,
+    nothing here that could ever fail.
+
+    Same claim-lock discipline as every other creation path in this
+    module: the first statement takes `SLUG_CLAIM_LOCK_KEY`.
+    """
+    async with conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
+        title_id = await conn.fetchval(
+            "INSERT INTO titles (name, status) VALUES ($1, 'active') RETURNING id",
+            name,
+        )
+        await conn.execute("INSERT INTO seasons (title_id) VALUES ($1)", title_id)
+        await reuse_slug(conn, slug, title_id)
+    return title_id
+
+
+async def move_target_titles(
+    conn: asyncpg.Connection, exclude_title_id, filter_text: str
+) -> list[asyncpg.Record]:
+    """Active titles that can receive a standalone episode (Screen G's own
+    candidate list, D-160) -- excludes `exclude_title_id` itself (the
+    standalone title being moved, since moving it into itself is
+    meaningless) and restricts to `active`, matching T-05-54's own "the
+    target must be active" requirement at read time, re-checked again by
+    the caller inside the writing transaction before anything moves.
+
+    `filter_text` is a plain containment match over the title's name and
+    its own current address, via `strpos()` rather than `LIKE` (T-05-55):
+    `strpos` performs an ordinary substring search, so a value containing
+    `%` or `_` is matched as that literal text, never as a wildcard
+    pattern -- there is no pattern grammar here to escape into in the
+    first place. An empty `filter_text` matches every row (`strpos(x, '')`
+    is always 1 in Postgres), which is exactly the "show every candidate"
+    behavior the form's initial, unfiltered render needs.
+    """
+    return await conn.fetch(
+        """
+        SELECT t.id AS title_id, t.name AS title_name, sh.slug AS slug
+        FROM titles t
+        JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
+        WHERE t.status = 'active'
+          AND t.id != $1
+          AND (
+            strpos(lower(t.name), lower($2)) > 0
+            OR strpos(lower(sh.slug), lower($2)) > 0
+          )
+        ORDER BY t.name
+        """,
+        exclude_title_id,
+        filter_text,
+    )
+
+
 # --- Playlist queries (0004_playlists.py) ---------------------------------
 
 

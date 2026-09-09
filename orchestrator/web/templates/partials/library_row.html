@@ -345,6 +345,15 @@
         <button type="submit" class="btn btn--destructive">{{ t("library.cta.delete") }}</button>
       </form>
       <a class="btn btn--ghost" href="/check/{{ row.slug }}">{{ t("library.cta.check") }}</a>
+      {% if not row.is_series %}
+        {# A film or any one-episode title renders as it does today
+           (D-162) with exactly one addition: "Move into title..."
+           (05-UI-SPEC.md Screen D) -- the single-row companion to the
+           folder screen's own batch move (D-160), for the episode whose
+           folder is no longer on the share, or for merging two
+           standalone titles into one series with no folder involved. #}
+        <a class="btn btn--ghost" href="/library/title/{{ row.title_id }}/move" data-control="move-into-title">{{ t("library.cta.move_into_title") }}</a>
+      {% endif %}
     </div>
   {% elif row.title_status == "pending_delete" %}
     <div class="library-row__actions">

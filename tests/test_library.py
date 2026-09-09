@@ -2596,3 +2596,232 @@ async def test_renumber_after_a_later_episode_claims_the_old_number_the_newer_cl
     still_reachable = await queries.resolve_episode_slug(raw_conn, slug, 9)
     assert still_reachable["episode_id"] == episode1_id
 
+# --- A standalone one-episode title can move into a title, from the
+# --- library (Screen G, D-160) ----------------------------------------------
+
+
+async def test_move_control_renders_only_on_a_one_episode_title(client, queries_stub):
+    """Screen D's own single addition to a one-episode title's row
+    (D-160): a film or any one-episode title renders as it does today,
+    plus this one ghost action. A series row never gets it.
+    """
+    standalone_id = uuid.uuid4()
+    series_id = uuid.uuid4()
+    queries_stub.rows = [
+        _row(title_id=standalone_id, slug="move-control-standalone"),
+        _row(title_id=series_id, slug="move-control-series", episode_count=2, ready_count=2),
+    ]
+    queries_stub.episodes_by_title[series_id] = [
+        _episode(title_id=series_id, number=1),
+        _episode(title_id=series_id, number=2),
+    ]
+
+    async with client:
+        resp = await client.get("/library")
+
+    standalone_section = resp.text.split(f'data-title-id="{series_id}"')[0]
+    series_section = resp.text.split(f'data-title-id="{series_id}"')[1]
+    assert f"/library/title/{standalone_id}/move" in standalone_section
+    assert f"/library/title/{series_id}/move" not in series_section
+
+
+@pytest.mark.integration
+async def test_move_form_prefills_name_and_number_from_the_recogniser(action_client, raw_conn):
+    title_id, edition_id, _object_key = await _create_title(
+        raw_conn, "Bocchi the Rock - 12", "bocchi-move-source"
+    )
+    await raw_conn.execute(
+        "UPDATE editions SET source_path = $1 WHERE id = $2",
+        "Bocchi the Rock - 12.mkv",
+        edition_id,
+    )
+
+    resp = await action_client.get(f"/library/title/{title_id}/move")
+
+    assert resp.status_code == 200
+    assert 'value="12"' in resp.text
+    assert "Bocchi the Rock" in resp.text
+
+
+@pytest.mark.integration
+async def test_move_existing_title_repoints_and_leaves_the_object_key_untouched(
+    action_client, raw_conn
+):
+    target_title_id, _target_edition_id, _ = await _create_title(
+        raw_conn, "Move Target Series", "move-target-series"
+    )
+    source_title_id, source_edition_id, source_object_key = await _create_title(
+        raw_conn, "Move Source Standalone", "move-source-standalone"
+    )
+
+    resp = await action_client.post(
+        f"/library/title/{source_title_id}/move",
+        data={"mode": "existing", "target_title_id": str(target_title_id), "number": "7"},
+    )
+
+    assert resp.status_code == 200
+    assert "The old address keeps working" in resp.text
+    assert "move-source-standalone" in resp.text
+    assert "move-target-series/07" in resp.text
+
+    old_row = await queries.resolve_slug(raw_conn, "move-source-standalone")
+    assert old_row is not None
+    assert old_row["title_id"] == target_title_id
+
+    new_row = await queries.resolve_episode_slug(raw_conn, "move-target-series", 7)
+    assert new_row is not None
+    assert new_row["edition_id"] == source_edition_id
+
+    edition_row = await raw_conn.fetchrow(
+        "SELECT object_key FROM editions WHERE id = $1", source_edition_id
+    )
+    assert edition_row["object_key"] == source_object_key
+
+
+@pytest.mark.integration
+async def test_move_taken_number_refuses_inline_and_keeps_the_title_selected(
+    action_client, raw_conn
+):
+    target_title_id, _target_edition_id, _ = await _create_title(
+        raw_conn, "Move Taken Target", "move-taken-target"
+    )
+    source_title_id, _source_edition_id, _ = await _create_title(
+        raw_conn, "Move Taken Source", "move-taken-source"
+    )
+
+    resp = await action_client.post(
+        f"/library/title/{source_title_id}/move",
+        data={"mode": "existing", "target_title_id": str(target_title_id), "number": "1"},
+    )
+
+    assert resp.status_code == 200
+    assert "already exists in this title" in resp.text
+    assert f'value="{target_title_id}"' in resp.text or "checked" in resp.text
+
+
+@pytest.mark.integration
+async def test_move_filter_narrows_the_candidate_list_server_side(action_client, raw_conn):
+    await _create_title(raw_conn, "Filter Match Show", "filter-match-show")
+    await _create_title(raw_conn, "Unrelated Other Show", "unrelated-other-show")
+    source_title_id, _edition_id, _ = await _create_title(
+        raw_conn, "Filter Source Standalone", "filter-source-standalone"
+    )
+
+    resp = await action_client.get(
+        f"/library/title/{source_title_id}/move", params={"filter": "Filter Match"}
+    )
+
+    assert resp.status_code == 200
+    assert "Filter Match Show" in resp.text
+    assert "Unrelated Other Show" not in resp.text
+
+
+@pytest.mark.integration
+async def test_move_filter_with_pattern_characters_is_matched_as_text(action_client, raw_conn):
+    await _create_title(raw_conn, "50% Off Show", "fifty-percent-off-show")
+    source_title_id, _edition_id, _ = await _create_title(
+        raw_conn, "Percent Source Standalone", "percent-source-standalone"
+    )
+
+    resp = await action_client.get(
+        f"/library/title/{source_title_id}/move", params={"filter": "50%"}
+    )
+
+    assert resp.status_code == 200
+    assert "50% Off Show" in resp.text
+
+
+@pytest.mark.integration
+async def test_move_new_title_creates_it_then_repoints_and_old_address_stays_alive(
+    action_client, raw_conn
+):
+    source_title_id, source_edition_id, _ = await _create_title(
+        raw_conn, "Merge Source Standalone", "merge-source-standalone"
+    )
+
+    resp = await action_client.post(
+        f"/library/title/{source_title_id}/move",
+        data={"mode": "new", "name": "Merge New Series", "number": "1"},
+    )
+
+    assert resp.status_code == 200
+    assert "The old address keeps working" in resp.text
+
+    old_row = await queries.resolve_slug(raw_conn, "merge-source-standalone")
+    assert old_row is not None
+    new_row = await queries.resolve_episode_slug(raw_conn, "merge-new-series", 1)
+    assert new_row is not None
+    assert new_row["edition_id"] == source_edition_id
+
+
+@pytest.mark.integration
+async def test_move_merges_two_standalone_titles_with_both_old_addresses_alive(
+    action_client, raw_conn
+):
+    """D-160's own second scenario: no folder involved at all, two
+    standalone one-episode titles merged into one series.
+    """
+    target_title_id, _target_edition_id, _ = await _create_title(
+        raw_conn, "Merge Target Standalone", "merge-target-standalone"
+    )
+    source_title_id, _source_edition_id, _ = await _create_title(
+        raw_conn, "Merge Second Standalone", "merge-second-standalone"
+    )
+
+    resp = await action_client.post(
+        f"/library/title/{source_title_id}/move",
+        data={"mode": "existing", "target_title_id": str(target_title_id), "number": "2"},
+    )
+
+    assert resp.status_code == 200
+    target_still = await queries.resolve_slug(raw_conn, "merge-target-standalone")
+    assert target_still is not None
+    source_still = await queries.resolve_slug(raw_conn, "merge-second-standalone")
+    assert source_still is not None
+    assert source_still["title_id"] == target_title_id
+
+
+@pytest.mark.integration
+async def test_move_then_renumber_the_same_episode_every_address_it_ever_had_still_resolves(
+    action_client, raw_conn
+):
+    """The plan's own overall verification: a move and a renumber on the
+    same episode, in sequence -- every address that episode has ever
+    answered at (its old standalone slug, its first numbered address in
+    the series, and its renumbered address) still resolves to it
+    afterwards.
+    """
+    target_title_id, _target_edition_id, _ = await _create_title(
+        raw_conn, "Combined Target Series", "combined-target-series"
+    )
+    source_title_id, source_edition_id, _ = await _create_title(
+        raw_conn, "Combined Source Standalone", "combined-source-standalone"
+    )
+
+    move_resp = await action_client.post(
+        f"/library/title/{source_title_id}/move",
+        data={"mode": "existing", "target_title_id": str(target_title_id), "number": "5"},
+    )
+    assert move_resp.status_code == 200
+
+    moved_episode = await queries.episode_by_number(raw_conn, target_title_id, 5)
+    episode_id = moved_episode["episode_id"]
+
+    renumber_resp = await action_client.post(
+        f"/library/episode/{episode_id}/renumber", data={"number": "8"}
+    )
+    assert renumber_resp.status_code == 200
+
+    old_standalone = await queries.resolve_slug(raw_conn, "combined-source-standalone")
+    assert old_standalone is not None
+    assert old_standalone["title_id"] == target_title_id
+
+    old_number = await queries.resolve_episode_slug(raw_conn, "combined-target-series", 5)
+    assert old_number is not None
+    assert old_number["episode_id"] == episode_id
+    assert old_number["edition_id"] == source_edition_id
+
+    new_number = await queries.resolve_episode_slug(raw_conn, "combined-target-series", 8)
+    assert new_number is not None
+    assert new_number["episode_id"] == episode_id
+    assert new_number["edition_id"] == source_edition_id
