@@ -15,7 +15,7 @@ import pytest
 
 from orchestrator.cli import storage_audit
 from orchestrator.db import queries
-from orchestrator.storage import StorageUsage
+from orchestrator.storage import StorageUsage, reconcile
 
 from conftest import ADMIN_FQDN, WORKER_TOKEN
 
@@ -333,3 +333,156 @@ async def test_a_reaped_titles_episodes_are_still_excluded_exactly_as_before(raw
     keys = [row["key"] for row in referenced]
 
     assert keys.count(f"{edition_id}.mp4") == 0
+
+
+# --- plan 18: an address is not broken before anything undertook to
+# write it -- referenced_objects gains a predicate on the edition's own
+# status (excluding 'preparing') and, separately, on the title's for one
+# specific write-path asymmetry. See that function's own docstring for
+# the full argument; these tests seed the four cases it argues for.
+
+
+@pytest.mark.integration
+async def test_a_preparing_editions_object_is_not_a_broken_address(raw_conn):
+    """The false alarm the acceptance walk found: an edition holds its
+    `object_key` from creation and holds no object in the bucket until
+    the converter uploads one, so before that upload there is nothing for
+    the bucket to be missing. Eleven episodes saved in one folder press
+    produced up to eleven of these phantom broken addresses for the
+    length of the run.
+    """
+    edition1 = uuid.uuid4()
+    slug = f"storage-audit-preparing-{uuid.uuid4().hex[:8]}"
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Storage Audit Preparing", slug, edition1, f"{edition1}.mp4"
+    )
+    edition2 = uuid.uuid4()
+    await queries.attach_episode_to_title(
+        raw_conn, title_id, 2, edition2, f"{edition2}.mp4", status="preparing"
+    )
+
+    referenced = await queries.referenced_objects(raw_conn)
+    keys = [row["key"] for row in referenced]
+
+    assert keys.count(f"{edition1}.mp4") == 1  # the active sibling, unaffected
+    assert keys.count(f"{edition2}.mp4") == 0
+
+
+@pytest.mark.integration
+async def test_a_preparing_edition_is_a_broken_address_once_active_and_still_missing_its_object(
+    raw_conn,
+):
+    """The other half of the same fix: once the converter actually
+    finishes and the edition flips to active, a bucket still missing its
+    object is a genuinely broken address again -- proving the exclusion
+    above filters the in-flight window and nothing past it. This is the
+    whole reason the count still exists.
+    """
+    edition1 = uuid.uuid4()
+    slug = f"storage-audit-preparing-active-{uuid.uuid4().hex[:8]}"
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Storage Audit Preparing Active", slug, edition1, f"{edition1}.mp4"
+    )
+    edition2 = uuid.uuid4()
+    await queries.attach_episode_to_title(
+        raw_conn, title_id, 2, edition2, f"{edition2}.mp4", status="preparing"
+    )
+    assert f"{edition2}.mp4" not in {
+        r["key"] for r in await queries.referenced_objects(raw_conn)
+    }
+
+    await queries.mark_edition_active(raw_conn, edition2)
+
+    referenced = await queries.referenced_objects(raw_conn)
+    assert f"{edition2}.mp4" in {r["key"] for r in referenced}
+
+    result = reconcile({}, [r for r in referenced if str(edition2) in r["key"]])
+    assert any(m.key == f"{edition2}.mp4" for m in result.missing)
+
+
+@pytest.mark.integration
+async def test_a_preparing_title_contributes_nothing_until_the_title_is_active(raw_conn):
+    """The single-file add's own shape (`create_title_with_edition`):
+    `status` lands on the *title* row while the edition insert takes the
+    schema's own default (`active`), so a fresh add is one nominally-
+    active edition sitting inside a still-preparing title, with no object
+    in the bucket yet. The edition-level exclusion alone would never see
+    this one -- the edition itself is not `preparing` -- so this is the
+    title-level exclusion's own regression, distinct from the two above.
+    """
+    edition_id = uuid.uuid4()
+    slug = f"storage-audit-preparing-title-{uuid.uuid4().hex[:8]}"
+    title_id = await queries.create_title_with_edition(
+        raw_conn,
+        "Storage Audit Preparing Title",
+        slug,
+        edition_id,
+        f"{edition_id}.mp4",
+        status="preparing",
+    )
+    assert f"{edition_id}.mp4" not in {
+        r["key"] for r in await queries.referenced_objects(raw_conn)
+    }
+
+    await queries.mark_title_active(raw_conn, title_id)
+
+    referenced = await queries.referenced_objects(raw_conn)
+    assert f"{edition_id}.mp4" in {r["key"] for r in referenced}
+
+
+@pytest.mark.integration
+async def test_an_edition_inside_its_delete_countdown_is_still_counted_referenced(raw_conn):
+    """A `pending_delete` edition's object is untouched while the
+    deletion can still be undone (D-62) -- a bucket genuinely missing it
+    during that window is still a broken address, so the new `preparing`
+    exclusion must not have swallowed this status too. The precedent is
+    the identical episode-level test above, one level down.
+    """
+    edition1 = uuid.uuid4()
+    slug = f"storage-audit-edition-countdown-{uuid.uuid4().hex[:8]}"
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Storage Audit Edition Countdown", slug, edition1, f"{edition1}.mp4"
+    )
+    edition2 = uuid.uuid4()
+    await queries.attach_episode_to_title(raw_conn, title_id, 2, edition2, f"{edition2}.mp4")
+    await queries.mark_edition_for_delete(raw_conn, edition2, grace_seconds=3600)
+
+    referenced = await queries.referenced_objects(raw_conn)
+    keys = [row["key"] for row in referenced]
+
+    assert keys.count(f"{edition1}.mp4") == 1
+    assert keys.count(f"{edition2}.mp4") == 1
+
+
+@pytest.mark.integration
+async def test_a_failed_editions_object_still_in_the_bucket_is_reported_present_not_orphaned(
+    raw_conn,
+):
+    """The route the production converter reports a failure to deletes
+    nothing (D-115: the poster uploads before the video, so a job that
+    dies mid-transfer can already have put a real object in the bucket).
+    A failed edition must therefore stay in the referenced set -- if
+    `failed` is ever added to the exclusion list beside `preparing`, this
+    is the test that catches it: the object really is in the bucket, and
+    `reconcile` must account for it as present, neither an orphan nor a
+    broken address. The cluster holds no failed edition at all today, so
+    this hazard is latent and this seed is the only place it exists.
+    """
+    edition1 = uuid.uuid4()
+    slug = f"storage-audit-failed-present-{uuid.uuid4().hex[:8]}"
+    title_id = await queries.create_title_with_edition(
+        raw_conn, "Storage Audit Failed Present", slug, edition1, f"{edition1}.mp4"
+    )
+    edition2 = uuid.uuid4()
+    await queries.attach_episode_to_title(raw_conn, title_id, 2, edition2, f"{edition2}.mp4")
+    await queries.mark_edition_failed(raw_conn, edition2, "failed.reason.upload")
+
+    referenced = await queries.referenced_objects(raw_conn)
+    keys = {r["key"] for r in referenced}
+    assert f"{edition2}.mp4" in keys  # still counted, unlike a preparing edition
+
+    # The object really is in the bucket -- the failure route never deletes it.
+    listing = {f"{edition2}.mp4": 1234}
+    result = reconcile(listing, [r for r in referenced if str(edition2) in r["key"]])
+    assert result.missing == []
+    assert result.unreferenced == []

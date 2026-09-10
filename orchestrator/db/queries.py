@@ -1151,18 +1151,87 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     `pending_delete` title does: nothing has been removed from storage yet.
     The playlist branch names no episode at all and is untouched.
 
+    **An edition that has not been written yet is excluded too, on the
+    same two branches** (plan 18): `e.status != 'preparing'`. An edition
+    is created with its `object_key` already allocated and holds no
+    object in the bucket until the converter uploads one, so before that
+    upload there is nothing for the bucket to be missing -- left
+    uncounted, a folder save that creates a dozen editions in one press
+    reported a dozen phantom broken addresses for the length of the run.
+    Three other statuses stay in the set, and each stays for its own
+    reason:
+
+    - *active*, obviously -- that is what the count is for.
+    - *pending_delete*, for the identical reason a `pending_delete` title
+      or episode already does: the object is untouched while the
+      deletion can still be undone, so a bucket missing it genuinely is
+      a broken address.
+    - *failed*, on purpose, and this is the one worth writing down at
+      length. The route the production converter actually reports a
+      failure to (`routes_worker.failed_route`) writes the two status
+      flips and deletes nothing, and the shared rejection helper beside
+      it is called with its delete flag deliberately off for that route
+      -- a decision already made on purpose, for a reason already
+      written down there: the poster is uploaded before the video, so a
+      conversion that dies mid-transfer can already have put a real
+      object in the bucket, and this failure report is the only
+      announcement of it. Nothing reaps that object afterwards either,
+      and both operator-facing removal routes
+      (`routes_episodes.delete_edition_route`/`purge_edition_route`)
+      refuse anything that is not currently active. Excluding this
+      status would turn a real object into a permanent, unfixable
+      orphan on every future audit -- one false alarm traded for
+      another, the exact failure this exclusion exists to remove. Two
+      other ways to close the same gap were weighed and rejected:
+      making the failure report delete the job's objects reverses a
+      deliberate no-delete decision in the worker protocol, for a
+      hazard with no observed instance in the cluster; and carrying the
+      edition's status through to `storage.reconcile` so this status is
+      filtered only once its object is actually absent needs a new
+      column in this result and a new branch in a pure function two
+      callers already share, to express what the plain inclusion above
+      already expresses for free.
+
+    The residual this leaves is named rather than hidden: an edition
+    whose status *is* this last one and whose object *is* actually
+    absent -- the in-process consumer's own failure path, which does
+    clean up after itself, unlike the route above -- stays in the set
+    and keeps reporting as a broken address until its row is removed.
+    That is unchanged by this exclusion, it is not the false alarm the
+    acceptance walk found, and the operator sees that same edition
+    marked failed on the library page at the same time.
+
+    **The title is excluded while `preparing` too, on the same two
+    branches**, but for one narrow reason rather than a general rule:
+    the single-file add's own `create_title_with_edition` writes this
+    status to the *title* row and lets the edition insert take the
+    schema's own default (`active`), so a title created by that path
+    sits with one `active` edition and no object until the remux or
+    upload finishes. This condition exists to compensate for that one
+    asymmetry, not to claim a preparing title is otherwise
+    uninteresting -- a reader who later makes that insert write
+    `preparing` explicitly should remove this condition, not add to it.
+    It costs one honest trade, worth stating plainly: a title stuck
+    `preparing` because its add crashed before any terminal write hides
+    its own missing object until it is retried or deleted, which the
+    operator can already see failing on the library page. A rare
+    under-report of a row the operator can see is the right trade
+    against an over-report that fired on every batch and trained the
+    operator to stop reading the count at all.
+
     The third branch is a playlist artifact -- `playlist_artifacts.
     object_key`, excluded only once its playlist is `'deleted'`, for the
     same reason as the two branches above. **Superseded artifacts are
     included on purpose**: they are still in the bucket while a viewer's
     signed address handed out before a rebuild can still reach them, and
     an audit calling one garbage would be telling the operator to delete
-    something that is still playing. This lands here, one more UNION ALL
-    branch rather than a second query, because the reconciliation
+    something that is still playing. This lands here, one more branch of
+    the same union rather than a second query, because the reconciliation
     function, the library header's counts and the audit report all read
     this one result -- and because it is where `playlist_artifacts` is
     created; nothing has produced an artifact yet on a fresh database, so
-    the branch is inert until the first build.
+    the branch is inert until the first build. It names no edition and no
+    title at all, so neither of this plan's two new exclusions touches it.
     """
     return await conn.fetch(
         """
@@ -1173,7 +1242,8 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
         JOIN seasons s ON s.id = ep.season_id
         JOIN titles t ON t.id = s.title_id
         LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
-        WHERE t.status != 'deleted' AND ep.status != 'deleted'
+        WHERE t.status != 'deleted' AND t.status != 'preparing'
+              AND ep.status != 'deleted' AND e.status != 'preparing'
         UNION ALL
         SELECT e.poster_key AS key, 'poster' AS kind,
                t.name AS title_name, sh.slug AS slug, t.status AS title_status
@@ -1182,7 +1252,9 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
         JOIN seasons s ON s.id = ep.season_id
         JOIN titles t ON t.id = s.title_id
         LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
-        WHERE e.poster_key IS NOT NULL AND t.status != 'deleted' AND ep.status != 'deleted'
+        WHERE e.poster_key IS NOT NULL
+              AND t.status != 'deleted' AND t.status != 'preparing'
+              AND ep.status != 'deleted' AND e.status != 'preparing'
         UNION ALL
         SELECT pa.object_key AS key, 'playlist' AS kind,
                p.name AS title_name, p.slug AS slug, p.status AS title_status

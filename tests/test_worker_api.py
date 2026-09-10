@@ -803,6 +803,42 @@ async def test_a_failed_report_clears_the_cached_storage_listing_too(monkeypatch
     assert storage._usage_cache["usage"] is None
 
 
+async def test_a_failed_report_never_deletes_the_jobs_object(monkeypatch, client):
+    """Pins the fact `queries.referenced_objects`'s own exclusion list
+    rests on (05-18-PLAN.md task 2): a failed edition stays in the
+    referenced set precisely because this route never deletes its
+    object, only the two status flips. If this route ever starts
+    cleaning up, keeping `failed` out of that exclusion list becomes
+    unsafe and that decision has to be reopened.
+    """
+    from orchestrator.db import queries
+    import orchestrator.web.routes_worker as routes_worker
+
+    monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
+
+    async def fake_finish_job(conn, job_id, **kwargs):
+        return True
+
+    monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
+    deleted = []
+    monkeypatch.setattr(routes_worker, "delete_object", deleted.append, raising=False)
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/failed",
+            json={
+                "protocol": WORKER_PROTOCOL_VERSION,
+                "worker": "ml-server",
+                "attempt": 1,
+                "reason_key": "failed.reason.upload",
+            },
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+
+    assert resp.status_code == 204
+    assert deleted == []
+
+
 async def test_a_cancelled_report_clears_the_cached_storage_listing_too(monkeypatch, client):
     from orchestrator.db import queries
     import orchestrator.storage as storage
