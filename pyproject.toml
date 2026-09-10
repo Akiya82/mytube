@@ -25,7 +25,18 @@ api = [
     "uvicorn[standard]",
     "asyncpg",
     "alembic",
-    "sqlalchemy",
+    # The asyncio extra, not bare sqlalchemy: migrations/env.py drives the
+    # migration through an async engine, and SQLAlchemy's async layer needs
+    # greenlet to bridge it to the sync DBAPI calls underneath. Bare
+    # sqlalchemy pulls greenlet in through a platform_machine marker that
+    # lists aarch64, x86_64 and AMD64 but not "arm64" -- so it arrived as a
+    # transitive accident on the Windows machine this was first developed
+    # on and does not on an Apple-silicon one. The extra requires it
+    # unconditionally. Worth pinning down because the symptom hides the
+    # cause: `alembic upgrade head` exits non-zero, every database-backed
+    # test errors out at once, and the missing package is named several
+    # frames down a subprocess traceback that reads like a dead database.
+    "sqlalchemy[asyncio]",
     "python-slugify",
     "typer",
     "jinja2>=3.1.6",
