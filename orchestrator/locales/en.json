@@ -82,7 +82,7 @@
   "folder.group.banner": "This folder looks like more than one season: {groups}. Pick one to continue.",
   "folder.group.continue": "Continue with {n} files as {title}",
   "folder.heading": "Confirm this series",
-  "folder.incompatible.hint": "{n} files can't be added as-is. Uncheck the highlighted ones, or convert the whole folder.",
+  "folder.incompatible.hint": "{n} files can't be added as-is. Each one says why under its name. Uncheck those, or convert the whole folder.",
   "folder.season.detected_folder": "Season number from the folder name.",
   "folder.season.detected_numeral": "Season number from a roman numeral in the name.",
   "folder.season.detected_ordinal": "Season number from an ordinal in the name.",

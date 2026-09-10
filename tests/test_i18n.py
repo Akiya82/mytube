@@ -139,3 +139,34 @@ def test_every_runtime_selected_key_in_the_source_exists_in_both_catalogs():
     for key in sorted(found):
         assert key in en, f"{key!r} missing from en.json"
         assert key in ru, f"{key!r} missing from ru.json"
+
+
+def test_incompatible_hint_and_validation_sentence_are_not_worded_alike():
+    """`folder.incompatible.hint` and `folder.validation.blocked` are
+    neighbouring sentences about a similar-looking problem, but only one
+    of them is actually about a highlight (plan 18 task 3, 05-UAT.md).
+    Incompatibility under "Add as-is" is never highlighted -- routes_
+    folder.py computes `highlighted` from a track mismatch alone -- so
+    the hint has to point the operator at the reason sentence each
+    affected row already carries instead. The validation sentence really
+    is about highlighted rows: a refused save highlights them, so it
+    keeps naming the highlight. A future tidy-up rewording the two
+    alike would silently reintroduce the exact bug this guards against,
+    which is why both directions are asserted in both languages rather
+    than trusting one language to catch a slip in the other.
+    """
+    en = _load("en")
+    ru = _load("ru")
+
+    for lang, highlight_word in (("en", "highlight"), ("ru", "выдел")):
+        catalog = en if lang == "en" else ru
+        hint = catalog["folder.incompatible.hint"].lower()
+        blocked = catalog["folder.validation.blocked"].lower()
+        assert highlight_word not in hint, (
+            f"{lang}: folder.incompatible.hint sends the operator looking for a "
+            "highlight, but incompatibility is never highlighted"
+        )
+        assert highlight_word in blocked, (
+            f"{lang}: folder.validation.blocked should still name the highlight "
+            "a refused save genuinely draws"
+        )
