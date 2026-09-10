@@ -336,7 +336,40 @@ async def test_edition_label_shows_when_every_file_resolves_to_one_title(web_cli
         resp = await web_client.get("/add/Horimiya")
 
     assert "Add edition for these episodes" in resp.text
-    assert "mode=edition" in resp.text
+
+
+async def test_folder_button_form_submits_a_url_that_still_selects_edition_mode(
+    web_client, db_stub
+):
+    """A page-wide `"mode=edition" in resp.text` check would have passed
+    against a button that could not work -- the href used to carry the
+    query string, but a GET form discards it and rebuilds one from its
+    own fields on submit, so the query being present *anywhere on the
+    page* proved nothing about what the browser actually sends. This
+    slices the form element itself out of the page: the action must carry
+    no query string at all, and the mode has to be a field inside the
+    form, or clicking this button lands on the ordinary series screen
+    instead of the edition one it is labelled for (05-UAT.md gap, plan 18
+    task 1).
+    """
+    db_stub.already_added_rows = [
+        {"source_path": f"Horimiya/Horimiya - {n:02d}.mkv", "title_id": "same-title"}
+        for n in (1, 2, 3)
+    ]
+
+    async with web_client:
+        resp = await web_client.get("/add/Horimiya")
+
+    form_start = resp.text.index('<form method="get"')
+    form_end = resp.text.index("</form>", form_start)
+    form_html = resp.text[form_start:form_end]
+
+    action_start = form_html.index('action="') + len('action="')
+    action_end = form_html.index('"', action_start)
+    assert "?" not in form_html[action_start:action_end]
+
+    assert 'name="mode"' in form_html
+    assert 'value="edition"' in form_html
 
 
 async def test_plain_label_shows_when_files_resolve_to_several_titles(web_client, db_stub):
@@ -349,7 +382,7 @@ async def test_plain_label_shows_when_files_resolve_to_several_titles(web_client
         resp = await web_client.get("/add/Horimiya")
 
     assert "Add folder as series" in resp.text
-    assert "mode=edition" not in resp.text
+    assert 'name="mode"' not in resp.text  # no mode field anywhere in the form
 
 
 async def test_plain_label_shows_when_no_files_are_already_added(web_client):

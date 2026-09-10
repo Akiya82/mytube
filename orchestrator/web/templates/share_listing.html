@@ -20,6 +20,15 @@
 {% if folder_button %}
   <div class="add-form__actions">
     <form method="get" action="{{ folder_button.href }}">
+      {% if folder_button.is_edition %}
+        {# A GET form builds the query it submits from its own fields and
+           discards whatever the action attribute carried, so the mode
+           has to ride here or a click on this button silently lands on
+           the ordinary series screen instead of the edition one -- a
+           real, working screen, which is exactly what makes the failure
+           invisible. Don't "tidy" this back into the href above. #}
+        <input type="hidden" name="mode" value="edition">
+      {% endif %}
       <button
         type="submit"
         class="btn btn--secondary"

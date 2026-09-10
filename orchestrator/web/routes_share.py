@@ -108,12 +108,19 @@ def _folder_button_context(rel_path: str, entries, already_added_by_path: dict) 
     gate costs no extra filesystem or database read and nothing is probed
     before the click.
 
-    D-176: the label (and the href it points at) switches to the
-    edition-folder variant only when *every* video file in this listing
-    already resolves to an episode of one and the same title -- the
-    target that variant points at is wired here so the gate is decided in
-    one place, even though the screen it reaches is a later plan's own
-    work.
+    D-176: the label switches to the edition-folder variant only when
+    *every* video file in this listing already resolves to an episode of
+    one and the same title -- decided here, once, as the `is_edition`
+    flag, so the gate is decided in one place even though the screen it
+    reaches is a later plan's own work.
+
+    **The href never carries the mode.** It used to have the edition mode
+    appended to it as a query string, but the button is the submit of a
+    `<form method="get">` (Screen A), and a GET form discards whatever
+    query its own action carries and rebuilds one from its own fields on
+    submit -- so a query appended here never survived a click. `is_edition`
+    is returned instead, and `share_listing.html` renders it as a hidden
+    field inside the form, the one place a GET form can actually carry it.
     """
     video_entries = [e for e in entries if not e.is_dir and _is_video_file(e.name)]
     if len(video_entries) < MIN_VIDEO_FILES_FOR_FOLDER_ADD:
@@ -128,11 +135,8 @@ def _folder_button_context(rel_path: str, entries, already_added_by_path: dict) 
         title_ids.add(row["title_id"])
 
     is_edition = bool(title_ids) and len(title_ids) == 1
-    href = _folder_href(rel_path)
-    if is_edition:
-        href += "?mode=edition"
     return {
-        "href": href,
+        "href": _folder_href(rel_path),
         "is_edition": is_edition,
         "count": len(video_entries),
     }
