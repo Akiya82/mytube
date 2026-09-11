@@ -223,3 +223,83 @@ in the Russian locale: the page is 1781px wide with 69px on each side at 1920px 
 829px on each side at 3440px, and fills the viewport at 1024px; a row with four
 actions keeps an 899px text column beside a 641px action cluster; no horizontal
 scroll at any width.
+
+## The live move of the standalone episodes
+
+Seven one-episode titles were standing apart from any series when this phase's work
+was deployed. Their addresses may already be inside other people's worlds, so nothing
+automatic touched them: the moves below are the owner's own presses in the interface,
+and what follows is the catalog read before and after.
+
+Three of the seven were not moved, by the owner's decision rather than by any failure:
+`horimiya-piece-01` stays a standalone title because the Piece films are not a season,
+and `horimiya-piece-02` and `grand-blue-dreaming-ii-01` were deleted and purged
+outright. Those two now answer at their old addresses with the stub clip, which is what
+a deleted address is supposed to do.
+
+The four that were moved kept every object they had. Each row below was read from the
+live service after the move and compared against the before-picture taken read-only
+before it:
+
+| Old address | New address | Both redirect to |
+|---|---|---|
+| `/v/horimiya-01` | `/v/horimiya/1` | `15195f4f-e561-45b0-b795-23c7eea3e50c.mp4` |
+| `/v/horimiya-03` | `/v/horimiya/3` | `40bd7be1-944f-42f9-a896-eeb70e77b324.mp4` |
+| `/v/horimiya-04` | `/v/horimiya/4` | `607ba96d-3343-4ddf-a870-193850e13703.mp4` |
+| `/v/horimiya-05` | `/v/horimiya/5` | `abcc3e37-571a-41f6-a980-792f25366d0d.mp4` |
+
+Every object key is the same string it was before the move, and both addresses of each
+episode answer `302` to the identical signed blob address. The old address is not a
+copy or a second row: it resolves through the same newest-wins history that a renamed
+title already uses, applied a second time to the number half of the address.
+
+One thing worth writing down for whoever reads the tables above against the database.
+`episodes.number` is **not** the number in the address. The address number lives in
+`episode_number_history`, the same newest-wins table the slug half uses, which is what
+lets an episode be renumbered without breaking the address it already handed out.
+Reading `episodes.number` directly shows thirteen rows all holding `1` for this season
+and invites the conclusion that the catalog is corrupt; it is not. The thirteen
+addresses `/v/horimiya/1` through `/v/horimiya/13` each resolve to a distinct object,
+and `episode_number_history` holds each of those numbers exactly once.
+
+## Walking the rendered surfaces
+
+Eleven checks were walked on the deployed service. Eight passed as specified. Two were
+skipped because the titles they named had been deleted rather than moved. One failed,
+and re-walking the storage line raised two more defects that were not in the planned
+list at all.
+
+All six defects are now closed and each was re-checked on the running service:
+
+| What was wrong | Closed by |
+|---|---|
+| The header counted objects from a bucket listing cached for 60 s, so a purge left phantom orphans | `995c961`, `0b9885d` |
+| Every queued episode read "0 ahead" because one folder save shares a single transaction timestamp | `4408c65`, `b9c321e` |
+| The remaining-time chip mixed an English unit into a Russian sentence | `fe31f65` |
+| A converter working a job let its check-in go stale, telling queued siblings it had vanished | `b637dfc`, `29987f1` |
+| The folder button labelled for editions opened the ordinary series screen | `80c8c61` |
+| An edition still being prepared was counted as a broken address | `9e2aa42` |
+| The incompatible-files warning pointed at a highlight the screen never draws | `b9904e1` |
+
+The broken-address count is the one worth describing, because it could only be proven
+under the condition that produced it. Nine episodes were converted in a single press,
+giving nine editions being prepared at once. Across twenty samples at fifteen-second
+intervals, each taken with the usage cache invalidated so the reading is instantaneous
+rather than smoothed, the broken-address count stayed at zero while five to six
+editions were preparing. Before the fix this same shape reported eight. When the run
+finished: 45 active editions, 84 objects accounted for, storage 18.0 to 26.4 GB, and
+neither an unreferenced object nor a broken address at rest.
+
+One transient count was seen during that run and is not a defect of this phase: a
+poster sits in the bucket unreferenced for about a minute between its upload and the
+terminal report that writes `poster_key` onto the edition row. It clears itself when
+the edition goes active. The poster branch of the referenced set is guarded by
+`poster_key IS NOT NULL` and a preparing edition's poster key is null, so this window
+predates the preparing exclusion rather than following from it.
+
+Two defects found while walking are recorded as todos rather than fixed here. Moving a
+file into a series whose episode number is already taken raises `EpisodeNumberTaken`
+out of the folder route, which catches it nowhere, so the operator gets a blank 500
+instead of the form back with the collision named; nothing is written when it happens.
+And the burn-in contract check cannot run on a machine whose ffmpeg was built without
+libass.
