@@ -74,6 +74,7 @@
   "folder.edition.heading": "Новое издание для этих серий",
   "folder.empty.nothing_recognized": "Номера серий не распознаны. Введите их вручную или добавьте файлы по одному.",
   "folder.file.already_added": "Уже добавлено как {slug}",
+  "folder.file.already_in_series": "Уже серия этого сериала.",
   "folder.file.move_into_series": "Перенести в этот сериал",
   "folder.file.number": "Серия №",
   "folder.file.number_duplicate": "Серия {n} уже занята другим отмеченным файлом.",

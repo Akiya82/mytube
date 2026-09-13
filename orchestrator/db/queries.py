@@ -2613,6 +2613,15 @@ async def reparent_edition_to_episode(
     names no title with a season, `EpisodeNumberTaken` when `number` is
     already held by a different episode of that title.
 
+    **`old_title_id` and `target_title_id` must differ**, and a call where
+    they do not is refused outright rather than attempted. This is not a
+    diagnostic nicety: the unwind at the end of this function deletes the
+    old title's seasons and tombstones it, so a title asked to adopt its
+    own edition would destroy the very title it was moving into. The
+    failure such a call used to reach first was `EpisodeNumberTaken` --
+    the edition's own number, read back as a stranger's -- which named a
+    symptom well short of what was actually being asked for.
+
     **Write order, and why it is fixed.** The old episode's own
     `default_edition_id` is cleared *before* the edition's own `episode_id`
     is repointed -- the pointer this column names is about to belong to a
@@ -2642,6 +2651,12 @@ async def reparent_edition_to_episode(
     unwound first so nothing orphaned is left pointing at a tombstoned
     title.
     """
+    if old_title_id == target_title_id:
+        raise ValueError(
+            f"edition {edition_id!r} already belongs to title {target_title_id!r}; "
+            "moving a title into itself would delete it"
+        )
+
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
 

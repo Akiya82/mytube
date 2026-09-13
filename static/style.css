@@ -447,6 +447,15 @@ button.site-nav__link {
   min-height: 44px;
 }
 
+/* An offer switched off by another control -- the folder screen's "move
+   into this series", gated on its row's own include box. The browser greys
+   the checkbox on its own; dimming the sentence beside it is what makes
+   the whole offer read as out of play rather than merely unticked. */
+.radio-group__option:has(> input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .audio-note,
 .cost-line {
   font-size: var(--text-label-size);

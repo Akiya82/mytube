@@ -406,9 +406,24 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
         result = results_by_path[entry.rel_path]
         verdict = result["verdict"]
         already_added = already_added_by_path.get(entry.rel_path)
-        moved = already_added is not None
+        # An edition that already sits in the title this screen is about to
+        # write into is not a move candidate -- moving a title into itself
+        # is meaningless, the same reason `move_target_titles` leaves the
+        # title being moved out of its own candidate list. For the operator
+        # this row reads "already here", never "move it here". Only the
+        # slug-matched title is known at build time; the submit path
+        # re-decides this against the target the form actually names.
+        already_here = (
+            already_added is not None
+            and title_match is not None
+            and already_added["title_id"] == title_match["title_id"]
+        )
+        moved = already_added is not None and not already_here
 
-        if moved:
+        if already_here:
+            number = already_added.get("number")
+            checked = False  # nothing left to do for this file
+        elif moved:
             number = already_added.get("number")
             checked = True  # D-160: "move into this series" is checked by default
         else:
@@ -420,7 +435,7 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
         subtitle_mismatch = False
         audio_fallback = []
         subtitle_fallback = []
-        if not moved and verdict is not None:
+        if already_added is None and verdict is not None:
             audio_signatures = _file_audio_signatures(result)
             subtitle_signatures = _file_subtitle_signatures(result)
             audio_mismatch = not _matches_default(default_audio_signature, audio_signatures)
@@ -444,6 +459,7 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
                 "number": number,
                 "checked": checked,
                 "moved": moved,
+                "already_here": already_here,
                 "already_added": already_added,
                 "verdict": verdict,
                 "probe_failed": result["probe_failed"],
@@ -459,8 +475,16 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
                 "subtitle_mismatch": subtitle_mismatch,
                 "audio_fallback": audio_fallback,
                 "subtitle_fallback": subtitle_fallback,
-                "number_missing": not moved and number is None,
-                "number_taken": (not moved and number is not None and number in taken_numbers),
+                "number_missing": already_added is None and number is None,
+                # A moved row's number is checked against the target title's
+                # own taken numbers just like a new file's -- the collision
+                # is the same collision, and leaving it unchecked is what let
+                # one reach the database as a raised EpisodeNumberTaken. An
+                # already-here row is excluded: the number it "collides" with
+                # is its own.
+                "number_taken": (
+                    not already_here and number is not None and number in taken_numbers
+                ),
                 "size_bytes": verdict.size_bytes if verdict and verdict.size_bytes else 0,
                 # The write side's own submission-preserving state (Task 1,
                 # plan 08): defaults here are exactly what the template
@@ -686,6 +710,7 @@ async def _build_edition_rows(
                 "number": number,
                 "checked": not problem,
                 "moved": False,
+                "already_here": False,
                 "already_added": None,
                 "verdict": verdict,
                 "probe_failed": result["probe_failed"],
@@ -912,7 +937,7 @@ async def folder_confirm_route(request: Request, path: str, group: str = "", mod
     rows = built["rows"]
     mode = "existing" if built["title_match"] is not None else "new"
 
-    unmoved_rows = [row for row in rows if not row["moved"]]
+    unmoved_rows = [row for row in rows if row["already_added"] is None]
     all_added = bool(rows) and not unmoved_rows
     nothing_recognized = bool(unmoved_rows) and all(
         row["number"] is None for row in unmoved_rows
@@ -1148,9 +1173,15 @@ def _render_refused_folder_screen(
     rows = []
     for original, resolved in zip(built["rows"], resolved_rows):
         row = dict(original)
-        moved = row["moved"]
-        row["checked"] = resolved["ticked"] if not moved else row["checked"]
-        row["move_checked"] = resolved["ticked"] if moved else row["move_checked"]
+        # The submission's own reading of what each already-added row is,
+        # not the build pass's: only the submission knows which title is
+        # being targeted, and the screen has to come back showing the rows
+        # the way the server just judged them.
+        moved = resolved["moved"]
+        row["moved"] = moved
+        row["already_here"] = resolved["already_here"]
+        row["checked"] = resolved["include_ticked"]
+        row["move_checked"] = resolved["move_ticked"] if moved else row["move_checked"]
         row["number"] = resolved["number"]
         row["number_missing"] = resolved["ticked"] and resolved["number"] is None
         row["number_duplicate"] = (
@@ -1163,7 +1194,7 @@ def _render_refused_folder_screen(
         row["selected_subtitle_fallback_index"] = resolved.get("selected_subtitle_fallback_index")
         rows.append(row)
 
-    unmoved_rows = [row for row in rows if not row["moved"]]
+    unmoved_rows = [row for row in rows if row["already_added"] is None]
     all_added = bool(rows) and not unmoved_rows
     nothing_recognized = bool(unmoved_rows) and all(row["number"] is None for row in unmoved_rows)
     checked_unmoved = [row for row in unmoved_rows if row["checked"]]
@@ -1647,15 +1678,44 @@ async def folder_confirm_submit_route(request: Request, path: str):
         resolved_rows = []
         for i, row in enumerate(built["rows"]):
             rel = row["rel_path"]
-            moved = row["moved"]
-            if moved:
-                ticked = form.get(f"move_{i}") is not None
+            # Whether an already-added row is a move depends on the title
+            # this submission actually targets, which `_build_rows` cannot
+            # know: it decided against the slug match alone. `mode == "new"`
+            # mints a fresh title, which holds nothing yet, so every
+            # already-added row there is a genuine move; `mode ==
+            # "existing"` targets the slug match, and a row already living
+            # in it is already where it is going.
+            already_added = row["already_added"]
+            if already_added is None:
+                already_here = False
+            elif mode == "new":
+                already_here = False
             else:
-                ticked = form.get(f"include_{i}") is not None
+                already_here = row["already_here"]
+            moved = already_added is not None and not already_here
+
+            include_ticked = form.get(f"include_{i}") is not None
+            move_ticked = form.get(f"move_{i}") is not None
+            if already_here:
+                # Nothing to write and nothing to refuse: the file is where
+                # the operator is asking to put it.
+                ticked = False
+            elif moved:
+                # Both boxes, not either: the row's own include box gates
+                # the move box beside it (the browser disables the second
+                # when the first comes off), so a move arriving without its
+                # include tick came from a page that no longer matches this
+                # one, and is not what the operator saw themselves asking
+                # for. Before this, the include box was read for every row
+                # except the ones it was drawn next to, and unticking it
+                # there changed nothing at all.
+                ticked = include_ticked and move_ticked
+            else:
+                ticked = include_ticked
 
             number = _row_number(form, i)
             number_taken = (
-                not moved
+                not already_here
                 and number is not None
                 and mode == "existing"
                 and number in built["taken_numbers"]
@@ -1707,7 +1767,10 @@ async def folder_confirm_submit_route(request: Request, path: str):
                     "index": i,
                     "rel_path": rel,
                     "moved": moved,
+                    "already_here": already_here,
                     "ticked": ticked,
+                    "include_ticked": include_ticked,
+                    "move_ticked": move_ticked,
                     "number": number,
                     "number_taken": number_taken,
                     "compatible": row["compatible"],

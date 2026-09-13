@@ -13,13 +13,21 @@
   class="folder-file-row{% if file.highlighted %} folder-file-row--highlighted{% endif %}"
   data-preview-path="{{ file.rel_path }}"
 >
+  {%- if file.already_here %}
+  {# This file is already an episode of the very title this screen writes
+     into, so there is nothing to include and nothing to move -- the
+     column keeps its place in the grid and offers no control at all. #}
+  <span></span>
+  {%- else %}
   <input
     type="checkbox"
     name="include_{{ index }}"
     value="1"
+    data-row-include
     aria-label="{{ t('folder.file.number') }}"
     {% if file.checked %}checked{% endif %}
   >
+  {%- endif %}
   <input
     class="form-field__input form-field__input--narrow"
     type="text"
@@ -42,10 +50,15 @@
       <p class="audio-note">{{ t("library.renumber.taken").format(n=file.number) }}</p>
     {% endif %}
 
-    {% if file.moved %}
+    {% if file.already_here %}
+      <p class="audio-note">{{ t("folder.file.already_in_series") }}</p>
+    {% elif file.moved %}
       <p class="audio-note">{{ t("folder.file.already_added").format(slug=file.already_added.slug) }}</p>
+      {# The row's own include box gates this one: unticking it disables
+         this checkbox in the browser and the save ignores the move either
+         way, so an untouched-looking tick can never be the one that acts. #}
       <label class="radio-group__option">
-        <input type="checkbox" name="move_{{ index }}" value="1"{% if file.move_checked %} checked{% endif %}>
+        <input type="checkbox" name="move_{{ index }}" value="1" data-row-move{% if file.move_checked %} checked{% endif %}{% if not file.checked %} disabled{% endif %}>
         <span>{{ t("folder.file.move_into_series") }}</span>
       </label>
       <p class="audio-note">{{ t("library.rename.old_still_works") }}</p>

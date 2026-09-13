@@ -376,6 +376,29 @@ document.addEventListener("change", (event) => {
 
 document.querySelectorAll(".add-form").forEach((form) => _updatePreviewGate(form));
 
+// The folder screen's already-added row carries two checkboxes -- the
+// grid's own include box and the "move into this series" box beside the
+// explanation -- and the save only acts when both are ticked. Unticking
+// the include box therefore has to visibly take the move box out of play,
+// or the operator is left looking at a ticked box that no longer does
+// anything. Disabled is also how the browser stops submitting it, so the
+// two agree without the server having to guess.
+function _updateMoveGate(include) {
+  const row = include.closest(".folder-file-row");
+  if (!row) return;
+  const move = row.querySelector("[data-row-move]");
+  if (!move) return;
+  move.disabled = !include.checked;
+}
+
+document.addEventListener("change", (event) => {
+  const include = event.target.closest("[data-row-include]");
+  if (!include) return;
+  _updateMoveGate(include);
+});
+
+document.querySelectorAll("[data-row-include]").forEach(_updateMoveGate);
+
 // The manual audio/subtitle path field (T-05-14): its own hidden radio
 // carries no static value in the template at all (grep's own check that
 // the manual entry is no longer a track-shaped option) -- this listener

@@ -74,6 +74,7 @@
   "folder.edition.heading": "New edition for these episodes",
   "folder.empty.nothing_recognized": "No episode numbers were recognized. Enter them by hand, or add the files one at a time.",
   "folder.file.already_added": "Already added as {slug}",
+  "folder.file.already_in_series": "Already an episode of this series.",
   "folder.file.move_into_series": "Move into this series",
   "folder.file.number": "Episode #",
   "folder.file.number_duplicate": "Episode {n} is used by another checked file.",

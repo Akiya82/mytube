@@ -3,6 +3,7 @@
 real Postgres or subprocess, `ffprobe` and the database layer both
 monkeypatched at their module boundary.
 """
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -122,6 +123,22 @@ def folder_share_root(tmp_path):
     for n in range(1, 13):
         (season / f"Season - {n:02d}.mkv").write_bytes(b"stub video bytes")
     return root
+
+
+@pytest.fixture(autouse=True)
+def _fresh_probe_semaphore(monkeypatch):
+    """`routes_folder._PROBE_SEMAPHORE` is a module global, and an
+    `asyncio.Semaphore` binds itself to the first event loop that has to
+    *wait* on it -- which only happens in a folder holding more files than
+    its own limit. One process, one loop in production; one loop per test
+    here, so the binding has to be dropped between tests or the second
+    large-folder test in a run raises instead of probing.
+    """
+    monkeypatch.setattr(
+        routes_folder,
+        "_PROBE_SEMAPHORE",
+        asyncio.Semaphore(routes_folder.MAX_CONCURRENT_FOLDER_PROBES),
+    )
 
 
 @pytest.fixture
@@ -1800,3 +1817,230 @@ async def test_edition_mode_refusal_preserves_the_batchs_choices(web_client, mon
     assert db_stub.add_edition_to_episode_calls == []
     assert 'value="dub-ru-signed"' in resp.text
     assert "No files selected." in resp.text
+
+
+# --- A file already in the very series this screen writes into ------------
+#
+# The wizard is opened a second time on a folder it was already run on,
+# because more files have landed in it since. The files from the first pass
+# are already episodes of the matched series, and reparenting them into the
+# series they are already in is not a move at all -- it used to be offered
+# as one, ticked by default, and the save raised out of the database.
+
+
+def _target_title(title_id: str = "target-t1") -> dict:
+    return {"title_id": title_id, "title_name": "Horimiya", "title_status": "active"}
+
+
+def _row_in_title(rel_path: str, *, number: int, title_id: str) -> dict:
+    """An `already_added` row whose edition lives in `title_id` -- the same
+    shape `_already_added_row` builds, with the title said out loud because
+    that is the whole point of these tests.
+    """
+    row = _already_added_row(rel_path, number=number)
+    row["title_id"] = title_id
+    return row
+
+
+async def test_a_file_already_in_the_matched_title_is_not_a_move_candidate(
+    monkeypatch, db_stub
+):
+    db_stub.title_by_current_slug_result = _target_title()
+    db_stub.taken_episode_numbers_result = {1}
+    db_stub.already_added_rows = [
+        _row_in_title("Horimiya - 01.mkv", number=1, title_id="target-t1")
+    ]
+    entries = [
+        _entry("Horimiya - 01.mkv", "Horimiya - 01.mkv"),
+        _entry("Horimiya - 02.mkv", "Horimiya - 02.mkv"),
+    ]
+    _r, built = await _run_build_rows(
+        entries,
+        monkeypatch,
+        {"Horimiya - 01.mkv": "compatible.json", "Horimiya - 02.mkv": "compatible.json"},
+    )
+    here_row, new_row = built["rows"]
+    assert here_row["already_here"] is True
+    assert here_row["moved"] is False
+    assert here_row["checked"] is False
+    # Its own number is not a collision to report back at it.
+    assert here_row["number_taken"] is False
+    assert new_row["already_here"] is False
+
+
+async def test_a_file_added_to_a_different_title_is_still_a_move_candidate(
+    monkeypatch, db_stub
+):
+    db_stub.title_by_current_slug_result = _target_title()
+    db_stub.already_added_rows = [
+        _row_in_title("Horimiya - 01.mkv", number=1, title_id="some-other-title")
+    ]
+    entries = [_entry("Horimiya - 01.mkv", "Horimiya - 01.mkv")]
+    _r, built = await _run_build_rows(
+        entries, monkeypatch, {"Horimiya - 01.mkv": "compatible.json"}
+    )
+    assert built["rows"][0]["moved"] is True
+    assert built["rows"][0]["already_here"] is False
+
+
+async def test_a_move_whose_number_is_taken_in_the_target_is_reported(monkeypatch, db_stub):
+    """The gap that let the crash through: a moved row's number was never
+    compared with the target title's own taken numbers, so the collision
+    was left for the database to discover.
+    """
+    db_stub.title_by_current_slug_result = _target_title()
+    db_stub.taken_episode_numbers_result = {1}
+    db_stub.already_added_rows = [
+        _row_in_title("Horimiya - 01.mkv", number=1, title_id="some-other-title")
+    ]
+    entries = [_entry("Horimiya - 01.mkv", "Horimiya - 01.mkv")]
+    _r, built = await _run_build_rows(
+        entries, monkeypatch, {"Horimiya - 01.mkv": "compatible.json"}
+    )
+    assert built["rows"][0]["moved"] is True
+    assert built["rows"][0]["number_taken"] is True
+
+
+async def test_the_row_already_here_offers_no_checkbox_at_all(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.title_by_current_slug_result = _target_title()
+    db_stub.taken_episode_numbers_result = {1}
+    db_stub.already_added_rows = [
+        _row_in_title("Horimiya/Horimiya - 01.mkv", number=1, title_id="target-t1")
+    ]
+    async with web_client:
+        resp = await web_client.get("/add-folder/Horimiya")
+    assert resp.status_code == 200
+    assert "Already an episode of this series." in resp.text
+    # Neither control is rendered for that row: no move offer, and no
+    # include box that would sit there doing nothing.
+    assert "Move into this series" not in resp.text
+    assert 'name="move_0"' not in resp.text
+    assert 'name="include_0"' not in resp.text
+    # The rows that are genuinely still being decided keep theirs.
+    assert 'name="include_1"' in resp.text
+    assert 'name="include_2"' in resp.text
+
+
+async def test_saving_a_folder_whose_row_is_already_here_never_reparents(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.title_by_current_slug_result = _target_title()
+    db_stub.taken_episode_numbers_result = {1}
+    db_stub.already_added_rows = [
+        _row_in_title("Horimiya/Horimiya - 01.mkv", number=1, title_id="target-t1")
+    ]
+    form = _horimiya_form(
+        title_mode="existing", target_title_id="target-t1", include_0="", move_0="1"
+    )
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 302
+    assert db_stub.reparent_edition_to_episode_calls == []
+    # The two genuinely new files land, and only those two.
+    assert len(db_stub.attach_episodes_to_title_calls) == 1
+    attached = db_stub.attach_episodes_to_title_calls[0]
+    assert attached["title_id"] == "target-t1"
+    assert {e["number"] for e in attached["episodes"]} == {2, 3}
+
+
+async def test_unticking_the_include_box_cancels_the_move(web_client, monkeypatch, db_stub):
+    """The bypass that did not bypass: the visible left-hand tick came off,
+    the row read as excluded, and the move happened anyway.
+    """
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row("Horimiya/Horimiya - 01.mkv", number=1)]
+    form = _horimiya_form(move_0="1", include_0="")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 302
+    assert db_stub.reparent_edition_to_episode_calls == []
+
+
+async def test_the_move_box_comes_back_disabled_when_its_include_box_is_off(
+    web_client, monkeypatch, db_stub
+):
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.already_added_rows = [_already_added_row("Horimiya/Horimiya - 01.mkv", number=1)]
+    # Nothing ticked anywhere, so the screen refuses and re-renders with the
+    # submission's own state -- the move box among it.
+    form = _horimiya_form(move_0="1", include_0="", include_1="", include_2="")
+    async with web_client:
+        resp = await web_client.post("/add-folder/Horimiya", data=form)
+    assert resp.status_code == 200
+    move_input = re.search(r'<input[^>]*name="move_0"[^>]*>', resp.text)
+    assert move_input is not None
+    assert "disabled" in move_input.group(0)
+
+
+async def test_reparenting_a_title_into_itself_is_refused_by_the_query():
+    """The last line of defence, below every screen. The unwind at the end
+    of this call deletes the old title, so a title adopting its own edition
+    would delete the one it was joining -- and the failure it used to reach
+    first was "episode number taken", the edition's own number read back as
+    a stranger's. No connection is touched: the guard runs before the
+    transaction opens.
+    """
+    with pytest.raises(ValueError, match="itself"):
+        await queries.reparent_edition_to_episode(
+            None,
+            edition_id="e1",
+            old_title_id="t1",
+            old_episode_id="ep1",
+            old_slug="slug",
+            target_title_id="t1",
+            number=1,
+        )
+
+
+async def test_the_second_pass_over_a_half_added_folder_adds_only_the_new_files(
+    web_client, monkeypatch, db_stub
+):
+    """The whole failure as it happened: a folder whose first four files
+    were added on an earlier pass (episodes 1, 2, 3 and 5), the rest copied
+    in afterwards, the wizard opened again on the same folder to pick them
+    up. Every already-added file is already in the matched series.
+    """
+    monkeypatch.setattr(routes_folder, "probe", _probe_returning("compatible.json"))
+    db_stub.title_by_current_slug_result = _target_title()
+    db_stub.taken_episode_numbers_result = {1, 2, 3, 5}
+    db_stub.already_added_rows = [
+        _row_in_title(f"Season/Season - {n:02d}.mkv", number=n, title_id="target-t1")
+        for n in (1, 2, 3, 5)
+    ]
+
+    form = {
+        "group": "0",
+        "title_mode": "existing",
+        "target_title_id": "target-t1",
+        "name": "Season",
+        "slug": "season",
+        "audio_choice": "embedded:0",
+        "subtitle_choice": "none",
+        "stereo_layout": "2d",
+        "add": "1",
+    }
+    # Twelve files in name order, indexes 0, 1, 2 and 4 being the already-
+    # added ones. Those four rows are submitted exactly as the screen used
+    # to render them -- include box ticked, "move into this series" ticked
+    # too, both on by default -- which is what reached the database as a
+    # request for the series to adopt its own episodes.
+    for index, number in enumerate(range(1, 13), start=0):
+        form[f"episode_number_{index}"] = str(number)
+        form[f"include_{index}"] = "1"
+        if number in (1, 2, 3, 5):
+            form[f"move_{index}"] = "1"
+
+    async with web_client:
+        resp = await web_client.post("/add-folder/Season", data=form)
+
+    assert resp.status_code == 302
+    assert db_stub.reparent_edition_to_episode_calls == []
+    assert db_stub.create_title_with_episodes_calls == []
+    assert len(db_stub.attach_episodes_to_title_calls) == 1
+    attached = db_stub.attach_episodes_to_title_calls[0]
+    assert attached["title_id"] == "target-t1"
+    assert {e["number"] for e in attached["episodes"]} == {4, 6, 7, 8, 9, 10, 11, 12}
