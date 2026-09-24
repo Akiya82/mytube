@@ -496,6 +496,50 @@ def test_bitmap_cue_after_returns_none_on_timeout(monkeypatch):
     assert subtitles.bitmap_cue_after("/share/movie.mkv", 3, 10.0) is None
 
 
+# --- extract_embedded_track's timeout grows with the source ---------------
+
+
+def _sparse_file(path: Path, size: int) -> Path:
+    with open(path, "wb") as fh:
+        fh.truncate(size)
+    return path
+
+
+def _capture_extract_timeout(monkeypatch, source: Path, scratch: Path) -> float:
+    from mytube_media import subtitles
+
+    captured = {}
+
+    def _fake_run(argv, **kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        Path(argv[-1]).write_text("[Script Info]\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    subtitles.extract_embedded_track(source, 6, scratch)
+    return captured["timeout"]
+
+
+def test_extract_embedded_track_scales_its_timeout_to_the_source_size(monkeypatch, tmp_path):
+    from mytube_media import subtitles
+
+    size = 1_600_000_000
+    source = _sparse_file(tmp_path / "episode.mkv", size)
+
+    timeout = _capture_extract_timeout(monkeypatch, source, tmp_path)
+
+    assert timeout == pytest.approx(size / subtitles.MIN_EXTRACT_BYTES_PER_SECOND)
+    assert timeout > subtitles._EXTRACT_TIMEOUT_SECONDS
+
+
+def test_extract_embedded_track_keeps_the_floor_for_a_small_source(monkeypatch, tmp_path):
+    from mytube_media import subtitles
+
+    source = _sparse_file(tmp_path / "clip.mkv", 5_000_000)
+
+    assert _capture_extract_timeout(monkeypatch, source, tmp_path) == subtitles._EXTRACT_TIMEOUT_SECONDS
+
+
 # --- the font cap bounds the copy, not the leftovers (WR-04, T-04-42) ----
 
 

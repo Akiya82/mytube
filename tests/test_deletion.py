@@ -324,8 +324,8 @@ async def test_episode_cancel_reaches_only_that_episodes_own_job(
     raw_conn, episode_route_deleted_objects
 ):
     """A queued job for episode 1's own edition must never be touched by a
-    cancel aimed at episode 2 (D-164) -- `job_for_edition` scopes strictly
-    to the edition id it is given.
+    cancel aimed at episode 2 (D-164) -- `job_for_episode` scopes strictly
+    to the editions of the episode it is given.
     """
     title_id, ep1, ep2, edition2 = await _create_two_episode_series(
         raw_conn, "Episode Cancel Scope", "episode-cancel-scope-slug", second_status="preparing"
@@ -347,6 +347,53 @@ async def test_episode_cancel_reaches_only_that_episodes_own_job(
     assert resp.status_code == 302
     sibling_job = await queries.job_by_id(raw_conn, sibling_job_id)
     assert sibling_job["status"] == "queued"
+
+
+async def test_episode_cancel_reaches_a_second_editions_job_and_keeps_the_ready_default(
+    raw_conn, episode_route_deleted_objects
+):
+    """The row shows the live job of whichever edition holds one, so
+    Cancel has to act on that same job: a second edition still queued
+    behind an already-ready episode stops, and only that edition goes --
+    the ready default and the episode itself stay exactly as they were.
+    """
+    title_id, ep1, ep2, edition2 = await _create_two_episode_series(
+        raw_conn, "Episode Cancel Second Edition", "episode-cancel-second-edition-slug"
+    )
+    second = uuid.uuid4()
+    await queries.add_edition_to_episode(
+        raw_conn, ep2, "dub", second, f"{second}.mp4", status="preparing"
+    )
+    await queries.enqueue_job(
+        raw_conn, kind="remux", title_id=title_id, edition_id=second, source_path="dub.mkv"
+    )
+
+    resp = await routes_episodes.cancel_episode_route(str(ep2), _FakeRequest(raw_conn))
+
+    assert resp.status_code == 302
+    assert episode_route_deleted_objects == [f"{second}.mp4"]
+    assert await raw_conn.fetchrow("SELECT id FROM editions WHERE id = $1", second) is None
+    after = await queries.episode_for_action(raw_conn, ep2)
+    assert after["episode_status"] == "active"
+    assert after["default_edition_id"] == edition2
+    assert after["edition_status"] == "active"
+
+
+async def test_episode_cancel_with_nothing_left_to_stop_returns_to_the_library(
+    raw_conn, episode_route_deleted_objects
+):
+    """A click on a row whose job ended a moment earlier is a no-op, not a
+    404 page: the library re-renders the row as it is now.
+    """
+    _, _, ep2, _ = await _create_two_episode_series(
+        raw_conn, "Episode Cancel Stale", "episode-cancel-stale-slug", second_status="preparing"
+    )
+
+    resp = await routes_episodes.cancel_episode_route(str(ep2), _FakeRequest(raw_conn))
+
+    assert resp.status_code == 302
+    assert episode_route_deleted_objects == []
+    assert await queries.episode_for_action(raw_conn, ep2) is not None
 
 
 async def test_episode_retry_requeues_only_that_episodes_job_leaving_sibling_untouched(raw_conn):

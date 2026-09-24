@@ -4097,6 +4097,43 @@ async def job_for_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Recor
     )
 
 
+async def live_jobs_for_title(conn: asyncpg.Connection, title_id) -> list[asyncpg.Record]:
+    """Every live (queued or running) job of a title, each with the episode
+    its edition belongs to, in the order `job_for_title` picks its one row
+    from. Cancel on a title row acts on all of them: a season is one job
+    per episode, and stopping the season means stopping every one.
+    """
+    return await conn.fetch(
+        """
+        SELECT j.*, e.episode_id AS episode_id
+        FROM jobs j
+        JOIN editions e ON e.id = j.edition_id
+        WHERE j.title_id = $1 AND j.status IN ('queued', 'running')
+        ORDER BY (j.status = 'running') DESC, j.created_at, j.id
+        """,
+        title_id,
+    )
+
+
+async def job_for_episode(conn: asyncpg.Connection, episode_id) -> asyncpg.Record | None:
+    """The live (queued or running) job of any edition of one episode --
+    the same lookup the library's episode row renders its chip and Cancel
+    control from (`episodes_for_library`), so Cancel acts on exactly the
+    job the row shows, whichever edition it belongs to.
+    """
+    return await conn.fetchrow(
+        """
+        SELECT j.*
+        FROM jobs j
+        JOIN editions e ON e.id = j.edition_id
+        WHERE e.episode_id = $1 AND j.status IN ('queued', 'running')
+        ORDER BY (j.status = 'running') DESC, j.created_at, j.id
+        LIMIT 1
+        """,
+        episode_id,
+    )
+
+
 async def last_job_for_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
     """The most recent job of any status for one edition -- what a
     per-episode Retry reads to requeue the same choices (D-164), the

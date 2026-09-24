@@ -1188,7 +1188,7 @@ async def test_cancel_on_a_queued_job_deletes_objects_before_the_row(client, mon
     calls = []
 
     async def fake_job_for_title(conn, tid):
-        return {"id": "job-1"}
+        return [{"id": "job-1", "episode_id": "ep-1"}]
 
     async def fake_request_cancel(conn, job_id):
         return {"status": "cancelled"}
@@ -1203,7 +1203,7 @@ async def test_cancel_on_a_queued_job_deletes_objects_before_the_row(client, mon
     def spy_delete_object(key):
         calls.append(f"object:{key}")
 
-    monkeypatch.setattr(queries, "job_for_title", fake_job_for_title, raising=False)
+    monkeypatch.setattr(queries, "live_jobs_for_title", fake_job_for_title, raising=False)
     monkeypatch.setattr(queries, "request_job_cancel", fake_request_cancel, raising=False)
     monkeypatch.setattr(
         queries, "never_active_title_object_keys", fake_never_active_keys, raising=False
@@ -1225,7 +1225,7 @@ async def test_cancel_on_a_running_job_only_sets_the_flag_no_hard_delete(client,
     delete_calls = []
 
     async def fake_job_for_title(conn, tid):
-        return {"id": "job-1"}
+        return [{"id": "job-1", "episode_id": "ep-1"}]
 
     async def fake_request_cancel(conn, job_id):
         return {"status": "running", "cancel_requested": True}
@@ -1233,7 +1233,7 @@ async def test_cancel_on_a_running_job_only_sets_the_flag_no_hard_delete(client,
     async def fake_delete_never_active(conn, tid):
         delete_calls.append(tid)
 
-    monkeypatch.setattr(queries, "job_for_title", fake_job_for_title, raising=False)
+    monkeypatch.setattr(queries, "live_jobs_for_title", fake_job_for_title, raising=False)
     monkeypatch.setattr(queries, "request_job_cancel", fake_request_cancel, raising=False)
     monkeypatch.setattr(
         queries, "delete_never_active_title", fake_delete_never_active, raising=False
@@ -1248,14 +1248,92 @@ async def test_cancel_on_a_running_job_only_sets_the_flag_no_hard_delete(client,
 
 async def test_cancel_against_a_title_with_no_live_job_is_refused(client, monkeypatch):
     async def fake_job_for_title(conn, tid):
-        return None
+        return []
 
-    monkeypatch.setattr(queries, "job_for_title", fake_job_for_title, raising=False)
+    monkeypatch.setattr(queries, "live_jobs_for_title", fake_job_for_title, raising=False)
 
     async with client:
         resp = await client.post(f"/library/{uuid.uuid4()}/cancel", follow_redirects=False)
 
     assert resp.status_code == 404
+
+
+async def test_cancel_on_a_season_stops_every_queued_job_then_drops_the_title(client, monkeypatch):
+    title_id = uuid.uuid4()
+    cancelled = []
+    title_deletes = []
+
+    async def fake_live_jobs(conn, tid):
+        return [{"id": f"job-{n}", "episode_id": f"ep-{n}"} for n in range(3)]
+
+    async def fake_request_cancel(conn, job_id):
+        cancelled.append(job_id)
+        return {"status": "cancelled"}
+
+    async def fake_never_active_keys(conn, tid):
+        return []
+
+    async def fake_delete_never_active(conn, tid):
+        title_deletes.append(tid)
+
+    monkeypatch.setattr(queries, "live_jobs_for_title", fake_live_jobs, raising=False)
+    monkeypatch.setattr(queries, "request_job_cancel", fake_request_cancel, raising=False)
+    monkeypatch.setattr(
+        queries, "never_active_title_object_keys", fake_never_active_keys, raising=False
+    )
+    monkeypatch.setattr(
+        queries, "delete_never_active_title", fake_delete_never_active, raising=False
+    )
+
+    async with client:
+        resp = await client.post(f"/library/{title_id}/cancel", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert cancelled == ["job-0", "job-1", "job-2"]
+    assert title_deletes == [title_id]
+
+
+async def test_cancel_on_a_season_with_a_running_job_drops_only_the_queued_episodes(
+    client, monkeypatch
+):
+    title_id = uuid.uuid4()
+    cancelled = []
+    episode_drops = []
+    title_deletes = []
+
+    async def fake_live_jobs(conn, tid):
+        return [
+            {"id": "job-running", "episode_id": "ep-0"},
+            {"id": "job-queued-1", "episode_id": "ep-1"},
+            {"id": "job-queued-2", "episode_id": "ep-2"},
+        ]
+
+    async def fake_request_cancel(conn, job_id):
+        cancelled.append(job_id)
+        if job_id == "job-running":
+            return {"status": "running", "cancel_requested": True}
+        return {"status": "cancelled"}
+
+    async def fake_drop_episode(conn, episode_id):
+        episode_drops.append(episode_id)
+
+    async def fake_delete_never_active(conn, tid):
+        title_deletes.append(tid)
+
+    monkeypatch.setattr(queries, "live_jobs_for_title", fake_live_jobs, raising=False)
+    monkeypatch.setattr(queries, "request_job_cancel", fake_request_cancel, raising=False)
+    monkeypatch.setattr(routes_titles, "cancel_never_active_episode", fake_drop_episode, raising=False)
+    monkeypatch.setattr(
+        queries, "delete_never_active_title", fake_delete_never_active, raising=False
+    )
+
+    async with client:
+        resp = await client.post(f"/library/{title_id}/cancel", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert cancelled == ["job-running", "job-queued-1", "job-queued-2"]
+    assert episode_drops == ["ep-1", "ep-2"]
+    assert title_deletes == []
 
 
 @pytest.mark.integration

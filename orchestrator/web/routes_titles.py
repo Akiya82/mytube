@@ -70,6 +70,7 @@ from orchestrator.media.add import (
 from orchestrator.reaper import reap_once
 from orchestrator.slugs import EditionSlugRefused, SlugError
 from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
+from orchestrator.web.routes_episodes import cancel_never_active_episode
 from orchestrator.web.routes_share import (
     _folder_segments_relative_to,
     _href,
@@ -993,22 +994,25 @@ async def _cancel_never_active_title(conn, title_id) -> None:
 
 @router.post("/library/{title_id}/cancel")
 async def cancel_route(title_id: str, request: Request):
-    """Stop an in-flight job for this title, for every kind of work
-    (D-129, D-132).
+    """Stop every in-flight job of this title, for every kind of work.
 
-    A job still queued has no converter or consumer to tell, so
-    `queries.request_job_cancel` finishes it `cancelled` on the spot --
-    this route notices that (the returned row's own `status`) and hard-
-    deletes the title immediately, with no tombstone (T-04-32): its
-    address never went live. A running job only has its cancel flag set
-    here; the row keeps polling and shows the cancelling stage until the
-    consumer that owns it (`orchestrator.media.queue`,
+    A season is one job per episode, so this cancels all of them, not
+    the one the row happens to show. A job still queued has no converter
+    to tell, so `queries.request_job_cancel` finishes it `cancelled` on
+    the spot; a running job only has its cancel flag set here and stops
+    at its next heartbeat. When nothing was running the title is hard-
+    deleted immediately, with no tombstone: its address never went live.
+    When something was running, the episodes whose jobs stopped on the
+    spot are dropped now, and the running episode waits for the consumer
+    that owns it (`orchestrator.media.queue`,
     `orchestrator.web.routes_worker.cancelled_route`) or the reaper's
-    stale sweep (`orchestrator.reaper.sweep_stale_jobs`) finishes the
-    same hard delete once the worker actually confirms or gives up --
-    all three call the identical `queries.delete_never_active_title`
-    this route calls for the immediate case, so a cancelled title
-    disappears the same way regardless of which path finishes it.
+    stale sweep (`orchestrator.reaper.sweep_stale_jobs`) to finish the
+    same hard delete once the worker confirms or gives up -- all of them
+    call the identical `queries.delete_never_active_title`, so a
+    cancelled title disappears the same way whichever path finishes it.
+    Leaving the stopped episodes in place instead would strand the title
+    in 'preparing' with nothing left to cancel should the running job
+    fail on its own before it ever reads the flag.
     """
     try:
         parsed = uuid.UUID(title_id)
@@ -1017,13 +1021,27 @@ async def cancel_route(title_id: str, request: Request):
 
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
-        job = await queries.job_for_title(conn, parsed)
-        if job is None:
+        jobs = await queries.live_jobs_for_title(conn, parsed)
+        if not jobs:
             return Response(status_code=404)
 
-        result = await queries.request_job_cancel(conn, job["id"])
-        if result is not None and result["status"] == "cancelled":
+        running_episodes = set()
+        stopped_episodes = []
+        for job in jobs:
+            result = await queries.request_job_cancel(conn, job["id"])
+            if result is None:
+                continue
+            if result["status"] == "cancelled":
+                stopped_episodes.append(job["episode_id"])
+            else:
+                running_episodes.add(job["episode_id"])
+
+        if not running_episodes:
             await _cancel_never_active_title(conn, parsed)
+        else:
+            for episode_id in dict.fromkeys(stopped_episodes):
+                if episode_id not in running_episodes:
+                    await cancel_never_active_episode(conn, episode_id)
 
     return RedirectResponse("/library", status_code=302)
 

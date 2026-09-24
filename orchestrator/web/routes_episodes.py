@@ -125,11 +125,10 @@ async def purge_episode_route(episode_id: str, request: Request):
     return RedirectResponse("/library", status_code=302)
 
 
-async def _cancel_never_active_episode(conn, episode_id) -> None:
+async def cancel_never_active_episode(conn, episode_id) -> None:
     """The immediate half of an episode cancellation's hard delete
-    (T-04-32, scoped one level down from
-    routes_titles._cancel_never_active_title): objects before rows, the
-    same ordering used there for the same reason (T-02-08).
+    (scoped one level down from routes_titles._cancel_never_active_title):
+    objects before rows, the same ordering used there for the same reason.
     `finish_delete_episode` itself decides tombstone-or-drop from whether
     any of this episode's editions was ever active -- a job that was still
     queued had not yet made this episode's own edition active, so this
@@ -142,25 +141,35 @@ async def _cancel_never_active_episode(conn, episode_id) -> None:
     await queries.finish_delete_episode(conn, episode_id)
 
 
+async def _drop_edition(conn, edition_id) -> None:
+    """A cancelled add of a second edition leaves the episode as it was:
+    only that edition's objects and row go, in the same objects-before-
+    rows order every other hard delete here keeps.
+    """
+    for key in await queries.edition_object_keys(conn, edition_id):
+        await asyncio.to_thread(delete_object, key)
+    await queries.delete_edition(conn, edition_id)
+
+
 @router.post("/library/episode/{episode_id}/cancel")
 async def cancel_episode_route(episode_id: str, request: Request):
-    """Stop an in-flight job for one episode's own default edition, and
-    touch no sibling (D-129, D-164).
+    """Stop the in-flight job of one episode, and touch no sibling.
 
-    Scoped to the default edition deliberately: the only case an episode
-    row's own stage chip and Cancel control render for is that edition's
-    own job (`episodes_for_library`'s live-job lookup and
-    `_group_episodes_by_title`'s `job_stage`, both keyed off the episode a
-    row belongs to) -- a second, non-default edition still preparing
-    behind an already-ready episode is the known, documented gap plan 09's
-    own summary already carries forward, unaffected by this plan.
+    The job is found through any edition of the episode -- the same
+    lookup the row's own stage chip and Cancel control are rendered from
+    (`episodes_for_library`), so a second edition still preparing behind
+    an already-ready episode can be stopped from its row too. A click on a
+    row whose job ended a moment earlier has nothing left to stop and just
+    returns to the library, which re-renders the row as it is now.
 
     A job still queued has no worker to tell at all, so
-    `queries.request_job_cancel` finishes it `cancelled` on the spot --
-    this route notices that and hard-deletes the episode immediately, with
-    no tombstone if it was never active (T-04-32): its address never went
-    live. A running job only has its cancel flag set here; the row keeps
-    polling until the consumer or the reaper's stale sweep finishes it.
+    `queries.request_job_cancel` finishes it `cancelled` on the spot, and
+    what disappears depends on whose job it was: the default edition's
+    means the episode never went live, so the whole episode is hard-
+    deleted with no tombstone; any other edition's means only that
+    edition is dropped and the ready episode stays. A running job only
+    has its cancel flag set here; the row keeps polling until the
+    consumer or the reaper's stale sweep finishes it.
     """
     parsed = _parse_uuid(episode_id)
     if parsed is None:
@@ -169,16 +178,19 @@ async def cancel_episode_route(episode_id: str, request: Request):
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
         row = await queries.episode_for_action(conn, parsed)
-        if row is None or row["default_edition_id"] is None:
+        if row is None:
             return Response(status_code=404)
 
-        job = await queries.job_for_edition(conn, row["default_edition_id"])
+        job = await queries.job_for_episode(conn, parsed)
         if job is None:
-            return Response(status_code=404)
+            return RedirectResponse("/library", status_code=302)
 
         result = await queries.request_job_cancel(conn, job["id"])
         if result is not None and result["status"] == "cancelled":
-            await _cancel_never_active_episode(conn, parsed)
+            if job["edition_id"] == row["default_edition_id"]:
+                await cancel_never_active_episode(conn, parsed)
+            else:
+                await _drop_edition(conn, job["edition_id"])
             await queries.sync_title_status(conn, row["title_id"])
 
     return RedirectResponse("/library", status_code=302)

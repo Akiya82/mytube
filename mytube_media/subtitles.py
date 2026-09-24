@@ -109,6 +109,11 @@ MAX_FONT_FILES = 50
 MAX_FONT_BYTES = 20 * 1024 * 1024  # 20 MiB -- generous for a fansub's set
 _ATTACHMENT_DUMP_TIMEOUT_SECONDS = 30
 _EXTRACT_TIMEOUT_SECONDS = 30
+# Copying a subtitle stream out of a container demuxes the whole file, so
+# the extraction cap has to grow with the source: a 1.6 GB episode on a
+# share reading at 50 MB/s needs about 33 s on its own. This is the slowest
+# share the cap still tolerates before the source is called unreadable.
+MIN_EXTRACT_BYTES_PER_SECOND = 8 * 1024 * 1024
 
 # The `mimetype` tag values a real muxer sets on a font attachment stream
 # (T-04-40): a font whose container tags it at all uses one of these,
@@ -781,11 +786,20 @@ def extraction_extension(probe_json: dict, stream_index: int) -> str:
     return "ass"
 
 
+def _extract_timeout_seconds(source) -> float:
+    try:
+        size = Path(source).stat().st_size
+    except OSError:
+        return _EXTRACT_TIMEOUT_SECONDS
+    return max(_EXTRACT_TIMEOUT_SECONDS, size / MIN_EXTRACT_BYTES_PER_SECOND)
+
+
 def extract_embedded_track(source, stream_index: int, scratch_dir, *, extension: str = "ass"):
     """Pull one embedded text subtitle stream out to its own file in
     `scratch_dir`, so the burn-in and `cue_times` both work against a real
     file rather than reaching back into the container a second time. A
-    short, bounded call with its own timeout, wrapped in this module's own
+    bounded call whose timeout grows with the source (ffmpeg reads the
+    whole container to collect the stream), wrapped in this module's own
     `SubtitleExtractError` -- never a raw `CalledProcessError`/
     `TimeoutExpired` escaping this module, the same discipline
     `remux.run_ffmpeg` already keeps.
@@ -800,7 +814,10 @@ def extract_embedded_track(source, stream_index: int, scratch_dir, *, extension:
     ]
     try:
         result = subprocess.run(
-            argv, capture_output=True, timeout=_EXTRACT_TIMEOUT_SECONDS, check=False
+            argv,
+            capture_output=True,
+            timeout=_extract_timeout_seconds(source),
+            check=False,
         )
     except subprocess.TimeoutExpired as exc:
         raise SubtitleExtractError(
