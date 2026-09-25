@@ -108,6 +108,31 @@ async def test_editions_by_source_paths_empty_list_returns_empty(raw_conn):
     assert await queries.editions_by_source_paths(raw_conn, []) == []
 
 
+async def test_editions_by_source_paths_ignores_a_reaped_title(raw_conn):
+    """A reaped title keeps its rows as a tombstone (only its status flips),
+    so the add screens must not read those rows as "already added": the
+    file is free to be added again.
+    """
+    title_id = await _create_title(
+        raw_conn, "Reaped By Path", "reaped-by-path-slug",
+        source_path="Movies/reaped.mkv",
+    )
+    await queries.mark_for_delete(raw_conn, title_id, 0)
+    await queries.finish_delete(raw_conn, title_id)
+
+    assert await queries.editions_by_source_paths(raw_conn, ["Movies/reaped.mkv"]) == []
+
+
+async def test_editions_by_source_paths_ignores_a_tombstoned_episode(raw_conn):
+    title_id = await _create_title(
+        raw_conn, "Reaped Episode By Path", "reaped-episode-by-path-slug",
+        source_path="Movies/reaped-episode.mkv",
+    )
+    await queries.finish_delete_episode(raw_conn, await _first_episode_id(raw_conn, title_id))
+
+    assert await queries.editions_by_source_paths(raw_conn, ["Movies/reaped-episode.mkv"]) == []
+
+
 async def test_count_preparing_ahead_returns_right_number_with_three_rows_in_flight(raw_conn):
     # The shared session-scoped database may already carry 'preparing' rows
     # left over from earlier tests in this run -- count_preparing_ahead has

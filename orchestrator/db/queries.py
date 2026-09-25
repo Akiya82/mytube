@@ -540,6 +540,10 @@ async def editions_by_source_paths(
     lookup does -- what the add form's edition-offer banner needs to write
     `add.edition_offer.body`'s "episode {n} of {title}" sentence and to
     build the "Add as an edition" link that targets this episode.
+
+    A reaped title or episode is a tombstone: its rows survive so the old
+    address keeps answering 410, but the file behind them is not "already
+    added" any more and may be added again, so those rows are left out.
     """
     if not paths:
         return []
@@ -568,6 +572,8 @@ async def editions_by_source_paths(
         LEFT JOIN episode_number_history enh
             ON enh.episode_id = ep.id AND enh.is_current
         WHERE e.source_path = ANY($1::text[])
+          AND t.status <> 'deleted'
+          AND ep.status <> 'deleted'
         """,
         paths,
     )
