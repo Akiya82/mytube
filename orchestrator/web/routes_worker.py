@@ -143,18 +143,20 @@ class DoneBody(_WorkerRequest):
     `audio_reencoded` are facts every conversion always knows, so they
     have no `| None` at all -- a report missing one of them is refused,
     never silently written as absent. `source_codec`, `fps`,
-    `video_profile`, `pix_fmt`, `audio_codec`, `audio_sample_rate`,
-    `audio_channel_layout` and `realtime_factor` describe the stored
-    object this same conversion just produced and measured, so they are
-    equally always known and equally carry no `| None`. The remaining
-    seven -- `source_profile` (a codec that carries no profile),
-    `video_level` (a container that carries no level tag),
-    `audio_language`/`audio_title` (a source track with no language or
-    title tag), `subtitle_burned_language`/`subtitle_burned_title` (a
-    conversion with no subtitle burned) and `poster_key` (a poster whose
-    extraction failed) -- are genuinely sometimes absent, so each is
-    typed `| None` with no default: still a required key, but the value
-    itself may be sent as `null`.
+    `video_profile`, `pix_fmt`, `audio_codec`, `audio_sample_rate` and
+    `realtime_factor` describe the stored object this same conversion
+    just produced and measured, so they are equally always known and
+    equally carry no `| None`. The remaining eight -- `source_profile`
+    (a codec that carries no profile), `video_level` (a container that
+    carries no level tag), `audio_channel_layout` (ffprobe names the
+    channel count of a multichannel AAC track but not always its order:
+    the converter's own ffmpeg 8.1 build reports every 5.1 AAC output it
+    makes as "unknown"), `audio_language`/`audio_title` (a source track
+    with no language or title tag), `subtitle_burned_language`/
+    `subtitle_burned_title` (a conversion with no subtitle burned) and
+    `poster_key` (a poster whose extraction failed) -- are genuinely
+    sometimes absent, so each is typed `| None` with no default: still a
+    required key, but the value itself may be sent as `null`.
     """
 
     attempt: int = Field(ge=1)
@@ -177,7 +179,7 @@ class DoneBody(_WorkerRequest):
     pix_fmt: str
     audio_codec: str
     audio_sample_rate: int = Field(gt=0, le=1_000_000)
-    audio_channel_layout: str
+    audio_channel_layout: str | None
     audio_language: str | None
     audio_title: str | None
     audio_reencoded: bool

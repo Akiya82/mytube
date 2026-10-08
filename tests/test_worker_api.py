@@ -769,6 +769,32 @@ async def test_a_successful_done_report_clears_the_cached_storage_listing(monkey
     assert storage._usage_cache["usage"] is None
 
 
+async def test_a_done_report_with_no_audio_channel_layout_is_accepted(monkeypatch, client):
+    """ffprobe reports a channel count for every multichannel AAC track
+    the converter makes but names the order of a 5.1 one "unknown", so
+    the report arrives with a null layout. Refusing it threw away a
+    finished two-hour encode as "something went wrong"; the row simply
+    carries no layout, exactly as an as-is add of such a file does.
+    """
+    from orchestrator.db import queries
+
+    monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
+
+    async def fake_finish_job(conn, job_id, **kwargs):
+        return True
+
+    monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
+
+    async with client:
+        resp = await client.post(
+            f"/worker/jobs/{STUB_JOB_ID}/done",
+            json=_valid_done_body(audio_channel_layout=None),
+            headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
+        )
+
+    assert resp.status_code == 204, resp.text
+
+
 async def test_a_failed_report_clears_the_cached_storage_listing_too(monkeypatch, client):
     """The poster case: the converter uploads the poster before the
     video (D-115), so a failed conversion can have already left an

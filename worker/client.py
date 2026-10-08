@@ -227,7 +227,7 @@ class WorkerClient:
         pix_fmt: str,
         audio_codec: str,
         audio_sample_rate: int,
-        audio_channel_layout: str,
+        audio_channel_layout: str | None,
         audio_language: str | None,
         audio_title: str | None,
         audio_reencoded: bool,
