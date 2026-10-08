@@ -25,7 +25,7 @@ pulled a single frame, so neither trap could bite until now.
 from dataclasses import dataclass
 from pathlib import Path
 
-from mytube_media.remux import aac_bitrate_for
+from mytube_media.remux import audio_encode_args
 from mytube_media.subtitles import BUNDLED_FONT_FAMILY, SRT_FORCE_STYLE
 
 # --- rate control (D-136, D-137) --------------------------------------
@@ -388,8 +388,8 @@ def build_transcode_command(
     `external_audio` (D-180) mirrors `remux.build_remux_command`'s own
     parameter of the same name: a second input added right after the
     source, mapped by its own first audio stream (`1:a:0`) instead of
-    `plan.audio_stream_index`, always encoded to AAC at
-    `aac_bitrate_for(plan.audio_channels)` -- the caller sets
+    `plan.audio_stream_index`, always encoded with
+    `audio_encode_args(plan.audio_channels)` -- the caller sets
     `audio_channels` to the *external* file's own probed channel count in
     that case, not the source's. `-hwaccel`, stated once before the
     source's own `-i`, is a per-input option and never applies to this
@@ -428,14 +428,10 @@ def build_transcode_command(
     cmd += ["-g", str(plan.gop), "-keyint_min", str(plan.gop)]
 
     if external_audio or plan.reencode_audio:
-        # D-135: one formula for both the as-is and the transcode branch,
-        # the channel count preserved (no `-ac` downmix, same discipline
-        # as `remux.build_remux_command`). An external track is always
-        # encoded, regardless of `plan.reencode_audio` -- D-180 treats it
-        # as a source that is never already inside the destination
-        # container.
-        bitrate = aac_bitrate_for(plan.audio_channels)
-        cmd += ["-c:a", "aac", "-b:a", f"{bitrate}k"]
+        # The same arguments the as-is branch uses. An external track is
+        # always encoded, regardless of `plan.reencode_audio`: it is a
+        # source that is never already inside the destination container.
+        cmd += audio_encode_args(plan.audio_channels)
     else:
         cmd += ["-c:a", "copy"]
 

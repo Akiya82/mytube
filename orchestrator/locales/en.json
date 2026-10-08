@@ -1,7 +1,7 @@
 {
   "add.audio_choice.missing": "The chosen audio file no longer exists.",
   "add.audio_choice.outside_share": "The chosen audio file is outside the share.",
-  "add.audio_note": "Video untouched, audio converted to AAC.",
+  "add.audio_note": "Video untouched, audio converted.",
   "add.audio_note_passthrough": "Video and audio both untouched.",
   "add.checking": "Checking...",
   "add.cta.convert": "Convert",

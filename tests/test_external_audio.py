@@ -337,7 +337,7 @@ def test_the_remux_builder_maps_the_external_input_s_own_first_audio_stream():
     assert "1:a:0" in cmd
     assert "0:1" not in cmd  # the source's own absolute audio index is not mapped
     idx = cmd.index("-c:a")
-    assert cmd[idx + 1] == "aac"
+    assert cmd[idx + 1] == "ac3"
 
 
 def test_the_remux_builder_s_second_input_comes_after_the_first():

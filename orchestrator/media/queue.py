@@ -599,7 +599,9 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 pix_fmt=verdict.pix_fmt,
                 audio_codec=(
                     compat.effective_audio_codec(
-                        audio_track_for_technical.codec, verdict.audio_needs_reencode
+                        audio_track_for_technical.codec,
+                        verdict.audio_needs_reencode,
+                        audio_track_for_technical.channels,
                     )
                     if audio_track_for_technical
                     else None

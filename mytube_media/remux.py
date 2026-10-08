@@ -27,6 +27,8 @@ command is built.
 """
 import subprocess
 
+from mytube_media.compat import stored_audio_codec
+
 # D-41: roughly 96 kbit/s per audio channel, floored so a mono/stereo
 # re-encode never drops below a sane minimum, capped so a source with an
 # implausible channel count never asks ffmpeg for an absurd bitrate. The
@@ -35,6 +37,8 @@ import subprocess
 AAC_KBPS_PER_CHANNEL = 96
 AAC_MIN_KBPS = 128
 AAC_MAX_KBPS = 640
+# The rate HLS-Converter ships a 5.1 track at; AC-3's own ceiling.
+AC3_KBPS = 640
 
 POSTER_WIDTH = 640
 # D-72: ten percent of the duration, capped so a long film's poster is not
@@ -63,6 +67,21 @@ def aac_bitrate_for(channels: int) -> int:
     return max(AAC_MIN_KBPS, min(AAC_MAX_KBPS, per_channel))
 
 
+def audio_encode_args(channels: int) -> list[str]:
+    """`-c:a`/`-b:a` for a track re-encoded at this width -- the one
+    place both the as-is and the transcode branch take them from. AC-3
+    carries at most 5.1, so a wider track is folded to six channels here:
+    the encoder's ceiling, not a downmix policy; nothing narrower is ever
+    touched.
+    """
+    if stored_audio_codec(channels) == "ac3":
+        args = ["-c:a", "ac3", "-b:a", f"{AC3_KBPS}k"]
+        if channels > 6:
+            args += ["-ac", "6"]
+        return args
+    return ["-c:a", "aac", "-b:a", f"{aac_bitrate_for(channels)}k"]
+
+
 def build_remux_command(
     source,
     destination,
@@ -73,10 +92,10 @@ def build_remux_command(
     external_audio: str | None = None,
 ) -> list[str]:
     """Video is always `-c:v copy`. Audio is `-c:a copy` when the source
-    audio is already AAC (`reencode_audio=False`) and `-c:a aac` otherwise,
-    at `aac_bitrate_for(channels)`. No `-ac` argument is ever emitted in
-    either branch -- D-41's channel count is preserved by omission, not by
-    an explicit passthrough flag.
+    track already is what this project stores (`reencode_audio=False`)
+    and `audio_encode_args(channels)` otherwise. No `-ac` argument is
+    emitted for anything AC-3 can carry -- the channel count is preserved
+    by omission, not by an explicit passthrough flag.
 
     `audio_stream_index` is mapped by its **absolute** ffprobe stream
     index (`0:{index}`), never a relative audio-track selector
@@ -88,7 +107,7 @@ def build_remux_command(
     `external_audio` (D-180), when given, is a second input added right
     after the source: the audio map then points at that input's own first
     audio stream (`1:a:0`) instead of any stream on the source, and the
-    track is always encoded to AAC at `aac_bitrate_for(channels)` --
+    track is always encoded with `audio_encode_args(channels)` --
     `channels` is then the *external* file's own probed channel count, not
     the source's, and `reencode_audio` plays no part, since an external
     file is never a candidate for a plain stream copy here. The video map
@@ -106,15 +125,11 @@ def build_remux_command(
     if external_audio:
         extra_input = ["-i", str(external_audio)]
         audio_map = "1:a:0"
-        audio_codec_args = ["-c:a", "aac", "-b:a", f"{aac_bitrate_for(channels)}k"]
+        audio_codec_args = audio_encode_args(channels)
     else:
         extra_input = []
         audio_map = f"0:{audio_stream_index}"
-        audio_codec_args = (
-            ["-c:a", "aac", "-b:a", f"{aac_bitrate_for(channels)}k"]
-            if reencode_audio
-            else ["-c:a", "copy"]
-        )
+        audio_codec_args = audio_encode_args(channels) if reencode_audio else ["-c:a", "copy"]
     return [
         "ffmpeg",
         "-y",

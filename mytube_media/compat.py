@@ -272,13 +272,24 @@ def probe(path) -> dict:
     return data
 
 
-def audio_is_safe(stream: dict) -> bool:
-    """True only for AAC (D-40). Nothing else is treated as safe, and no
-    experiment is run here to find out whether the player would cope with
-    anything else -- a silent mid-film audio failure costs more than the
-    re-encode it would save.
+def stored_audio_codec(channels: int) -> str:
+    """The codec this project stores a track as, decided by its width:
+    AAC up to stereo, AC-3 beyond. AVPro inside VRChat does not play
+    multichannel AAC; the same author's HLS-Converter ships a 5.1 track
+    as AC-3 and only stereo as AAC, and that recipe has played for this
+    audience.
     """
-    return stream.get("codec_name") == "aac"
+    return "ac3" if channels > 2 else "aac"
+
+
+def audio_is_safe(stream: dict) -> bool:
+    """True only when the track already is what `stored_audio_codec`
+    would make of it. Nothing else is treated as safe, and no experiment
+    is run here to find out whether the player would cope with anything
+    else -- a silent mid-film audio failure costs more than the re-encode
+    it would save.
+    """
+    return stream.get("codec_name") == stored_audio_codec(stream.get("channels") or 0)
 
 
 def audio_tracks(probe_json: dict) -> list[AudioTrack]:
@@ -390,19 +401,19 @@ def _parse_frame_rate(value) -> float | None:
     return numerator / denominator
 
 
-def effective_audio_codec(source_codec: str, reencoded: bool) -> str:
+def effective_audio_codec(source_codec: str, reencoded: bool, channels: int) -> str:
     """The codec the stored object actually carries, not the source's.
 
-    `build_remux_command` emits `-c:a aac` whenever the audio is
-    re-encoded, so a member whose source was AC-3 and a member whose
-    source was already AAC end up as the same codec in the bucket --
-    recording the probed source codec for both would make two identical
-    stored objects look like a mismatch and refuse a list that would have
-    joined perfectly. `Verdict.audio_codec` keeps carrying the probed
-    source value unchanged; this function is where the reconciliation
-    happens, once the caller knows the remux's own outcome.
+    A re-encoded track comes out as `stored_audio_codec(channels)`, so a
+    member whose source was DTS and a member whose source was already
+    AC-3 end up as the same codec in the bucket -- recording the probed
+    source codec for both would make two identical stored objects look
+    like a mismatch and refuse a list that would have joined perfectly.
+    `Verdict.audio_codec` keeps carrying the probed source value
+    unchanged; this function is where the reconciliation happens, once
+    the caller knows the remux's own outcome.
     """
-    return "aac" if reencoded else source_codec
+    return stored_audio_codec(channels) if reencoded else source_codec
 
 
 def _maybe_number(value, cast):
@@ -511,7 +522,7 @@ def analyze(
     )
     selected_track = next((t for t in tracks if t.index == selected_index), None)
     audio_needs_reencode = selected_track is None or not audio_is_safe(
-        {"codec_name": selected_track.codec}
+        {"codec_name": selected_track.codec, "channels": selected_track.channels}
     )
 
     format_names = (probe_json.get("format", {}).get("format_name") or "").split(",")
@@ -520,7 +531,7 @@ def analyze(
         eligible
         and is_mp4
         and selected_track is not None
-        and audio_is_safe({"codec_name": selected_track.codec})
+        and audio_is_safe({"codec_name": selected_track.codec, "channels": selected_track.channels})
         and len(tracks) == 1
         and moov_first
     )

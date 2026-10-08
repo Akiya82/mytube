@@ -64,11 +64,39 @@ def test_copy_branch_uses_c_a_copy():
     assert cmd[idx + 1] == "copy"
 
 
-def test_reencode_branch_uses_c_a_aac_with_scaled_bitrate():
+def test_reencode_branch_ships_a_5_1_track_as_ac3():
+    """AVPro inside VRChat refused a 5.1 AAC track on a real film; the
+    same author's HLS-Converter ships 5.1 as AC-3 at 640k, and that
+    plays.
+    """
     cmd = _reencode_audio_cmd()
     idx = cmd.index("-c:a")
+    assert cmd[idx + 1] == "ac3"
+    assert cmd[cmd.index("-b:a") + 1] == "640k"
+    assert "-ac" not in cmd
+
+
+def test_reencode_branch_ships_a_stereo_track_as_aac_with_the_scaled_bitrate():
+    cmd = build_remux_command(
+        "/share/movie.mkv",
+        "/work/out.mp4",
+        audio_stream_index=2,
+        reencode_audio=True,
+        channels=2,
+    )
+    idx = cmd.index("-c:a")
     assert cmd[idx + 1] == "aac"
-    assert f"{aac_bitrate_for(6)}k" in cmd
+    assert f"{aac_bitrate_for(2)}k" in cmd
+
+
+def test_a_track_wider_than_ac3_carries_is_folded_to_5_1():
+    from mytube_media.remux import audio_encode_args
+
+    args = audio_encode_args(8)
+    assert args[:4] == ["-c:a", "ac3", "-b:a", "640k"]
+    assert args[args.index("-ac") + 1] == "6"
+    assert "-ac" not in audio_encode_args(6)
+    assert "-ac" not in audio_encode_args(2)
 
 
 def test_maps_video_stream_zero_and_the_absolute_audio_index():

@@ -327,14 +327,22 @@ def test_probe_on_a_missing_file_raises_probe_error(tmp_path):
         probe(tmp_path / "does-not-exist.mp4")
 
 
-# --- audio_is_safe(): only AAC ----------------------------------------------
+# --- audio_is_safe(): the codec this project would store, by width ---------
 
 
-def test_audio_is_safe_true_only_for_aac():
+def test_audio_is_safe_only_for_the_codec_this_project_stores_at_that_width():
+    """AVPro in VRChat plays stereo AAC and multichannel AC-3; a 5.1 AAC
+    track is exactly what it refused on a real film, so it is not safe
+    even though its codec is the stereo default.
+    """
+    assert audio_is_safe({"codec_name": "aac", "channels": 2}) is True
+    assert audio_is_safe({"codec_name": "aac", "channels": 1}) is True
+    assert audio_is_safe({"codec_name": "aac", "channels": 6}) is False
+    assert audio_is_safe({"codec_name": "ac3", "channels": 6}) is True
+    assert audio_is_safe({"codec_name": "ac3", "channels": 2}) is False
+    assert audio_is_safe({"codec_name": "eac3", "channels": 6}) is False
+    assert audio_is_safe({"codec_name": "dts", "channels": 6}) is False
     assert audio_is_safe({"codec_name": "aac"}) is True
-    assert audio_is_safe({"codec_name": "ac3"}) is False
-    assert audio_is_safe({"codec_name": "eac3"}) is False
-    assert audio_is_safe({"codec_name": "dts"}) is False
 
 
 # --- Verdict's widened fields: concat parity needs these -------------------
@@ -394,18 +402,27 @@ def test_the_verdict_leaves_a_missing_parameter_as_none():
 
 
 @pytest.mark.parametrize(
-    "source_codec,reencoded",
+    "source_codec,reencoded,channels,stored",
     [
-        ("ac3", True),
-        ("aac", False),
+        ("ac3", True, 2, "aac"),
+        ("aac", False, 2, "aac"),
+        ("dts", True, 6, "ac3"),
+        ("aac", True, 6, "ac3"),
+        ("ac3", False, 6, "ac3"),
     ],
-    ids=["reencoded_ac3_becomes_aac", "already_aac_stays_aac"],
+    ids=[
+        "reencoded_stereo_ac3_becomes_aac",
+        "already_aac_stays_aac",
+        "reencoded_dts_5_1_becomes_ac3",
+        "reencoded_aac_5_1_becomes_ac3",
+        "already_ac3_5_1_stays_ac3",
+    ],
 )
 def test_the_effective_audio_codec_describes_the_stored_object_not_the_source(
-    source_codec, reencoded
+    source_codec, reencoded, channels, stored
 ):
-    """`build_remux_command` emits `-c:a aac` whenever the audio is
-    re-encoded, so recording the probed source codec would make two
+    """A re-encoded track comes out as the codec this project stores at
+    that width, so recording the probed source codec would make two
     identical stored objects look like a mismatch, and the joinability
     check would refuse a list that would have joined perfectly. In a
     library of as-is rips this is the most common case there is, and it
@@ -417,7 +434,7 @@ def test_the_effective_audio_codec_describes_the_stored_object_not_the_source(
     """
     from mytube_media.compat import effective_audio_codec
 
-    assert effective_audio_codec(source_codec, reencoded) == "aac"
+    assert effective_audio_codec(source_codec, reencoded, channels) == stored
 
 
 # --- the extended verdict (CONV-01, D-136, D-138) ---------------------------

@@ -529,11 +529,12 @@ def test_an_aac_source_track_is_copied_rather_than_re_encoded():
 
 
 @pytest.mark.parametrize("channels", [2, 6])
-def test_a_re_encoded_track_keeps_its_channel_count_and_the_shared_bitrate_formula(channels):
-    """A fixed stereo downmix was the older shape; one formula now serves
-    both branches.
+def test_a_re_encoded_track_keeps_its_channel_count_and_the_shared_audio_arguments(channels):
+    """A fixed stereo downmix was the older shape; the as-is branch's own
+    audio arguments now serve both branches, so a stereo track comes out
+    as AAC and a 5.1 track as AC-3 here exactly as they do there.
     """
-    from mytube_media.remux import aac_bitrate_for
+    from mytube_media.remux import audio_encode_args
     from mytube_media.transcode import build_transcode_command
 
     cmd = build_transcode_command(
@@ -542,8 +543,8 @@ def test_a_re_encoded_track_keeps_its_channel_count_and_the_shared_bitrate_formu
         plan=_plan(reencode_audio=True, audio_channels=channels),
         subtitle=_subtitle(),
     )
-    idx = cmd.index("-b:a")
-    assert cmd[idx + 1] == f"{aac_bitrate_for(channels)}k"
+    idx = cmd.index("-c:a")
+    assert cmd[idx : idx + 4] == audio_encode_args(channels)
     assert "-ac" not in cmd
 
 

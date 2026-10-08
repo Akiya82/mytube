@@ -137,7 +137,7 @@ def measure_edition(row, share_root: Path) -> Measurement:
         # taken from the row rather than re-derived (compat's own helper
         # makes the same reconciliation for the add path).
         audio_codec=compat.effective_audio_codec(
-            selected_track.codec, row["audio_reencoded"]
+            selected_track.codec, row["audio_reencoded"], selected_track.channels
         ),
         audio_sample_rate=selected_track.sample_rate,
         audio_channel_layout=selected_track.channel_layout,

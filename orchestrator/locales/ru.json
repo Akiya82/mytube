@@ -1,7 +1,7 @@
 {
   "add.audio_choice.missing": "Выбранного аудиофайла больше не существует.",
   "add.audio_choice.outside_share": "Выбранный аудиофайл находится вне шары.",
-  "add.audio_note": "Видео не тронуто, звук перекодирован в AAC.",
+  "add.audio_note": "Видео не тронуто, звук перекодирован.",
   "add.audio_note_passthrough": "Видео и звук не тронуты.",
   "add.checking": "Проверка...",
   "add.cta.convert": "Конвертировать",
