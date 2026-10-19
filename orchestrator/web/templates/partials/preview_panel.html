@@ -1,20 +1,19 @@
-{#- The preview panel fragment (04-UI-SPEC.md States -> Preview), swapped
-   in place of `.preview-panel` by the delegated click handlers in
-   static/app.js -- never the whole Conversion block, only this element.
+{#- The preview panel fragment, swapped in place of `.preview-panel` by the
+   delegated click handlers in static/app.js -- never the whole
+   Conversion block, only this element.
 
    `state` is one of:
      - "rendered"  -- the frame image, plus the font-missing warning when
                       `font_notice` is set (still just "rendered" with an
-                      extra banner, not a fifth state -- 04-UI-SPEC.md's
-                      own "rendered-with-a-font-notice variant").
-     - "refused"   -- a stereo source refuses a burn-in (D-140); the same
+                      extra banner, not a fifth state).
+     - "refused"   -- a stereo source refuses a burn-in; the same
                       sentence the disabled subtitle group already shows,
                       not an error.
      - "error"     -- anything else that kept a real frame from coming
                       back (containment, a bad choice, ffmpeg itself).
 
    Convert stays enabled regardless of which of these renders -- a broken
-   preview never blocks a conversion (CONV-04). -#}
+   preview never blocks a conversion. -#}
 <div id="preview-panel" class="preview-panel" data-preview-panel data-preview-path="{{ rel_path }}" aria-live="polite">
   {% if state == "rendered" %}
     <img

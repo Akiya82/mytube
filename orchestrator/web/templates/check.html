@@ -3,11 +3,10 @@
 {% block title %}{{ title_name }} - MyTube{% endblock %}
 
 {#
-  `heading_kind` (plan 10, D-158) is set only by the two per-episode/
-  edition routes in routes_episodes.py -- routes_titles.check_page_route
-  never passes it, so a film's bare check page falls through to the
-  original, unchanged {{ title_name }} heading via Jinja's own
-  undefined-is-falsy behaviour.
+  `heading_kind` is set only by the two per-episode/edition routes in
+  routes_episodes.py -- routes_titles.check_page_route never passes it, so
+  a film's bare check page falls through to the plain {{ title_name }}
+  heading via Jinja's own undefined-is-falsy behaviour.
 #}
 {% block heading %}
   {%- if heading_kind == "edition" -%}
@@ -44,12 +43,12 @@
     data-copy-done-label="{{ t('library.cta.copy_link_done') }}"
   >{{ t("check.cta.copy_link") }}</button>
   {#
-    Screen E (D-158): the navigation walks every episode of the title in
-    number order, ready or not -- no ready range is ever computed, so a
-    neighbour that is not ready is still a real link, rendering its own
-    check.inactive state once visited. Rendered only for a multi-episode
-    title (show_episode_nav, computed in routes_episodes.py from the
-    title's own episode_count) -- a film gets neither link.
+    The navigation walks every episode of the title in number order, ready
+    or not -- no ready range is ever computed, so a neighbour that is not
+    ready is still a real link, rendering its own check.inactive state
+    once visited. Rendered only for a multi-episode title
+    (show_episode_nav, computed in routes_episodes.py from the title's own
+    episode_count) -- a film gets neither link.
   #}
   {% if show_episode_nav %}
     {% if previous_href %}

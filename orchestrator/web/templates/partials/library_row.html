@@ -1,47 +1,41 @@
 {% from "partials/icons.html" import copy as copy_icon, film_placeholder, queue_placeholder, chevron_down %}
 {#
-  One Library row. Two kinds share this partial (D-108): a video row, in
-  all four of its own states (D-60, 02-UI-SPEC.md Screen 3 and States),
-  and a playlist row, in its own states (03-UI-SPEC.md Screen 3
-  addendum and States). library_route tags every row with `row.kind`
-  before this partial ever sees it -- the branch below dispatches on that
-  first, and everything under the video branch is unchanged from before
-  playlists existed.
+  One Library row. Two kinds share this partial: a video row, in all four
+  of its own states, and a playlist row, in its own states.
+  library_route tags every row with `row.kind` before this partial ever
+  sees it -- the branch below dispatches on that first.
 
   This exact fragment is also what GET /library/{id}/row and GET
-  /playlists/{id}/row return for the 4-second poll (D-49, 04-UI-SPEC.md
-  Amendment 2) -- library.html includes it via {% include %} inside its
-  loop, the two fragment routes render it standalone, and both produce
-  byte-identical markup for the same row so a row can never look
-  different depending on how it was fetched.
+  /playlists/{id}/row return for the 4-second poll -- library.html
+  includes it via {% include %} inside its loop, the two fragment routes
+  render it standalone, and both produce byte-identical markup for the
+  same row so a row can never look different depending on how it was
+  fetched.
 
   The poller in static/app.js binds on data-row-status="preparing" and
   reads data-row-url off the very row it is polling to know what to
-  fetch next -- both row kinds carry that attribute now (04-UI-SPEC.md
-  Amendment 2), holding each row's own fragment address, because a video
-  row's address is built from a title id and a playlist row's from a
-  playlist id: two shapes, and the row itself is the only thing that
-  knows which one it is. The poller's own binding value and its stopping
-  condition (any status other than "preparing" stops the poll) are
-  unchanged from before this plan -- every in-flight stage below keeps
-  data-row-status at that exact literal string and carries the finer
-  stage in a second attribute, data-job-stage, which is what the chip
-  dispatch below actually reads. Teaching the poller a word per stage
-  would be more code for identical behaviour.
+  fetch next -- both row kinds carry that attribute, holding each row's
+  own fragment address, because a video row's address is built from a
+  title id and a playlist row's from a playlist id: two shapes, and the
+  row itself is the only thing that knows which one it is. The poller
+  binds on that one literal and stops on any other status, so every
+  in-flight stage below keeps data-row-status at that exact string and
+  carries the finer stage in a second attribute, data-job-stage, which is
+  what the chip dispatch below actually reads. Teaching the poller a word
+  per stage would be more code for identical behaviour.
 
-  A video row with more than one episode (row.is_series, 05-UI-SPEC.md
-  Screen D) is the one place data-row-status stops being a plain copy of
-  row.title_status: readiness lives on the episode and its edition now
-  (D-157), so a series can be "active" (its first episode is ready)
-  while a later one is still converting, and the row must keep polling
-  through that combination rather than stopping the moment the title
-  itself turns active. `row.episodes` (partials/episode_row.html, one
-  {% include %} per entry) and the outer `<details class="episode-list">`
-  wrapping them each carry `data-episode-id` -- the outer disclosure
-  carries the title id (there is exactly one such disclosure per row in
-  this phase), each episode row its own episode id -- which is the key
-  static/app.js's poller matches an open state and a focused control
-  against across every 4-second replacement.
+  A video row with more than one episode (row.is_series) is the one place
+  data-row-status stops being a plain copy of row.title_status: readiness
+  lives on the episode and its edition, so a series can be "active" (its
+  first episode is ready) while a later one is still converting, and the
+  row must keep polling through that combination rather than stopping the
+  moment the title itself turns active. `row.episodes`
+  (partials/episode_row.html, one {% include %} per entry) and the outer
+  `<details class="episode-list">` wrapping them each carry
+  `data-episode-id` -- the outer disclosure carries the title id (there
+  is exactly one such disclosure per row), each episode row its own
+  episode id -- which is the key static/app.js's poller matches an open
+  state and a focused control against across every 4-second replacement.
 #}
 {% if row.kind == "playlist" %}
 {# The pending-delete state reuses the video row's markup verbatim, and
@@ -49,8 +43,7 @@
    and deadline attributes on the <li>, the same countdown chip carrying
    the same template attribute, and the same confirmation forms. Because
    they match, the countdown tick and the
-   confirmation handler in static/app.js already cover this row and no
-   browser code was added for playlists. #}
+   confirmation handler in static/app.js already cover this row. #}
 <li class="library-row{% if row.refused %} library-row--failed{% endif %}" data-row-status="{{ 'preparing' if row.job_stage and row.status != 'pending_delete' else row.status }}"{% if row.job_stage and row.status != "pending_delete" %} data-job-stage="{{ row.job_stage }}"{% endif %} data-row-url="/playlists/{{ row.playlist_id }}/row"{% if row.status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
   <div class="library-row__thumb library-row__thumb--placeholder">
     {{ queue_placeholder(cls="library-row__thumb-icon") }}
@@ -62,10 +55,9 @@
 
     {# Empty wins over everything else because a build is never attempted
        against zero members. A live job (job_stage set) is checked next --
-       an assembly now polls exactly like a video's Preparing row
-       (04-UI-SPEC.md Amendment 3) -- ahead of the static Refused/Building/
-       done dispatch below, which only ever applies once nothing is
-       actually running. #}
+       an assembly polls exactly like a video's Preparing row -- ahead of
+       the static Refused/Building/done dispatch below, which only ever
+       applies once nothing is actually running. #}
     {% if row.status == "pending_delete" %}
       <span class="chip chip--deleting" data-countdown-template="{{ t('library.delete.countdown') }}">
         {{ t("library.delete.countdown").format(mm="--", ss="--") }}
@@ -95,12 +87,12 @@
       <span class="chip chip--building">{{ t("playlist.state.building") }}</span>
     {% endif %}
 
-    {# Same address-line shape a video row already has (Screen 3 addendum
-       item 5), /p/{slug} instead of /v/{slug}, the same copy-link keys
-       reused unchanged. The copy button is disabled/ghost while nothing
-       has been built yet, the same layout-stability reasoning the video
-       row's own Preparing sub-state already established -- copying an
-       address that answers "not ready" is not useful yet. #}
+    {# Same address-line shape a video row already has, /p/{slug} instead
+       of /v/{slug}, the same copy-link keys reused unchanged. The copy
+       button is disabled/ghost while nothing has been built yet, the same
+       layout-stability reasoning the video row's own Preparing sub-state
+       already established -- copying an address that answers "not ready"
+       is not useful yet. #}
     <p class="library-row__address">
       {{ public_base_url }}/p/{{ row.slug }}
       <button
@@ -118,8 +110,7 @@
          video banner already uses -- the sentence names the actual
          mismatching members and parameters, never a stored English
          sentence, and Jinja's autoescaping covers whatever member titles
-         are interpolated into it (03-UI-SPEC.md Security-Visible
-         Contracts item 3). #}
+         are interpolated into it. #}
       <p class="library-row__reason">
         {{ reason_text(row.refused_reason_key, row.refused_reason_params) }}
       </p>
@@ -144,9 +135,9 @@
     </form>
   </div>
   {% elif row.job_stage and row.job_stage != "cancelling" %}
-  {# In-flight actions replace the normal action set for every kind
-     (D-132) -- Rename/Delete/Check (or Edit/Delete for a playlist) are
-     meaningless before the work they act on has finished. #}
+  {# In-flight actions replace the normal action set for every kind --
+     Rename/Delete/Check (or Edit/Delete for a playlist) are meaningless
+     before the work they act on has finished. #}
   <div class="library-row__actions">
     <form method="post" action="/playlists/{{ row.playlist_id }}/cancel" data-confirm="{{ t('library.cancel.confirm') }}">
       <button type="submit" class="btn btn--destructive-outline">{{ t("library.cta.cancel") }}</button>
@@ -171,9 +162,9 @@
 {% else %}
 <li class="library-row{% if row.title_status == 'failed' %} library-row--failed{% endif %}{% if row.is_series %} library-row--series{% endif %}" data-title-id="{{ row.title_id }}" data-row-status="{{ 'preparing' if row.is_series and row.job_stage else row.title_status }}"{% if row.job_stage %} data-job-stage="{{ row.job_stage }}"{% endif %} data-row-url="/library/{{ row.title_id }}/row"{% if row.title_status == "pending_delete" %} data-deadline="{{ (row.delete_at.timestamp() * 1000) | int }}"{% endif %}>
 {% if row.title_status == "failed" %}
-  {# No thumbnail slot at all on a failed row (02-UI-SPEC.md States ->
-     Failed): a failed add is heading for dismissal, not a future
-     thumbnail, and the reclaimed width goes to the reason text. #}
+  {# No thumbnail slot at all on a failed row: a failed add is heading
+     for dismissal, not a future thumbnail, and the reclaimed width goes to
+     the reason text. #}
   <div class="library-row__body">
     <h2 class="library-row__title">{{ row.title_name }}</h2>
     <p class="library-row__reason">{{ t("failed.reason_prefix").format(reason=t(row.failure_reason or "failed.reason.unknown")) }}</p>
@@ -191,7 +182,7 @@
     <img class="library-row__thumb" src="/poster/{{ row.edition_id }}" alt="{{ row.title_name }}" width="128" height="72" loading="lazy">
   {% else %}
     {# Preparing always shows the placeholder even if a poster key
-       already exists (D-72) -- a poster for a file not yet confirmed to
+       already exists -- a poster for a file not yet confirmed to
        remux and upload successfully is a promise the row cannot keep. #}
     <div class="library-row__thumb library-row__thumb--placeholder">
       {{ film_placeholder(cls="library-row__thumb-icon") }}
@@ -203,10 +194,9 @@
     <h2 class="library-row__title">{{ row.title_name }}</h2>
 
     {% if row.is_series and row.job_stage %}
-      {# The one combination the pre-05-09 mutually-exclusive dispatch
-         below could not render (05-UI-SPEC.md Screen D item 2/3): a
-         series already playable from its first ready episode while
-         another one keeps converting. The address (once the title
+      {# The one combination the mutually-exclusive dispatch below cannot
+         render: a series already playable from its first ready episode
+         while another one keeps converting. The address (once the title
          itself is active) and the two chips render together -- the
          aggregate sentence in the Preparing tint, then the in-flight
          episode's own stage chip, composed from the identical six job-
@@ -247,7 +237,7 @@
       {% endif %}
     {% elif row.title_status == "active" %}
       {# The absence of a status chip on a finished row IS the done
-         signal (02-UI-SPEC.md Color, Active/done row). #}
+         signal. #}
       <p class="library-row__address">
         {{ public_base_url }}/v/{{ row.slug }}
         <button
@@ -258,11 +248,11 @@
         >{{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}</button>
       </p>
     {% elif row.title_status == "pending_delete" %}
-      {# Where the status chip normally sits (02-UI-SPEC.md States ->
-         Delete -> countdown): the mm:ss placeholder is server-rendered so
-         the row never has a blank moment before JS runs, and app.js ticks
-         it from data-deadline on the <li> above -- a reload always shows
-         the true remaining time, never a restarted clock. #}
+      {# Where the status chip normally sits: the mm:ss placeholder is
+         server-rendered so the row never has a blank moment before JS
+         runs, and app.js ticks it from data-deadline on the <li> above --
+         a reload always shows the true remaining time, never a restarted
+         clock. #}
       <span class="chip chip--deleting" data-countdown-template="{{ t('library.delete.countdown') }}">
         {{ t("library.delete.countdown").format(mm="--", ss="--") }}
       </span>
@@ -284,8 +274,7 @@
         <span class="chip chip--preparing">{{ t("library.status.queued").format(n=row.job_queued_ahead or 0) }}</span>
       {% endif %}
       {# A disabled placeholder where the copy button will be -- so the
-         row does not change height once it finishes (02-UI-SPEC.md
-         States -> Preparing). #}
+         row does not change height once it finishes. #}
       <button type="button" class="btn btn--ghost library-row__copy" disabled aria-disabled="true">
         {{ copy_icon(cls="btn__icon") }} {{ t("library.cta.copy_link") }}
       </button>
@@ -300,11 +289,10 @@
        above is the row's reason to exist and shows either way.
 
        A series (row.is_series) re-scopes this line to the facts true of
-       the whole season -- resolution, audio language, episode count
-       (05-UI-SPEC.md Screen D item 1) -- size and duration are per-
-       edition facts and move down to each episode row instead, since the
-       lowest episode's own size read as the season's would simply be
-       wrong. #}
+       the whole season -- resolution, audio language, episode count --
+       size and duration are per-edition facts and move down to each
+       episode row instead, since the lowest episode's own size read as
+       the season's would simply be wrong. #}
     {% if not row.is_series %}
       {% if row.title_status in ("active", "pending_delete")
             and row.size_bytes is not none and row.duration_seconds is not none
@@ -346,12 +334,11 @@
       </form>
       <a class="btn btn--ghost" href="/check/{{ row.slug }}">{{ t("library.cta.check") }}</a>
       {% if not row.is_series %}
-        {# A film or any one-episode title renders as it does today
-           (D-162) with exactly one addition: "Move into title..."
-           (05-UI-SPEC.md Screen D) -- the single-row companion to the
-           folder screen's own batch move (D-160), for the episode whose
-           folder is no longer on the share, or for merging two
-           standalone titles into one series with no folder involved. #}
+        {# A film or any one-episode title also gets "Move into title..."
+           -- the single-row companion to the folder screen's own batch
+           move, for the episode whose folder is no longer on the share,
+           or for merging two standalone titles into one series with no
+           folder involved. #}
         <a class="btn btn--ghost" href="/library/title/{{ row.title_id }}/move" data-control="move-into-title">{{ t("library.cta.move_into_title") }}</a>
       {% endif %}
     </div>
@@ -373,10 +360,10 @@
   {% endif %}
 
   {% if row.is_series %}
-    {# The series' own disclosure (05-UI-SPEC.md Screen D item 3): a full-
-       width flex child of this <li> (library-row--series above sets
-       flex-wrap: wrap so it drops to a line of its own under the
-       thumbnail/body/actions trio), never nested inside .library-row__body.
+    {# The series' own disclosure: a full-width flex child of this <li>
+       (library-row--series above sets flex-wrap: wrap so it drops to a
+       line of its own under the thumbnail/body/actions trio), never
+       nested inside .library-row__body.
        Default-open only on the initial page render (row.episode_list_
        default_open, unset -- and so falsy -- on a poll fragment, see
        routes_titles._attach_series_episodes): open when any episode is

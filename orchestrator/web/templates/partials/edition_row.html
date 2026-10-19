@@ -1,12 +1,12 @@
 {#
-  One edition inside an episode's nested <details class="edition-list">
-  (05-UI-SPEC.md Screen D item 6) -- included from partials/episode_row.html
-  inside a `{% for edition in episode.editions %}` loop, so `row` (the
-  title), `episode` (the one this edition belongs to) and `edition` (this
-  one entry) are all in scope, the same context-sharing {% include %}
+  One edition inside an episode's nested <details class="edition-list"> --
+  included from partials/episode_row.html inside a
+  `{% for edition in episode.editions %}` loop, so `row` (the title),
+  `episode` (the one this edition belongs to) and `edition` (this one
+  entry) are all in scope, the same context-sharing {% include %}
   episode_row.html itself already uses one level up.
 
-  Renders for *every* edition of the episode, the default included (D-178):
+  Renders for *every* edition of the episode, the default included:
   its own slug, its own address (the bare `/v/{slug}/{number}` for the
   default, `/v/{slug}/{number}/{edition-slug}` for any other), its own
   technical detail line, and its controls. The default's row carries the
@@ -15,9 +15,9 @@
   one place that sentence can live, never a bare greyed control. Every
   other *ready* row carries "Make default" and an enabled outline Delete;
   a non-default edition still preparing or already failed carries neither
-  (a known, documented gap: a second edition's own in-flight job has no
-  controls of its own yet, the same scope 05-09's own summary already
-  carries forward for its stage chip).
+  (a known gap: a second edition's own in-flight job has no controls of
+  its own yet, matching the episode's stage chip, which is scoped to the
+  default edition only).
 
   `edition` carries the raw columns `queries.editions_for_library` fetches.
 #}

@@ -5,8 +5,7 @@
 {% block heading %}{% if editing %}{{ t("playlist.edit.heading") }}{% else %}{{ t("playlist.create.heading") }}{% endif %}{% endblock %}
 
 {% block content %}
-{# Unconditional on both create and edit (D-105's amended wording lands
-   here once the mechanism plan fixes it): a first save is itself an edit
+{# Unconditional on both create and edit: a first save is itself an edit
    from "not built" to "built", so the note belongs on the very first
    screen the operator sees, not only on a later one. #}
 <div class="banner banner--info" role="status">

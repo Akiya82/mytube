@@ -1,8 +1,8 @@
-{#- One file's row on the folder confirmation screen's five-column grid
-   (05-UI-SPEC.md Component Inventory): include checkbox, narrow number
-   field, filename-and-meta, the already-added chip slot, the row's own
-   preview control. Everything that belongs to the file but is not its
-   name wraps under it inside the third column.
+{#- One file's row on the folder confirmation screen's five-column grid:
+   include checkbox, narrow number field, filename-and-meta, the
+   already-added chip slot, the row's own preview control. Everything
+   that belongs to the file but is not its name wraps under it inside
+   the third column.
 
    `data-preview-path` sits on this row's own outer element (an ancestor
    of the Preview button below), which is exactly what static/app.js's
@@ -65,11 +65,11 @@
     {% elif file.probe_failed %}
       <p class="audio-note">{{ t("reason.unreadable") }}</p>
     {% elif file.slug_taken_on_episode %}
-      {# Screen B' item 6 (D-176/D-177): this batch's one edition slug
-         already names an edition of this exact row's own target episode
-         -- from a single-file add last week, most likely. The slug field
-         is shared by the whole batch, so this reason names the row it
-         actually blocks rather than the field itself. #}
+      {# This batch's one edition slug already names an edition of this
+         exact row's own target episode -- from a single-file add last
+         week, most likely. The slug field is shared by the whole batch,
+         so this reason names the row it actually blocks rather than the
+         field itself. #}
       <p class="audio-note">{{ t("edition.slug.taken_on_episode").format(slug=edition_slug_value) }}</p>
     {% elif not file.compatible and file.verdict is not none %}
       <p class="audio-note">{{ t(file.reason_key).format(**file.reason_params) }}</p>

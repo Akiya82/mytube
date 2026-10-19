@@ -6,12 +6,12 @@
 {% block heading %}{{ t("add.heading") }}{% endblock %}
 
 {% block content %}
-{# --- Position 1 (D-176 supersedes D-147): the four mutually exclusive
-   banner states -- opened-from-library edition mode, exact source already
-   added, a different file of an already-taken episode, or a plain title
-   match with the number still free. No "add anyway, second title" branch
-   survives here: a title-level match cannot occur once every edition
-   belongs to an episode. --- #}
+{# --- The four mutually exclusive banner states -- opened-from-library
+   edition mode, exact source already added, a different file of an
+   already-taken episode, or a plain title match with the number still
+   free. No "add anyway, second title" branch survives here: a
+   title-level match cannot occur once every edition belongs to an
+   episode. --- #}
 {% if mode == "edition" %}
   <div class="banner banner--info" role="status">
     {{ warning(cls="banner__icon") }}
@@ -49,8 +49,7 @@
 <form class="add-form" method="post" action="{{ form_action }}">
   <input type="hidden" name="target_title_id" value="{{ target_title_id or '' }}">
   <input type="hidden" name="target_episode_id" value="{{ target_episode_id or '' }}">
-  {# --- 2. The plan: four mutually exclusive states (D-145's "explanation
-     at the top"), replacing the old single verdict block. --- #}
+  {# --- The explanation at the top: four mutually exclusive states. --- #}
   {% if probe_failed %}
     <div class="banner banner--error" role="alert">
       {{ warning(cls="banner__icon") }}
@@ -80,13 +79,13 @@
     </div>
   {% endif %}
 
-  {# --- 3/4. Name, slug and episode-number fields, or the edition fields
-     in their place -- three mutually exclusive shapes, decided by mode
-     (D-159, D-169, D-176). An edition has no name and no address segment
-     of its own beyond its slug, so mode "edition" replaces the whole
-     block; mode "attach" drops Name/Slug (there is no new title to name)
-     but keeps the episode-number field; mode "new" (the default,
-     unchanged path) keeps all three. --- #}
+  {# --- Name, slug and episode-number fields, or the edition fields
+     in their place -- three mutually exclusive shapes, decided by mode.
+     An edition has no name and no address segment of its own beyond its
+     slug, so mode "edition" replaces the whole block; mode "attach"
+     drops Name/Slug (there is no new title to name) but keeps the
+     episode-number field; mode "new" (the default) keeps all three.
+     --- #}
   {% if mode == "edition" %}
     <div class="form-field">
       <label class="form-field__label" for="add-edition-slug">{{ t("edition.field.slug") }}</label>
@@ -139,7 +138,7 @@
   {% endif %}
 
   {% if verdict is not none %}
-    {# --- 5. The 3D layout selector (NEW, shared by both actions -- D-145). --- #}
+    {# --- The 3D layout selector, shared by both actions. --- #}
     <fieldset class="form-field radio-group">
       <legend class="form-field__label">{{ t("layout.field.heading") }}</legend>
       {% for value, key in [
@@ -160,15 +159,15 @@
        provenance, not live state, so it is not wired to the selection. #}
     <p class="audio-note">{{ t(layout_detected_key) }}</p>
 
-    {# --- 6. Audio track picker -- condition loosened from
-       "verdict.eligible" to "the probe succeeded" (Amendment 2): a
-       conversion needs a track chosen exactly as a copy does. Embedded and
-       external tracks share one list (D-181): the file's own streams
-       first, in file order, then every dub the walker found beside it.
-       Gated on the source having at least one embedded audio stream --
-       analyze() already refuses eligibility entirely (reason.no_audio)
-       for a source with none, so an audio picker of any kind, manual
-       included, would have nothing to attach a choice to. --- #}
+    {# --- Audio track picker -- shown whenever the probe succeeded, not
+       only when the file is eligible as is: a conversion needs a track
+       chosen exactly as a copy does. Embedded and external tracks share
+       one list: the file's own streams first, in file order, then every
+       dub the walker found beside it. Gated on the source having at
+       least one embedded audio stream -- analyze() already refuses
+       eligibility entirely (reason.no_audio) for a source with none, so
+       an audio picker of any kind, manual included, would have nothing
+       to attach a choice to. --- #}
     {% if verdict.tracks %}
     <fieldset class="form-field radio-group">
       <legend class="form-field__label">{{ t("add.field.audio") }}</legend>
@@ -190,7 +189,7 @@
           </span>
         </label>
       {% endfor %}
-      {# The manual audio choice (T-05-14): a hidden group member with no
+      {# The manual audio choice: a hidden group member with no
          static value in this template at all -- static/app.js gives it
          one only once the operator actually types into or picks from the
          manual field below, so submitting the form with that field
@@ -226,7 +225,6 @@
     </div>
     {% endif %}
 
-    {# --- 7. The conversion block (NEW). --- #}
     <div class="convert-block">
       <h2 class="section-heading">{{ t("convert.section.heading") }}</h2>
 
@@ -265,13 +263,12 @@
               </span>
             </label>
           {% endfor %}
-          {# The manual subtitle choice (T-05-14): a hidden group member
+          {# The manual subtitle choice: a hidden group member
              carrying no static value in this template at all -- the same
              mechanism the audio group above uses. The server-side grammar
              (orchestrator.media.add.parse_subtitle_choice) still accepts
              the literal "manual" value this radio's own script gives it,
-             joining subtitle_manual_path onto the source's own folder
-             exactly as before this plan. #}
+             joining subtitle_manual_path onto the source's own folder. #}
           <input type="radio" name="subtitle_choice" id="subtitle-choice-manual" class="visually-hidden" tabindex="-1" aria-hidden="true">
         </fieldset>
         <div class="form-field manual-path-field">
@@ -316,7 +313,7 @@
     </div>
   {% endif %}
 
-  {# --- 8. The as-is cost line and its free-space banner: gated on the
+  {# --- The as-is cost line and its free-space banner: gated on the
      same predicate the as-is button below renders behind, so neither ever
      describes an action the page is not offering. --- #}
   {% if verdict is not none and verdict.eligible %}
@@ -331,7 +328,7 @@
     {% endif %}
   {% endif %}
 
-  {# --- 10. Two actions -- exactly one is the filled primary at any time. --- #}
+  {# --- Two actions -- exactly one is the filled primary at any time. --- #}
   <div class="add-form__actions">
     {% if verdict is not none and verdict.eligible %}
       <button type="submit" name="add" value="1" class="btn btn--primary"{% if not can_add %} disabled aria-disabled="true"{% endif %}>{{ t("add.cta.primary") }}</button>

@@ -1,4 +1,4 @@
-{# The whole fixed icon set this phase needs, as named Jinja macros --
+{# The whole fixed icon set, as named Jinja macros --
    inline SVG, no icon library. Each macro accepts a `class` string so a
    caller can size it; the currentColor stroke/fill tracks the surrounding
    text color in both palettes without a per-icon color variant. #}
@@ -36,11 +36,11 @@
 </svg>
 {% endmacro %}
 
-{# The playlist row's thumbnail-slot icon (03-UI-SPEC.md Icon additions).
-   Deliberately unlike film_placeholder's rectangle-plus-sprocket-holes
-   silhouette, so the two row kinds are never confused at a glance -- a
-   playlist has no single frame to take a poster from, so this is the
-   only state a playlist thumbnail slot ever has, not a missing one. #}
+{# The playlist row's thumbnail-slot icon. Deliberately unlike
+   film_placeholder's rectangle-plus-sprocket-holes silhouette, so the
+   two row kinds are never confused at a glance -- a playlist has no
+   single frame to take a poster from, so this is the only state a
+   playlist thumbnail slot ever has, not a missing one. #}
 {% macro queue_placeholder(cls="") %}
 <svg class="{{ cls }}" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <line x1="4" y1="7" x2="20" y2="7"></line>
@@ -49,9 +49,8 @@
 </svg>
 {% endmacro %}
 
-{# The three member-order row controls the next plan wires up -- added
-   here now, with their siblings, rather than in a second icon file
-   (03-UI-SPEC.md Icon additions). #}
+{# The three member-order row controls (up, down, drag handle), kept
+   with their siblings rather than in a second icon file. #}
 {% macro chevron_up(cls="") %}
 <svg class="{{ cls }}" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <polyline points="18 15 12 9 6 15"></polyline>

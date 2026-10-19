@@ -1,9 +1,9 @@
 {#
-  One episode inside a series' <details class="episode-list"> (05-UI-
-  SPEC.md Screen D item 4) -- always included from partials/library_row.html
-  inside a `{% for episode in row.episodes %}` loop, so `row` (the title)
-  and `episode` (this one entry) are both in scope, the same context-
-  sharing {% include %} already used elsewhere in this codebase.
+  One episode inside a series' <details class="episode-list"> -- always
+  included from partials/library_row.html inside a
+  `{% for episode in row.episodes %}` loop, so `row` (the title) and
+  `episode` (this one entry) are both in scope, the same context-sharing
+  {% include %} already used elsewhere in this codebase.
 
   Two lines. `.episode-row__head` carries the episode number, the default
   edition's own address (this episode's own number, not the title's
@@ -11,21 +11,19 @@
   copy button, its own stage chip (the identical six-key job-progress
   dispatch the title row's own Preparing branch already uses, reused
   verbatim per episode rather than composed into a new key) and, once
-  settled, its size and duration -- the per-edition facts D-163 moves
-  down from the title row. `.episode-row__actions` carries what plan 10
-  adds to this cluster: Check and, last, Delete episode
+  settled, its size and duration -- the per-edition facts, which live
+  here rather than on the title row. `.episode-row__actions` carries
+  Check, Edit number, Add edition and, last, Delete episode
   (`.btn--destructive-outline`, the same outline weight Cancel already
   uses -- a twelve-episode season would otherwise show twelve filled
   destructive buttons at once) when the episode is settled; Undo/Purge
   during its own countdown; Cancel alone while in flight; Retry/Dismiss
-  once its own default edition has failed. Edit number and Add edition
-  are later plans' own slots into this same cluster, which is why the
-  actions line is already `flex-wrap: wrap` and each control carries
-  `data-control` rather than relying on name/class alone to stay
-  distinguishable once more controls land beside it. Every one of these
-  forms posts to its own episode's route in `orchestrator.web.
-  routes_episodes` -- a scoped copy of the identical title-level route,
-  touching no sibling episode (D-164).
+  once its own default edition has failed. The actions line is
+  `flex-wrap: wrap` and each control carries `data-control` rather than
+  relying on name/class alone, so the controls stay distinguishable as
+  more of them sit side by side. Every one of these forms posts to its
+  own episode's route in `orchestrator.web.routes_episodes` -- a scoped
+  copy of the identical title-level route, touching no sibling episode.
 
   `episode` carries the raw columns `queries.episodes_for_library`
   fetches, plus `job_stage`/`job_percent`/`job_remaining_text`/
@@ -70,8 +68,7 @@
       <span class="chip chip--cancelling">{{ t("library.status.cancelling") }}</span>
     {% elif episode.job_stage %}
       {# A season's queue position belongs on the title row once, not
-         repeated on every queued episode of it (D-188, 2026-09-09) -- see
-         05-UI-SPEC.md Screen D item 4. #}
+         repeated on every queued episode of it. #}
       <span class="chip chip--preparing">{{ t("library.status.queued_no_position") }}</span>
     {% elif episode.failed %}
       <span class="chip chip--refused">{{ t("failed.reason_prefix").format(reason=t(episode.edition_failure_reason or "failed.reason.unknown")) }}</span>
@@ -111,16 +108,14 @@
       </form>
     {% else %}
       <a class="btn btn--ghost" href="/check/{{ row.slug }}/{{ episode.number }}" data-control="check">{{ t("library.cta.check") }}</a>
-      {# Edit number (05-UI-SPEC.md Screen F, D-161): opens the renumber
-         form already targeted at this exact episode. #}
       <a class="btn btn--ghost" href="/library/episode/{{ episode.episode_id }}/renumber" data-control="edit-number">{{ t("library.cta.edit_number") }}</a>
-      {# Add edition (05-UI-SPEC.md Component Inventory, D-176): one click
-         from this row into the add form, already targeted at this
-         episode's own default edition's source file and already in
-         edition mode -- add_edition_href (routes_titles._group_episodes_
-         by_title) carries both the percent-encoded share path and the
-         target_episode_id query param the add form's own GET route
-         (routes_share.py) already understands. #}
+      {# Add edition: one click from this row into the add form, already
+         targeted at this episode's own default edition's source file and
+         already in edition mode -- add_edition_href
+         (routes_titles._group_episodes_by_title) carries both the
+         percent-encoded share path and the target_episode_id query param
+         the add form's own GET route (routes_share.py) already
+         understands. #}
       <a class="btn btn--ghost" href="{{ episode.add_edition_href }}" data-control="add-edition">{{ t("library.cta.add_edition") }}</a>
       <form method="post" action="/library/episode/{{ episode.episode_id }}/delete">
         <button type="submit" class="btn btn--destructive-outline" data-control="delete">{{ t("library.cta.delete_episode") }}</button>
@@ -129,14 +124,13 @@
   </div>
 
   {% if (episode.edition_count or 1) > 1 %}
-    {# Nested edition disclosure (05-UI-SPEC.md Screen D item 5): same
-       <details> mechanism as the series' own episode list, default closed
-       -- the default edition's own address is already on the line above,
-       and is what an operator copies day to day. data-episode-id here
-       reuses this episode's own id (not a new attribute) so
-       static/app.js's existing details[data-episode-id] open-state sync
-       (_syncEpisodeState) covers this disclosure across a poll's row
-       replacement with no change to that function at all. #}
+    {# Nested edition disclosure: same <details> mechanism as the series'
+       own episode list, default closed -- the default edition's own
+       address is already on the line above, and is what an operator
+       copies day to day. data-episode-id here reuses this episode's own
+       id (not a new attribute) so static/app.js's existing
+       details[data-episode-id] open-state sync (_syncEpisodeState) covers
+       this disclosure across a poll's row replacement. #}
     <details class="edition-list" data-episode-id="{{ episode.episode_id }}">
       <summary>
         {{ chevron_down(cls="episode-list__chevron") }}

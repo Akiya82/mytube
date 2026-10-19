@@ -23,16 +23,16 @@
       <a class="site-nav__link" href="/add">{{ t("nav.share") }}</a>
       <a class="site-nav__link" href="/library">{{ t("nav.library") }}</a>
       <a class="site-nav__link" href="/playlists/new">{{ t("nav.new_playlist") }}</a>
-      {# A POST-only form-button, never a GET link (Security-Visible
-         Contract #1): a `<a href="/logout">` is trivially triggerable by
-         link prefetch, a stray click, or a third-party page rendering it
-         as an image source -- every other state-changing control in this
-         interface is already a form POST. No explicit type="submit": a
-         <button> with no type inside a <form> is a submit button by the
-         HTML spec's own default, and every screen test that scans this
-         page for "the one submit button" was written before this control
-         existed -- an explicit type here would collide with those checks
-         for no behavioural gain. #}
+      {# A POST-only form-button, never a GET link: a `<a href="/logout">`
+         is trivially triggerable by link prefetch, a stray click, or a
+         third-party page rendering it as an image source -- every other
+         state-changing control in this interface is already a form POST.
+         No explicit type="submit": a <button> with no type inside a
+         <form> is a submit button by the HTML spec's own default, and
+         every screen test that scans this page for "the one submit
+         button" was written before this control existed -- an explicit
+         type here would collide with those checks for no behavioural
+         gain. #}
       <form method="post" action="/logout">
         <button class="site-nav__link">{{ t("nav.sign_out") }}</button>
       </form>
@@ -43,7 +43,7 @@
         {% if storage_usage.free_bytes is not none %}
           {{ t("storage.usage").format(used=storage_usage.total_bytes | filesizeformat_binary, free=storage_usage.free_bytes | filesizeformat_binary) }}
         {% else %}
-          {# D-67: the external S3 endpoint has no quota API to ask "how much
+          {# The external S3 endpoint has no quota API to ask "how much
              is left" -- only "how much is used" is knowable without a
              configured MYTUBE_STORAGE_QUOTA_BYTES. A made-up free figure
              would be worse than showing the one true number. #}

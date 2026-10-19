@@ -6,8 +6,6 @@
 {% block heading %}{{ t("folder.edition.heading") if edition_mode else t("folder.heading") }}{% endblock %}
 
 {% block content %}
-{# --- 1. Breadcrumb -- unchanged component, same as the share listing
-   this screen was opened from. --- #}
 <nav class="breadcrumb" aria-label="breadcrumb">
   {% for crumb in breadcrumb %}
     {% if not loop.last %}
@@ -19,10 +17,10 @@
   {% endfor %}
 </nav>
 
-{# --- 2. Season-grouping banner -- only when this folder's own files
-   parsed into more than one (name, season) group (D-152). Never shown in
-   edition mode (Screen B'): the title is already known, so there is
-   nothing here to group by name/season for. --- #}
+{# --- Season-grouping banner -- only when this folder's own files
+   parsed into more than one (name, season) group. Never shown in edition
+   mode: the title is already known, so there is nothing here to group by
+   name/season for. --- #}
 {% if not edition_mode and group_summaries | length > 1 %}
   <div class="banner banner--info" role="status">
     {{ warning(cls="banner__icon") }}
@@ -40,12 +38,12 @@
   {% if edition_mode %}<input type="hidden" name="edition_mode" value="1">{% endif %}
 
   {% if edition_mode %}
-    {# --- Screen B': the title is already known -- a read-only line
-       naming it stands in for the title-mode radio and the Name/Address
-       fields items 3-4 give the ordinary screen (05-UI-SPEC.md Screen B'). --- #}
+    {# --- The title is already known -- a read-only line naming it
+       stands in for the title-mode radio and the Name/Address fields the
+       ordinary screen has. --- #}
     <p class="audio-note">{{ t("folder.title.mode.existing").format(title=title_name) }}</p>
 
-    {# --- One edition slug field (D-177), suggested from what differs
+    {# --- One edition slug field, suggested from what differs
        against the episodes' own existing default editions -- same
        suggestion mechanics as the single-file edition field. --- #}
     <div class="form-field">
@@ -54,15 +52,15 @@
       <p class="audio-note">{{ t("edition.field.slug_hint") }}</p>
     </div>
 
-    {# --- One "make this the default edition when ready" checkbox
-       (D-178), off by default, applied identically to every episode's
-       new edition in the batch. --- #}
+    {# --- One "make this the default edition when ready" checkbox,
+       off by default, applied identically to every episode's new
+       edition in the batch. --- #}
     <label class="radio-group__option">
       <input type="checkbox" name="make_default" value="1"{% if make_default_checked %} checked{% endif %}>
       <span>{{ t("edition.field.make_default") }}</span>
     </label>
   {% else %}
-  {# --- 3. Title-mode radio (D-159). The existing-title option renders
+  {# --- Title-mode radio. The existing-title option renders
      only when a name match exists at all; which one is checked is the
      server's own preselection, computed once at render time -- neither
      option toggles the fields below live, matching the single-file
@@ -81,10 +79,10 @@
     {% endif %}
   </fieldset>
 
-  {# --- 4. Name and Address, new-title mode only; a read-only line
+  {# --- Name and Address, new-title mode only; a read-only line
      naming the matched title otherwise. The season provenance caption
-     sits directly under the Address field either way (04-UI-SPEC.md's
-     layout.detected.* pattern). --- #}
+     sits directly under the Address field either way (the same pattern
+     as the layout.detected.* captions). --- #}
   {% if mode == "new" %}
     <div class="form-field">
       <label class="form-field__label" for="folder-name">{{ t("add.field.name") }}</label>
@@ -109,7 +107,6 @@
   {% endif %}
   {% endif %}
 
-  {# --- 5. Folder-wide track fieldsets, above the files they apply to. --- #}
   <h2 class="section-heading">{{ t("folder.section.tracks") }}</h2>
 
   {% if audio_options %}
@@ -173,9 +170,8 @@
     {% endfor %}
   </fieldset>
 
-  {# --- 6/7. The per-file list, in filename order, each on the five-
-     column grid; a highlighted row carries its own inline fallback
-     group (05-UI-SPEC.md Screen B items 6-7). --- #}
+  {# --- The per-file list, in filename order, each on the five-column
+     grid; a highlighted row carries its own inline fallback group. --- #}
   <h2 class="section-heading">{{ t("folder.section.files") }}</h2>
 
   {% if nothing_recognized %}
@@ -201,13 +197,12 @@
     {% endfor %}
   </div>
 
-  {# --- 8. The one shared preview panel (D-175) -- idle until a row's
+  {# --- The one shared preview panel -- idle until a row's
      own Preview button renders into it, exactly the empty-until-swapped
      element the single-file form already uses (`.preview-panel:empty`).
      The first file is the default target on load. --- #}
   <div id="preview-panel" class="preview-panel" data-preview-panel data-preview-path="{{ default_preview_path }}" aria-live="polite"></div>
 
-  {# --- 9. Folder-wide incompatible-files hint. --- #}
   {% if incompatible_count > 0 %}
     <div class="banner banner--warning" role="alert">
       {{ warning(cls="banner__icon") }}
@@ -217,13 +212,13 @@
     </div>
   {% endif %}
 
-  {# --- 11. Cost line -- summed over the checked set as of this render,
+  {# --- Cost line -- summed over the checked set as of this render,
      never live (recomputed only on the next request). --- #}
   {% if estimate_seconds %}
     <p class="cost-line">{{ t("add.estimate").format(size=estimate_size_bytes | filesizeformat_binary, time=estimate_seconds | humanize_seconds(t)) }}</p>
   {% endif %}
 
-  {# --- 10/12. The save-blocked banner, rendered by the server only on a
+  {# --- The save-blocked banner, rendered by the server only on a
      refused POST -- this same screen re-rendered from the submission,
      never a fresh GET, with every choice the operator made still in
      place and the offending rows' own captions (number_missing/
@@ -231,8 +226,8 @@
      partials/folder_file_row.html) speaking for themselves. --- #}
   {% if refusal_message_key and refusal_message_key != "folder.incompatible.hint" %}
     {# folder.incompatible.hint takes an {n} parameter and is already shown
-       by item 9's own hint banner above, with the right count -- shown
-       here only for the two parameterless keys. #}
+       by the incompatible-files hint banner above, with the right count --
+       shown here only for the two parameterless keys. #}
     <div class="banner banner--warning" role="alert">
       {{ warning(cls="banner__icon") }}
       <div class="banner__text">
