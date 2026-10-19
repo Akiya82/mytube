@@ -68,9 +68,9 @@ marked "must be generated".
 | `MYTUBE_PUBLIC_BASE_URL` | The address viewers reach, scheme included, no trailing slash | — | **Required — the service refuses to start without it.** Written into every copied link, so it is never derived from a browser's own address bar |
 | `MYTUBE_ADMIN_FQDN` | The bare hostname the operator interface answers on — no scheme, no trailing slash. Must differ from `MYTUBE_PUBLIC_BASE_URL`'s own host | — | **Required — the interface container refuses to start without it.** `docker compose logs api` names `admin_fqdn` in a validation error: `Field required` if the line is missing from `.env` entirely, `must not be empty` if it is present but blank |
 | `MYTUBE_TRUSTED_PROXY` | The address edge believes a forwarded client address from, so the login rate limit counts real callers instead of counting your reverse proxy once for everybody. An address or CIDR | `172.16.0.0/12` (the range Docker's own bridge gateways fall in) | Optional, and the default is usually right. **Not your proxy's address** — Docker rewrites the source of anything arriving through a published port, so edge sees its bridge gateway instead. See "Reverse proxy" for how to read the address and check which way it is counting |
-| `MYTUBE_SHARE_URL` | Address of the source share, in the form a CIFS mount takes: `//host/share`. The stack mounts it itself and gives `api` a read-only view at `/share` | — | **Required — `api` does not start without a share it can mount** |
-| `MYTUBE_SHARE_USERNAME` | Account the share is mounted as. Read-only access on the server's side is enough | — | Required |
-| `MYTUBE_SHARE_PASSWORD` | That account's password | — | Required |
+| `MYTUBE_SHARE_URL` | Address of the source share, in the form a CIFS mount takes: `//host/share`. Used only with `docker-compose.cifs.yml`, which mounts it and gives `api` a read-only view at `/share` | — | Required with the CIFS override, ignored otherwise |
+| `MYTUBE_SHARE_USERNAME` | Account the share is mounted as. Read-only access on the server's side is enough | — | Required with the CIFS override |
+| `MYTUBE_SHARE_PASSWORD` | That account's password | — | Required with the CIFS override |
 | `MYTUBE_SHARE_DOMAIN` | Windows domain, for a domain-joined share | empty | Optional — leave empty for a local account on the machine serving the share |
 | `MYTUBE_STORAGE_QUOTA_BYTES` | Configured storage quota in bytes, `0` means no quota enforced — used only for the interface's usage figure | `0` | Optional |
 | `MYTUBE_WORKER_TOKEN` | The conversion worker's only credential — opens the `/worker/` prefix behind a constant-time comparison. Both this service and the converter must be given the same value | — | **Required — the interface container refuses to start without it.** Generate with `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
@@ -107,11 +107,20 @@ read would break that on its own, independent of every other setting here.
 
 ## Network share
 
-The share this stack browses and adds files from is mounted by the stack
-itself, not by the machine it runs on. Nothing has to be mapped, mounted or
-prepared on the host first — give the stack the address and an account and
-it does the rest, which is what makes moving to another machine a matter of
-copying `.env`.
+By default the stack browses and adds files from the `./share` directory in
+the checkout, or from whatever `MYTUBE_SHARE_HOST_PATH` points at, bind-mounted
+read-only at `/share`. The interface container runs as uid `10001`, and a bind
+mount carries the host's own ownership and mode through, so that directory has
+to be readable by others or `chown`ed to `10001`. A directory at mode `0700`
+owned by you shows up as an empty library, not as a permission error.
+
+The rest of this section is for a network share instead. Start the stack with
+the CIFS override, and the stack mounts the share itself, so nothing has to be
+mapped or mounted on the host first:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cifs.yml up -d
+```
 
 Four settings, three of them required:
 
@@ -154,7 +163,7 @@ volume is thrown away:
 ```bash
 docker compose down
 docker volume rm src_share
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.cifs.yml up -d
 ```
 
 ## Interface
