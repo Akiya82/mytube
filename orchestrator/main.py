@@ -47,7 +47,7 @@ from orchestrator.web.routes_share import router as share_router
 from orchestrator.web.routes_titles import router as titles_router
 from orchestrator.web.routes_worker import router as worker_router
 
-STATIC_DIR = Path(__file__).parents[1] / "static"
+STATIC_DIR = Path(__file__).parent / "static"
 logger = logging.getLogger(__name__)
 
 # How often each consumer polls the durable queue when it finds nothing to

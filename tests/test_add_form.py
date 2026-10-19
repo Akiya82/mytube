@@ -778,9 +778,9 @@ def test_preview_button_disabled_state_is_wired_to_the_subtitle_choice_in_the_sc
     the listener that keeps the preview control's disabled state in sync
     with the current subtitle choice.
     """
-    script = (Path(__file__).parent.parent / "static" / "app.js").read_text(
-        encoding="utf-8"
-    )
+    script = (
+        Path(__file__).parent.parent / "orchestrator" / "static" / "app.js"
+    ).read_text(encoding="utf-8")
     assert "_updatePreviewGate" in script
     assert "subtitle_choice" in script
     assert "button.disabled" in script

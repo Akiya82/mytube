@@ -36,8 +36,8 @@ read, so a comment or a docstring is as published as a help string:
   expose them);
 - the body of every Jinja `{# ... #}` comment, which the body pass above
   removes on purpose and this one reads;
-- the `/* ... */` and `//` comments of `static/style.css` and
-  `static/app.js`;
+- the `/* ... */` and `//` comments of `orchestrator/static/style.css` and
+  `orchestrator/static/app.js`;
 - the full-line comments of the sample environment file, both compose
   files, the Dockerfiles, the shell entrypoints and tools, `.gitignore`
   and the nginx templates under `edge/`;
@@ -84,7 +84,7 @@ GITHUB_DIR = REPO_ROOT / ".github"
 # The stylesheet and the script are served to the browser verbatim. Kept as
 # constants so moving the directory is a two-line change that the reach
 # check below catches if it is forgotten.
-STATIC_DIR = REPO_ROOT / "static"
+STATIC_DIR = ORCHESTRATOR_DIR / "static"
 STYLESHEET = STATIC_DIR / "style.css"
 SCRIPT = STATIC_DIR / "app.js"
 

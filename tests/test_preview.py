@@ -597,9 +597,9 @@ def test_app_js_encodes_each_path_segment_before_building_the_preview_request():
     segment (never the whole path, which would also encode the "/"
     separators the route matches on) keeps the request whole.
     """
-    text = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(
-        encoding="utf-8"
-    )
+    text = (
+        Path(__file__).resolve().parent.parent / "orchestrator" / "static" / "app.js"
+    ).read_text(encoding="utf-8")
     assert "encodeURIComponent" in text
     assert "/preview/${encodedPath}" in text
 

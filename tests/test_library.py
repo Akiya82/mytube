@@ -1531,7 +1531,9 @@ async def test_failed_row_has_retry_before_dismiss(client, queries_stub):
 
 
 def test_app_js_has_a_poll_timer_and_stays_short():
-    text = (REPO_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "orchestrator" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
     assert "setTimeout" in text
     # Code lines only. What this guard is watching for is a client library
     # creeping in, and a vendored one passes far more than this ceiling on
@@ -1563,7 +1565,7 @@ def test_no_htmx_or_cdn_references():
     # the module docstrings say "no HTMX" (capitalized, documentation
     # prose) on purpose; the lowercase token is the one that must never
     # appear as a vendored/CDN reference.
-    targets = [REPO_ROOT / "static" / "app.js"]
+    targets = [REPO_ROOT / "orchestrator" / "static" / "app.js"]
     targets += list((REPO_ROOT / "orchestrator" / "web" / "templates").rglob("*.html"))
     for target in targets:
         text = target.read_text(encoding="utf-8")
@@ -3169,7 +3171,9 @@ def test_poller_syncs_episode_disclosure_state_and_restores_focus_by_data_episod
     none) -- the poller's own three added lines, and the two small
     helpers they call, both keyed off data-episode-id.
     """
-    text = (REPO_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "orchestrator" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
     assert "_syncEpisodeState(row, fresh)" in text
     assert "_restoreFocus(fresh, focusKey)" in text
     assert "details[data-episode-id" in text

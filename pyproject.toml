@@ -78,6 +78,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["mytube_media*", "orchestrator*", "worker*"]
 
+[tool.setuptools.package-data]
+orchestrator = ["web/templates/**/*.html", "locales/*.json", "static/*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
