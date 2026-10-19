@@ -1,6 +1,6 @@
 """asyncpg pool lifecycle, shared by main.py's lifespan, the reaper, and the CLI.
 
-No ORM here or in `db.queries` -- five tables total (D-14's deliberately
+No ORM here or in `db.queries` -- five tables total (a deliberately
 small skeleton), raw SQL over asyncpg is less code than wiring an ORM for
 this size of schema.
 """

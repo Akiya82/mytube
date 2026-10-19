@@ -15,10 +15,10 @@ async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | 
     """Resolve a slug to its title, its episode and its default edition,
     via slug_history.
 
-    For a given slug text there may be more than one history row (D-10 reuse:
+    For a given slug text there may be more than one history row (slug reuse:
     a tombstoned title's row plus a new title's row for the same text) --
-    the newest `created_at` wins (verdict B3). This one rule covers both
-    rename (single row, still resolves after rename -- ADDR-05) and reuse
+    the newest `created_at` wins. This one rule covers both
+    rename (single row, still resolves after rename) and reuse
     (two rows, the newer one wins, the older stays as history) without a
     special case for either.
 
@@ -35,7 +35,7 @@ async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | 
     landed.
 
     **The "lowest episode" tiebreak reads `episode_number_history`, not
-    the legacy `episodes.number` column** (plan 10 fix): every episode-
+    the legacy `episodes.number` column**: every episode-
     creation path since migration 0006 (`attach_episode_to_title` and its
     plural/reparent twins) claims its number only in
     `episode_number_history`, leaving `episodes.number` at its schema
@@ -48,7 +48,7 @@ async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | 
 
     Returns the title's own status, the resolved episode's id and status,
     the episode's default edition id, and that edition's status --
-    readiness now lives on the episode and the edition (D-157), so the
+    readiness now lives on the episode and the edition, so the
     title's status alone can no longer decide whether the address is gone,
     preparing, or ready; see orchestrator.resolve for the routes that read
     all four together.
@@ -92,11 +92,11 @@ async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | 
 
 async def resolve_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
     """Look up an edition by id, with its title's status -- used by
-    GET /refresh/{edition_id} (D-04): nginx only knows edition_id, not the
+    GET /refresh/{edition_id}: nginx only knows edition_id, not the
     slug it was reached through, so re-signing has to key off the edition.
 
-    Also returns the episode's own status and the edition's own status
-    (D-157): the refresh address re-signs whatever this edition currently
+    Also returns the episode's own status and the edition's own status:
+    the refresh address re-signs whatever this edition currently
     is, and without these two a retry could sign a redirect to an object a
     per-episode delete has already removed, or to one a conversion has not
     finished writing yet -- see orchestrator.resolve.refresh_edition_route
@@ -140,7 +140,7 @@ async def create_title_with_edition(
 ):
     """One transaction: title, season #1, episode #1, edition, and the
     slug's first history row -- then point episode.default_edition_id at
-    the new edition (D-09).
+    the new edition.
 
     `number` (default 1, byte-for-byte the prior behaviour for every
     existing caller) claims this episode's number in the same transaction,
@@ -153,9 +153,9 @@ async def create_title_with_edition(
     the migration's own backfill makes for every title that predates it.
 
     `status` defaults to 'active' (the CLI's existing behaviour, unchanged).
-    The web add flow (D-49) passes `status="preparing"` instead, so the row
+    The web add flow passes `status="preparing"` instead, so the row
     exists and the slug is reserved before any ffmpeg/upload work starts.
-    `source_path` (D-48), `audio_stream_index` and `audio_channels` land
+    `source_path`, `audio_stream_index` and `audio_channels` land
     straight on the edition row; all three are optional because the CLI
     path still has none of them. `source_path` and `audio_stream_index`
     also ride on the `remux` job row itself once one is enqueued
@@ -163,7 +163,7 @@ async def create_title_with_edition(
     by `edition_for_remux` when the addition consumer claims that job.
 
     `stereo_layout` is stored here only for the as-is (remux) branch,
-    which never gets a second chance to record it (D-139): a file that
+    which never gets a second chance to record it: a file that
     arrives already stereo-compatible takes this path and this is the one
     write that ever happens for it. A convert branch leaves this `None`
     here on purpose -- its own edition's layout is recorded once the
@@ -173,7 +173,7 @@ async def create_title_with_edition(
 
     The slug_history insert is delegated to `reuse_slug`: mechanically it is
     the exact same statement whether `slug` is brand new or is a tombstoned
-    slug being reused for this new title (D-10) -- the composite
+    slug being reused for this new title -- the composite
     (slug, title_id) primary key makes both cases the same plain INSERT,
     since this call always uses a freshly created title_id. "Reuse" is a
     resolve-time property (newest created_at wins), not a code branch here.
@@ -183,7 +183,7 @@ async def create_title_with_edition(
     SLUG_CLAIM_LOCK_KEY. This is the whole fix for a real race:
     slug_history's primary key is (slug, title_id), so two different
     titles claiming the same slug text is legal by construction -- it is
-    what tombstone reuse (D-10) depends on. Nothing in the schema stops
+    what tombstone reuse depends on. Nothing in the schema stops
     two concurrent adds from both reading `taken_slugs()`, both picking the
     same free candidate, and both inserting: no error is raised,
     `resolve_slug` takes the newest row, and the first title silently
@@ -251,8 +251,8 @@ async def create_title_with_edition(
 
 async def reuse_slug(conn: asyncpg.Connection, slug: str, new_title_id) -> None:
     """Insert a fresh current slug_history row for `new_title_id`, without
-    touching any existing rows for this slug text (D-10 tombstone reuse,
-    verdict B3): the composite (slug, title_id) primary key means a
+    touching any existing rows for this slug text (tombstone reuse):
+    the composite (slug, title_id) primary key means a
     different title_id never conflicts with a tombstoned title's row for
     the same slug -- the old row survives as history, and the new row's
     created_at makes resolve_slug pick it.
@@ -273,7 +273,7 @@ async def reuse_slug(conn: asyncpg.Connection, slug: str, new_title_id) -> None:
 
 async def rename_slug(conn: asyncpg.Connection, old_slug: str, new_slug: str):
     """Give a title a new current slug; the old slug's row stays in history
-    forever (ADDR-05) -- only `is_current` moves.
+    forever -- only `is_current` moves.
 
     Renaming back to a slug the title held before (A -> B -> A) hits the
     composite primary key on the second rename: the (A, title_id) row
@@ -308,8 +308,8 @@ async def rename_slug(conn: asyncpg.Connection, old_slug: str, new_slug: str):
 
 
 async def mark_for_delete(conn: asyncpg.Connection, title_id, grace_seconds: int) -> None:
-    """Flip a title to pending_delete with delete_at = now() + grace_seconds
-    (D-13). GET /v/{slug} for this title starts returning 410 immediately
+    """Flip a title to pending_delete with delete_at = now() + grace_seconds.
+    GET /v/{slug} for this title starts returning 410 immediately
     -- the grace window only delays the reaper's physical delete_object.
     """
     await conn.execute(
@@ -326,7 +326,7 @@ async def mark_for_delete(conn: asyncpg.Connection, title_id, grace_seconds: int
 async def due_for_reaping(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     """Titles whose delete_at has passed, with every edition's object_key
     and poster_key -- what the reaper needs to call delete_object on before
-    finish_delete. Poster keys included (D-72): a poster left behind when
+    finish_delete. Poster keys included: a poster left behind when
     its video goes is exactly the orphan class this project has already
     accumulated once. `poster_keys` only ever holds the non-null ones, so
     callers never see a literal `NULL` entry to skip.
@@ -350,7 +350,7 @@ async def due_for_reaping(conn: asyncpg.Connection) -> list[asyncpg.Record]:
 async def finish_delete(conn: asyncpg.Connection, title_id) -> None:
     """Mark a title deleted once the reaper has removed its objects. Its
     slug_history rows are untouched -- the tombstone that makes /v/{slug}
-    keep answering 410 instead of turning into an unexplained 404 (D-10).
+    keep answering 410 instead of turning into an unexplained 404.
     """
     await conn.execute("UPDATE titles SET status = 'deleted' WHERE id = $1", title_id)
 
@@ -363,7 +363,7 @@ async def taken_slugs(conn: asyncpg.Connection) -> set[str]:
 
 
 async def mark_title_active(conn: asyncpg.Connection, title_id) -> None:
-    """Flip a 'preparing' title to 'active' on a successful add (D-49) --
+    """Flip a 'preparing' title to 'active' on a successful add --
     clears failure_reason too, so the column never lies if this same title
     id is ever reused after an earlier failure.
     """
@@ -378,11 +378,11 @@ async def mark_title_failed(conn: asyncpg.Connection, title_id, reason_key: str)
     key (e.g. 'failed.reason.upload') -- never an English sentence. See the
     failure_reason column's comment in
     migrations/versions/0002_add_as_is.py for why: the interface is
-    localized (D-66), and a sentence baked in at write time cannot be
+    localized, and a sentence baked in at write time cannot be
     translated at render time.
 
     The interrupted-add reason the old startup sweep used to write here
-    (D-118) has no caller left: that sweep is gone, and the durable job
+    has no caller left: that sweep is gone, and the durable job
     queue's own restart story needs no equivalent -- a restart just
     leaves the row's heartbeat to go stale, and the reaper's sweep
     requeues it instead. Its catalog key stays in both locale files
@@ -399,7 +399,7 @@ async def mark_title_failed(conn: asyncpg.Connection, title_id, reason_key: str)
 
 
 async def requeue_title(conn: asyncpg.Connection, title_id) -> None:
-    """Put a 'failed' title back to 'preparing' for Retry (D-130) --
+    """Put a 'failed' title back to 'preparing' for Retry --
     clears `failure_reason` and `started_at`, the same fields a fresh add
     starts with, so the row renders queued, indistinguishable from a
     first attempt. The caller enqueues the fresh job in the same
@@ -442,7 +442,7 @@ async def set_edition_technical(
     audio_sample_rate: int | None = None,
     audio_channel_layout: str | None = None,
 ) -> None:
-    """Record the technical detail ffprobe already produced (D-60) -- the
+    """Record the technical detail ffprobe already produced -- the
     library row's size/duration/resolution/audio-track line, all of it
     known before a single byte is remuxed.
 
@@ -485,7 +485,7 @@ async def set_edition_technical(
 
 
 async def set_edition_poster(conn: asyncpg.Connection, edition_id, poster_key: str) -> None:
-    """Point the edition at its extracted poster frame (D-72). Never called
+    """Point the edition at its extracted poster frame. Never called
     for a failed extraction -- the library row degrades to a placeholder
     when poster_key stays null, rather than a broken <img>.
     """
@@ -497,7 +497,7 @@ async def set_edition_poster(conn: asyncpg.Connection, edition_id, poster_key: s
 async def set_edition_subtitle_signs_only(
     conn: asyncpg.Connection, edition_id, signs_only: bool
 ) -> None:
-    """Record D-186's signs-only/full attribute on the edition, resolved
+    """Record the signs-only/full attribute on the edition, resolved
     from the chosen subtitle's own folder tokens at add time -- the
     operator's choice is already known the moment the add route validates
     it, so this never waits for the conversion itself to finish. Called
@@ -519,23 +519,23 @@ async def editions_by_source_paths(
 ) -> list[asyncpg.Record]:
     """Which of these share-relative paths already have an edition -- the
     fact both the share listing's "already added" chip and the add form's
-    warning banner need (D-48). Callers pass every path in the folder
+    warning banner need. Callers pass every path in the folder
     being rendered and get back only the matches: one query per rendered
     folder, never one query per row.
 
     Each row carries the edition's own id, its source_path, the title's
     name and status, and the title's *current* slug (via slug_history) --
     the listing links to /v/{slug}, not to the edition id -- except for
-    `reparent_edition_to_episode` (plan 08), which needs the id itself to
+    `reparent_edition_to_episode`, which needs the id itself to
     move the row.
 
-    `edition_kind` (CONV-01/D-147) is the `kind` of the earliest `jobs` row
+    `edition_kind` is the `kind` of the earliest `jobs` row
     ever created for this title -- `'remux'` for an as-is addition,
     `'transcode'` for a conversion, or `None` for a title this phase never
     queued a job for at all (every title the CLI creates directly, from
     before this phase existed).
 
-    `episode_id` and `number` (D-176) are this exact edition's own episode
+    `episode_id` and `number` are this exact edition's own episode
     and its current number, read the same way `episode_by_number`'s own
     lookup does -- what the add form's edition-offer banner needs to write
     `add.edition_offer.body`'s "episode {n} of {title}" sentence and to
@@ -581,7 +581,7 @@ async def editions_by_source_paths(
 
 async def count_preparing_ahead(conn: asyncpg.Connection, title_id) -> int:
     """How many 'preparing' titles were created before this one -- the
-    queue position the "waiting, N ahead of you" line needs (D-49/D-50).
+    queue position the "waiting, N ahead of you" line needs.
     Computed from the database, not the in-memory queue: the queue is
     empty again the instant the process restarts, and the row is not.
     """
@@ -627,12 +627,12 @@ _LIBRARY_ROW_COLUMNS = """
 # Same LEFT JOIN LATERAL shape resolve_slug already uses, for the same
 # reason and with the same ordering.
 #
-# `job` and `wc` (04-11): the live job for this title, if any, and the
+# `job` and `wc`: the live job for this title, if any, and the
 # most recently seen converter, joined in here rather than read as a
 # second query per row -- a library of thirty in-flight rows would
 # otherwise cost thirty-one round trips on every four-second poll instead
 # of one. `job_queued_ahead` is a correlated subquery scoped to the same
-# kind (D-118: a playlist assembly must never appear ahead of a
+# kind (a playlist assembly must never appear ahead of a
 # conversion in the position an operator is told), computed once per row
 # rather than fetched with `queries.count_queued_ahead` per row for the
 # same one-query reason. `wc` carries the single most recently seen
@@ -643,7 +643,7 @@ _LIBRARY_ROW_COLUMNS = """
 #
 # The job LATERAL orders running before queued, then by the same
 # `(created_at, id)` key `count_queued_ahead` and `claim_job` use, and
-# takes one (D-188 gap closure): a real order (migration 0008) makes the
+# takes one: a real order (migration 0008) makes the
 # newest-first tiebreak this row used before deterministically wrong, not
 # merely harmless -- the newest job of a season saved in one folder move
 # is its *last* episode, so a season with episode one converting would
@@ -651,7 +651,7 @@ _LIBRARY_ROW_COLUMNS = """
 # Running first, falling back to the job that will run next, describes
 # what is actually happening instead.
 #
-# `agg` and `job.job_episode_number` (05-09/D-163): a series is legible
+# `agg` and `job.job_episode_number`: a series is legible
 # while collapsed only if the title row itself carries how many episodes
 # exist, how many are ready and how many failed, plus which episode the
 # live job above belongs to -- one more LATERAL rather than a second
@@ -662,14 +662,14 @@ _LIBRARY_ROW_COLUMNS = """
 # in full for the expanded list. A film (one episode) gets `episode_count
 # = 1` here exactly like every other title -- `derive_series_ui`
 # (routes_titles.py) is what decides a one-episode title renders
-# unchanged (D-162), not this query.
+# unchanged, not this query.
 _LIBRARY_ROW_FROM = """
     FROM titles t
     LEFT JOIN slug_history sh ON sh.title_id = t.id AND sh.is_current
     LEFT JOIN LATERAL (
         -- "lowest episode" tiebreak reads episode_number_history, not the
         -- legacy episodes.number column -- see resolve_slug's own
-        -- docstring (plan 10 fix) for why the latter is always 1 for
+        -- docstring for why the latter is always 1 for
         -- every episode of a multi-episode title.
         SELECT ep.default_edition_id
         FROM episodes ep
@@ -729,7 +729,7 @@ _LIBRARY_ROW_FROM = """
 
 async def library_rows(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     """Every non-deleted title with its current slug and its default
-    edition's technical detail, newest first by `changed_at` (D-165) --
+    edition's technical detail, newest first by `changed_at` --
     the Library screen's whole data source in one query.
 
     Ordered by `titles.changed_at`, not `created_at`: a title rises to
@@ -751,8 +751,7 @@ async def library_rows(conn: asyncpg.Connection) -> list[asyncpg.Record]:
 
 async def library_row(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
     """One Library row by title id, same shape as library_rows -- the
-    status-poll fragment's data source (D-49's "the page polls"
-    mechanism).
+    status-poll fragment's data source.
     """
     return await conn.fetchrow(
         f"SELECT {_LIBRARY_ROW_COLUMNS} {_LIBRARY_ROW_FROM} WHERE t.id = $1",
@@ -765,7 +764,7 @@ async def episodes_for_library(
 ) -> list[asyncpg.Record]:
     """Every episode of every title in `title_ids`, in number order, each
     carrying its own default edition's technical detail and its own live
-    job -- the series row's expanded list (D-162/D-163), fetched in
+    job -- the series row's expanded list, fetched in
     exactly one round trip regardless of how many titles or episodes are
     asked for.
 
@@ -789,8 +788,8 @@ async def episodes_for_library(
     on that episode's own row rather than vanishing until it either wins
     or fails. `edition_count` is a plain per-episode count of its own
     editions, read for a later plan's own nested edition disclosure
-    (D-164) -- unused by this plan's own row, carried now so that plan
-    adds no second query either. `source_path` (plan 11) is the default
+    -- unused by this plan's own row, carried now so that plan
+    adds no second query either. `source_path` is the default
     edition's own share-relative path, read here for the "Add edition"
     row action to build its target href from -- the same field `library_
     rows`'s own `_LIBRARY_ROW_COLUMNS` already exposes for a title's own
@@ -831,9 +830,8 @@ async def episodes_for_library(
             ON enh.episode_id = ep.id AND enh.is_current
         LEFT JOIN editions e ON e.id = ep.default_edition_id
         LEFT JOIN LATERAL (
-            -- No per-episode queue-position count here (D-188 gap
-            -- closure): the per-episode chip carries no position at all
-            -- now, so a correlated count computed on every four-second
+            -- No per-episode queue-position count here: the per-episode chip carries
+            -- no position at all now, so a correlated count computed on every four-second
             -- poll for a column nothing renders is worth deleting rather
             -- than fixing. Running first, then the same (created_at, id)
             -- key the title row's own job LATERAL now uses -- an
@@ -868,8 +866,8 @@ async def editions_for_library(conn: asyncpg.Connection, episode_ids: list) -> l
     """Every edition of every episode in `episode_ids`, oldest first, each
     carrying its own technical detail (including the burned-in subtitle
     columns and the signs-only attribute) and whether it is that episode's
-    current default -- the nested edition disclosure's whole data source
-    (plan 11, D-164), fetched in one round trip regardless of how many
+    current default -- the nested edition disclosure's whole data source,
+    fetched in one round trip regardless of how many
     episodes are asked for, the same "one query per screen" reasoning
     `episodes_for_library`'s own docstring states this pair follows.
     Callers pass only the episode ids `episodes_for_library`'s own
@@ -910,7 +908,7 @@ async def editions_for_library(conn: asyncpg.Connection, episode_ids: list) -> l
 
 
 async def cancel_delete(conn: asyncpg.Connection, title_id) -> None:
-    """Undo mark_for_delete -- D-62's "Undo" action. Back to active,
+    """Undo mark_for_delete. Back to active,
     delete_at cleared; GET /v/{slug} starts resolving again immediately.
     """
     await conn.execute(
@@ -936,7 +934,7 @@ async def failed_title_object_keys(conn: asyncpg.Connection, title_id) -> list[s
 
     Split from `delete_failed_title` (below) precisely so the caller can
     delete these objects from storage *before* asking that function to
-    destroy the rows that are the only record of the keys (T-02-08): a
+    destroy the rows that are the only record of the keys: a
     caller that read the keys, deleted the objects, and only then called
     `delete_failed_title` survives a crash between those two steps with
     the row still there to retry against; a caller that deleted the rows
@@ -1021,7 +1019,7 @@ async def delete_failed_title(conn: asyncpg.Connection, title_id) -> None:
 
 
 def _refuse_unless_never_active(title) -> None:
-    """The cancellation hard-delete's own guard (T-04-32), mirroring
+    """The cancellation hard-delete's own guard, mirroring
     `_refuse_unless_failed`'s shape with a wider condition: a title is
     'never active' when its status is 'preparing' or 'failed' -- the only
     two statuses reachable before a title's address has ever resolved.
@@ -1049,7 +1047,7 @@ def _refuse_unless_never_active(title) -> None:
 async def never_active_title_object_keys(conn: asyncpg.Connection, title_id) -> list[str]:
     """The object keys a cancelled title's hard delete is about to orphan
     -- read-only, deletes nothing. Same shape and same reason as
-    `failed_title_object_keys` (T-02-08): read before anything is
+    `failed_title_object_keys`: read before anything is
     deleted, so a caller can remove the objects first and call
     `delete_never_active_title` only once they are gone.
     """
@@ -1077,7 +1075,7 @@ async def never_active_title_object_keys(conn: asyncpg.Connection, title_id) -> 
 
 async def delete_never_active_title(conn: asyncpg.Connection, title_id) -> None:
     """Hard-delete every row for a title whose address never went live --
-    a cancelled add (T-04-32). Identical shape to `delete_failed_title`
+    a cancelled add. Identical shape to `delete_failed_title`
     (same FK-dependency order, same slug_history removal so the address
     is freed rather than tombstoned -- nothing ever played there, so
     there is nothing for a tombstone to keep honest), guarded by
@@ -1158,7 +1156,7 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     The playlist branch names no episode at all and is untouched.
 
     **An edition that has not been written yet is excluded too, on the
-    same two branches** (plan 18): `e.status != 'preparing'`. An edition
+    same two branches**: `e.status != 'preparing'`. An edition
     is created with its `object_key` already allocated and holds no
     object in the bucket until the converter uploads one, so before that
     upload there is nothing for the bucket to be missing -- left
@@ -1373,7 +1371,7 @@ async def episode_for_number(
 async def renumber_episode(
     conn: asyncpg.Connection, *, episode_id, title_id, number: int
 ) -> None:
-    """Give one episode a different number (D-161, T-05-53) -- the number
+    """Give one episode a different number -- the number
     equivalent of `rename_slug`, going through `claim_episode_number`
     exactly as a fresh creation does, inside its own claim-locked
     transaction (the same `SLUG_CLAIM_LOCK_KEY` discipline every other
@@ -1408,8 +1406,8 @@ async def resolve_episode_slug(
     already applies) to the number's own newest-wins row within that same
     title (episode_number_history, the identical rule applied a second
     time to the number half of the address) -- an old slug and an old
-    number both keep answering on one formula each, exactly as ADDR-05
-    already promises for a slug alone. `number` arrives here as an
+    number both keep answering on one formula each, exactly as a slug
+    alone already does. `number` arrives here as an
     already-parsed integer (see orchestrator.resolve): every leading-zero
     form of a number collapses onto the same integer before this statement
     ever runs, so there is only ever one number to look up and this query
@@ -1421,7 +1419,7 @@ async def resolve_episode_slug(
     slug resolves to nothing" the same way an unknown number does. When
     `edition_slug` is omitted, the episode's own default_edition_id is
     used. Returns the title's status, the episode's id and status, and the
-    resolved edition's id, status and stereo layout (plan 10's check page
+    resolved edition's id, status and stereo layout (the check page
     needs the exact edition's own 3D hint, not the title's first episode's
     -- see routes_episodes.py), or None when the slug or the number does
     not resolve to anything at all.
@@ -1483,8 +1481,8 @@ async def resolve_title_edition_slug(
     that decision ambiguous.
 
     Returns the same column shape resolve_episode_slug does, plus that
-    lowest episode's own current `number` (plan 10's check page heading
-    names it even for a film, D-158), or None when the slug or the edition
+    lowest episode's own current `number` (the check page heading
+    names it even for a film), or None when the slug or the edition
     slug does not resolve.
     """
     return await conn.fetchrow(
@@ -1503,7 +1501,7 @@ async def resolve_title_edition_slug(
         JOIN LATERAL (
             -- "lowest episode" tiebreak reads episode_number_history, not
             -- the legacy episodes.number column -- see resolve_slug's own
-            -- docstring (plan 10 fix). Exposes its own current number
+            -- docstring. Exposes its own current number
             -- directly, so the outer query needs no second join for it.
             SELECT ep.id, ep.status, enh0.number AS number
             FROM episodes ep
@@ -1528,7 +1526,7 @@ async def episode_neighbours(
     conn: asyncpg.Connection, title_id, number: int, edition_slug: str | None = None
 ) -> asyncpg.Record | None:
     """The previous and next episode of `title_id` in number order around
-    `number` -- the check page's own navigation (D-158), one query rather
+    `number` -- the check page's own navigation, one query rather
     than a full listing filtered in the route or two separate reads.
 
     Reads `episode_number_history`'s own *current* claims (`is_current`),
@@ -1537,7 +1535,7 @@ async def episode_neighbours(
     `previous_has_edition_slug`/`next_has_edition_slug` answer whether that
     neighbour carries an edition of its own matching `edition_slug` (`None`
     when the current page is not edition-specific, which makes both
-    columns simply false) -- the caller's own fallback rule (D-158: keep
+    columns simply false) -- the caller's own fallback rule (keep
     the same edition slug when the neighbour has it, otherwise fall back
     to that neighbour's default) reads these two booleans rather than
     running a second query per direction.
@@ -1578,7 +1576,7 @@ async def episode_neighbours(
 async def mark_edition_active(conn: asyncpg.Connection, edition_id) -> None:
     """Flip a 'preparing' edition to 'active' -- the edition-scoped twin of
     mark_title_active, since readiness now lives on the edition rather than
-    blanketing every address a title owns (D-157). Clears failure_reason
+    blanketing every address a title owns. Clears failure_reason
     too, for the same reason mark_title_active does: the column must never
     lie if this edition id is ever reused after an earlier failure. Also
     touches the owning title's changed_at, so the library rises to reflect
@@ -1648,14 +1646,14 @@ async def mark_edition_started(conn: asyncpg.Connection, edition_id) -> None:
 
 async def requeue_edition(conn: asyncpg.Connection, edition_id) -> None:
     """Put a 'failed' edition back to 'preparing' for a per-episode Retry
-    (D-164) -- the edition-scoped twin of requeue_title: clears
+    -- the edition-scoped twin of requeue_title: clears
     failure_reason and started_at, the same two fields requeue_title
     clears, so the episode row renders queued, indistinguishable from a
     first attempt.
 
     Also lifts the *title* itself out of 'failed' when it is currently
     there, the one title-level transition sync_title_status can never
-    produce on its own (D-157: its own rule only ever moves a title to
+    produce on its own (its own rule only ever moves a title to
     'active' or 'failed', never back to 'preparing'). sync_title_status
     only ever marks a title 'failed' once every one of its episodes has
     failed -- the retried episode's edition is a moment away from being
@@ -1694,7 +1692,7 @@ async def episode_for_action(conn: asyncpg.Connection, episode_id) -> asyncpg.Re
     """One episode's own status, its title id, and its default edition's
     status/failure reason -- what every per-episode action route
     (routes_episodes.py) reads fresh on every request, never trusted from
-    the page that opened (T-05-43): delete/undo/purge read `episode_status`
+    the page that opened: delete/undo/purge read `episode_status`
     the same way the title-level routes read `title_status`; cancel/retry
     read the default edition's own status; dismiss refuses unless it is
     'failed'.
@@ -1833,7 +1831,7 @@ async def finish_delete_episode(conn: asyncpg.Connection, episode_id) -> None:
         await conn.execute("DELETE FROM episodes WHERE id = $1", episode_id)
 
 
-# --- Growing an existing title, attaching an edition (0006, plan 05) -------
+# --- Growing an existing title, attaching an edition (0006) -------
 
 
 class EpisodeNumberTaken(Exception):
@@ -1845,7 +1843,7 @@ class EpisodeNumberTaken(Exception):
 
 async def title_by_current_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | None:
     """The title `slug` currently resolves to, restricted to a title an
-    operator could actually add another episode to right now (D-159):
+    operator could actually add another episode to right now:
     'active' or 'preparing'. A title mid-delete or already gone is never
     offered as an attach target even though its slug_history row survives
     untouched (neither `mark_for_delete` nor `finish_delete` ever flips
@@ -1868,7 +1866,7 @@ async def episode_by_number(
 ) -> asyncpg.Record | None:
     """The episode that currently holds `number` within `title_id`, or
     `None` when no episode currently claims it -- the add form's own
-    read for D-159's "a different file of an episode that already exists"
+    read for the "a different file of an episode that already exists"
     case, scoped to the *current* claim only (unlike `episode_for_number`,
     which also answers the renumber form's "used to be this episode's
     number" question and stops at the history table). Joined through to
@@ -1893,8 +1891,8 @@ async def episode_by_number(
 async def episode_with_title(conn: asyncpg.Connection, episode_id) -> asyncpg.Record | None:
     """One episode's own title id/name and current number, in one row --
     what the add form's "opened from the library's Add edition action"
-    entry point needs (D-176) to write `add.editing_edition_of`'s
-    sentence, and what the add route (Task 2) uses to confirm a submitted
+    entry point needs to write `add.editing_edition_of`'s
+    sentence, and what the add route uses to confirm a submitted
     `target_episode_id` actually names a real episode before it ever
     reaches `add_edition_to_episode`.
     """
@@ -1919,7 +1917,7 @@ async def default_edition_technical(
     conn: asyncpg.Connection, episode_id
 ) -> asyncpg.Record | None:
     """The technical facts of an episode's current default edition that
-    `orchestrator.media.add.suggest_edition_slug` (D-177) compares a new
+    `orchestrator.media.add.suggest_edition_slug` compares a new
     edition's own choices against: its audio language, its resolution,
     its burned-subtitle language and signs-only attribute, and whether it
     is itself a conversion rather than a remux -- read through the same
@@ -1950,7 +1948,7 @@ async def default_edition_technical(
 
 async def audio_languages_on_episode(conn: asyncpg.Connection, episode_id) -> set[str]:
     """Every non-null audio language already used by an edition of this
-    episode -- `suggest_edition_slug`'s (D-177) own tie-break for a second
+    episode -- `suggest_edition_slug`'s own tie-break for a second
     dub of the same language, which needs the studio folder appended so
     two studios do not collide.
     """
@@ -1963,7 +1961,7 @@ async def audio_languages_on_episode(conn: asyncpg.Connection, episode_id) -> se
 
 
 async def audio_languages_on_episodes(conn: asyncpg.Connection, episode_ids: list) -> set[str]:
-    """The season-wide twin of `audio_languages_on_episode` (plan 11): every
+    """The season-wide twin of `audio_languages_on_episode`: every
     non-null audio language already used by *any* edition of *any* episode
     in `episode_ids` -- the folder-wide edition batch's own tie-break, since
     one suggested slug applies to every episode in the batch identically
@@ -1983,10 +1981,10 @@ async def audio_languages_on_episodes(conn: asyncpg.Connection, episode_ids: lis
 async def default_editions_technical(
     conn: asyncpg.Connection, episode_ids: list
 ) -> list[asyncpg.Record]:
-    """The batched twin of `default_edition_technical` (plan 11): one row
+    """The batched twin of `default_edition_technical`: one row
     per episode in `episode_ids`, each carrying its own current default
     edition's technical facts -- what the folder-wide edition batch's one
-    suggested slug (D-177) compares its own folder-wide choice against, for
+    suggested slug compares its own folder-wide choice against, for
     every target episode in one round trip rather than one query per row.
     """
     if not episode_ids:
@@ -2016,8 +2014,8 @@ async def default_editions_technical(
 async def edition_slug_taken_on_episode(
     conn: asyncpg.Connection, episode_id, slug: str
 ) -> bool:
-    """Whether `slug` already names an edition of this episode -- D-177's
-    own uniqueness scope (per episode, not global), read inside the
+    """Whether `slug` already names an edition of this episode -- its own
+    uniqueness scope (per episode, not global), read inside the
     caller's own locked transaction exactly as a title slug's uniqueness
     already is.
     """
@@ -2043,7 +2041,7 @@ async def attach_episode_to_title(
 ) -> "uuid.UUID":
     """Create a new episode of an existing title's first season, at
     `number`, plus its edition -- the attach-to-an-existing-title twin of
-    `create_title_with_edition` (D-159), sharing the exact claim-lock
+    `create_title_with_edition`, sharing the exact claim-lock
     discipline that function's own docstring documents at length: the
     first statement inside this transaction takes `SLUG_CLAIM_LOCK_KEY`,
     and `taken_episode_numbers` is read only after that lock is held,
@@ -2066,7 +2064,7 @@ async def attach_episode_to_title(
     `status` sets the *edition's* own status (unlike
     `create_title_with_edition`'s identically-named parameter, which sets
     the *title's*, since the title here already exists): 'preparing' when
-    the caller's work has not run yet (the web add form's own D-49
+    the caller's work has not run yet (the web add form's
     shape), 'active' by the schema's own default otherwise (the CLI's
     shape). Every other keyword mirrors `create_title_with_edition`'s own
     for the identical reason.
@@ -2134,11 +2132,11 @@ async def add_edition_to_episode(
     `create_title_with_edition`'s, for the lock's full protection and what
     a caller must do for it to hold.
 
-    Never touches `episodes.default_edition_id` (D-178) -- only
+    Never touches `episodes.default_edition_id` -- only
     `set_default_edition` does that, separately. Raises `LookupError` for
     a missing episode. The caller must have already validated/claimed
     `slug` via `orchestrator.media.add.plan_edition_slug` inside this same
-    locked transaction; no rename path, ever (D-179).
+    locked transaction; no rename path, ever.
     """
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
@@ -2176,7 +2174,7 @@ async def add_edition_to_episode(
 
 
 async def set_default_edition(conn: asyncpg.Connection, edition_id) -> None:
-    """Move an episode's default-edition pointer at `edition_id` (D-178) --
+    """Move an episode's default-edition pointer at `edition_id` --
     called from exactly one place in this codebase outside an operator's
     own explicit "Make default" click: a job's terminal write, when
     `jobs.make_default_when_ready` was true and the edition it produced
@@ -2216,7 +2214,7 @@ async def set_default_edition(conn: asyncpg.Connection, edition_id) -> None:
 async def sync_title_status(
     conn: asyncpg.Connection, title_id, *, reason_key: str | None = None
 ) -> None:
-    """The one place the title-level aggregate rule lives (D-157): called
+    """The one place the title-level aggregate rule lives: called
     by every terminal job write (queue.py's in-process remuxer, and
     routes_worker.py's done/failed routes) after it has already flipped
     the *edition* the job produced. A title with any episode whose own
@@ -2262,7 +2260,7 @@ async def lowest_episode_of_title(conn: asyncpg.Connection, title_id) -> asyncpg
     `resolve_title_edition_slug` already runs, exposed as its own reader
     for a caller that needs to act on that episode rather than resolve
     through it. A film-shaped title (one episode, addressed as
-    GET /v/{slug}/{edition_slug} with no number segment, D-156) has only
+    GET /v/{slug}/{edition_slug} with no number segment) has only
     this one episode; a series has one per number, and this is the one a
     two-segment edition address always means.
     """
@@ -2270,7 +2268,7 @@ async def lowest_episode_of_title(conn: asyncpg.Connection, title_id) -> asyncpg
         """
         -- "lowest episode" tiebreak reads episode_number_history, not the
         -- legacy episodes.number column -- see resolve_slug's own
-        -- docstring (plan 10 fix).
+        -- docstring.
         SELECT ep.id AS episode_id, ep.status AS episode_status,
                ep.default_edition_id AS default_edition_id
         FROM episodes ep
@@ -2289,10 +2287,10 @@ async def edition_by_slug(
     conn: asyncpg.Connection, episode_id, slug: str | None
 ) -> asyncpg.Record | None:
     """The one edition of `episode_id` whose slug is exactly `slug` (`None`
-    matches the episode's own slug-less first edition, D-177) -- its own
+    matches the episode's own slug-less first edition) -- its own
     id, object/poster keys, whether it is the episode's current default,
     and how many editions the episode holds in total. A caller removing an
-    edition (D-178) reads all three facts in one round trip to decide
+    edition reads all three facts in one round trip to decide
     whether to refuse, remove just this edition, or remove the whole
     episode along with its only one.
     """
@@ -2317,10 +2315,10 @@ async def delete_edition(conn: asyncpg.Connection, edition_id) -> None:
     """Hard-delete one edition's row immediately, with no tombstone: unlike
     a title or an episode, nothing keeps a per-edition slug-history-shaped
     record for this edition's own address to answer 410 through afterwards,
-    so a gone edition simply stops resolving (D-178). The CLI's `remove`
+    so a gone edition simply stops resolving. The CLI's `remove`
     calls this directly with no grace window at all -- an operator running
     a command has already stated their intent with no mouse slip to
-    protect against. The library's own per-edition Delete route (plan 11)
+    protect against. The library's own per-edition Delete route
     calls this too, but only once `mark_edition_for_delete`'s own countdown
     has actually elapsed (see that function and `due_for_reaping_editions`
     below) -- the caller must have already removed the objects
@@ -2337,12 +2335,12 @@ async def edition_for_action(conn: asyncpg.Connection, edition_id) -> asyncpg.Re
     """One edition's own status, its object/poster keys, its episode and
     title ids, whether it is its episode's current default, and how many
     editions the episode holds in total -- what every edition-scoped action
-    route (`routes_episodes.py`, plan 11) reads fresh on every request,
-    never trusted from the page that opened it (T-05-43): the edition-
+    route (`routes_episodes.py`) reads fresh on every request,
+    never trusted from the page that opened it: the edition-
     scoped twin of `episode_for_action`. Make-default refuses unless the
     edition is `active` and not already the default; delete/undo/purge
     refuse the same way the episode-level ones already refuse, one level
-    down, plus D-178's own rule that the default itself can never start a
+    down, plus the rule that the default itself can never start a
     delete countdown while a sibling edition exists.
     """
     return await conn.fetchrow(
@@ -2367,8 +2365,8 @@ async def mark_edition_for_delete(
     conn: asyncpg.Connection, edition_id, grace_seconds: int
 ) -> None:
     """Flip one edition to `pending_delete` with `delete_at = now() +
-    grace_seconds` -- the edition-scoped twin of `mark_episode_for_delete`
-    (plan 11, D-178). The edition's own address (whichever segment names
+    grace_seconds` -- the edition-scoped twin of `mark_episode_for_delete`.
+    The edition's own address (whichever segment names
     it) starts answering 410 immediately (`orchestrator.resolve
     ._readiness_status_code`'s own `pending_delete` branch); the grace
     window only delays the reaper's physical `delete_object`/
@@ -2428,7 +2426,7 @@ async def edition_object_keys(conn: asyncpg.Connection, edition_id) -> list[str]
     return keys
 
 
-# --- The folder confirmation screen's save (0006, plan 08) -----------------
+# --- The folder confirmation screen's save (0006) -----------------
 
 
 async def create_title_with_episodes(
@@ -2441,7 +2439,7 @@ async def create_title_with_episodes(
     edition_status: str = "preparing",
 ) -> tuple["uuid.UUID", list["uuid.UUID"]]:
     """The folder-wide twin of `create_title_with_edition`: one title, one
-    season carrying `season_number` (D-149/D-150 -- a season is a title,
+    season carrying `season_number` (a season is a title,
     so the number this row carries is the one the address suffix and the
     display name both derive from), and one episode-plus-edition per entry
     in `episodes`, each claiming its own number in the same transaction
@@ -2456,7 +2454,7 @@ async def create_title_with_episodes(
     schema's own default status for every existing caller, CLI included),
     every edition created here is written `edition_status` (default
     'preparing') explicitly: the whole point of this function is the web
-    add flow's D-49 shape, where the row must exist and be reserved before
+    add flow's shape, where the row must exist and be reserved before
     any ffmpeg/upload work starts.
 
     **Concurrent slug and number claims.** The first statement inside this
@@ -2603,7 +2601,7 @@ async def reparent_edition_to_episode(
     number: int,
 ) -> "uuid.UUID":
     """A file already added as its own standalone title joins a series
-    without its bytes being touched (D-160/D-161, T-05-37): a new episode
+    without its bytes being touched: a new episode
     under `target_title_id` at `number`, the existing `edition_id` moved
     onto it, and `old_slug` written a fresh, permanent alias so the
     address handed out for the standalone file keeps answering with this
@@ -2723,7 +2721,7 @@ async def reparent_edition_to_episode(
 
 async def create_title_shell(conn: asyncpg.Connection, name: str, slug: str) -> "uuid.UUID":
     """A bare title -- one season, no episodes yet, its slug reserved --
-    for the move form's new-title branch (Screen G, D-160): the title
+    for the move form's new-title branch: the title
     itself has nothing of its own to convert or wait on, its only episode
     arrives a moment later, already `active`, through
     `reparent_edition_to_episode`. Unlike `create_title_with_episodes`
@@ -2748,15 +2746,15 @@ async def create_title_shell(conn: asyncpg.Connection, name: str, slug: str) -> 
 async def move_target_titles(
     conn: asyncpg.Connection, exclude_title_id, filter_text: str
 ) -> list[asyncpg.Record]:
-    """Active titles that can receive a standalone episode (Screen G's own
-    candidate list, D-160) -- excludes `exclude_title_id` itself (the
+    """Active titles that can receive a standalone episode (the move form's
+    candidate list) -- excludes `exclude_title_id` itself (the
     standalone title being moved, since moving it into itself is
-    meaningless) and restricts to `active`, matching T-05-54's own "the
-    target must be active" requirement at read time, re-checked again by
+    meaningless) and restricts to `active`, matching the "target
+    must be active" requirement at read time, re-checked again by
     the caller inside the writing transaction before anything moves.
 
     `filter_text` is a plain containment match over the title's name and
-    its own current address, via `strpos()` rather than `LIKE` (T-05-55):
+    its own current address, via `strpos()` rather than `LIKE`:
     `strpos` performs an ordinary substring search, so a value containing
     `%` or `_` is matched as that literal text, never as a wildcard
     pattern -- there is no pattern grammar here to escape into in the
@@ -2799,7 +2797,7 @@ async def create_playlist(conn: asyncpg.Connection, name: str, slug: str):
 async def resolve_playlist_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | None:
     """Resolve a playlist slug to the row the public `/p/{slug}` address
     reads -- a direct lookup on `playlists.slug`, not a newest-wins join
-    over a history table, because playlists keep no history (D-103).
+    over a history table, because playlists keep no history.
 
     `built_object_key` is a **joined alias**, not a column: a left join
     against `playlist_artifacts` restricted to `superseded_at IS NULL AND
@@ -2889,7 +2887,7 @@ _PLAYLIST_ROW_FROM = """
         FROM jobs j
         WHERE j.playlist_id = p.id AND j.status IN ('queued', 'running')
         -- Running first, then (created_at, id) -- consistency with the
-        -- other three live-job readers (D-188 gap closure), not a
+        -- other three live-job readers, not a
         -- repaired defect: no path in this codebase is known to leave
         -- two live jobs on one playlist.
         ORDER BY (j.status = 'running') DESC, j.created_at, j.id
@@ -2937,7 +2935,7 @@ async def playlist_row(conn: asyncpg.Connection, playlist_id) -> dict | None:
 
 async def add_playlist_item(conn: asyncpg.Connection, playlist_id, edition_id) -> None:
     """Append `edition_id` to the end of `playlist_id`'s member list.
-    Repeats are allowed (D-101) -- a position is its own entity, not a
+    Repeats are allowed -- a position is its own entity, not a
     reference, so the same edition can be inserted more than once with no
     special case.
     """
@@ -2993,9 +2991,8 @@ async def playlist_members(conn: asyncpg.Connection, playlist_id) -> list[dict]:
     `edition_id`, `position`, `title_name`, `duration_seconds`, and
     `dropped` (whether the underlying title has been deleted).
 
-    `dropped` is computed here, not inferred by the template (03-UI-SPEC.md
-    States -> member-order row gap mark): the template must not have to
-    know which status values mean gone. A title's edition rows survive its
+    `dropped` is computed here, not inferred by the template: the template must
+    not have to know which status values mean gone. A title's edition rows survive its
     own deletion (see `referenced_objects`'s docstring -- only
     `titles.status` flips), so this is a LEFT JOIN all the way down and
     `dropped` reads the joined title's status directly rather than the
@@ -3026,7 +3023,7 @@ async def playlist_members(conn: asyncpg.Connection, playlist_id) -> list[dict]:
 async def active_editions_for_picker(conn: asyncpg.Connection) -> list[dict]:
     """Every active edition of every active, non-deleted episode, newest
     title first then in episode/creation order within it -- the assembly
-    screen's member picker (plan 11: this query's own one-edition-per-
+    screen's member picker (this query's own one-edition-per-
     title assumption stopped being true the moment this phase's first
     edition existed).
 
@@ -3067,8 +3064,8 @@ async def active_editions_for_picker(conn: asyncpg.Connection) -> list[dict]:
 async def remove_playlist_item(conn: asyncpg.Connection, playlist_id, item_id) -> None:
     """Delete `item_id` from `playlist_id` and renumber the remainder to a
     contiguous run, in one statement, scoped to the playlist so an item
-    identifier from a different playlist cannot delete anything here
-    (T-03-18). Raises `LookupError` when no row matched that scoping --
+    identifier from a different playlist cannot delete anything here.
+    Raises `LookupError` when no row matched that scoping --
     the caller answers 404 rather than a silent no-op redirect.
     """
     async with conn.transaction():
@@ -3100,8 +3097,7 @@ async def move_playlist_item(
 ) -> None:
     """Move `item_id` one place `direction` ("up" or "down") within
     `playlist_id`, then rewrite every position in the playlist to a
-    contiguous run, in one transaction, scoped to the playlist (T-03-18,
-    T-03-19).
+    contiguous run, in one transaction, scoped to the playlist.
 
     Rewriting the whole run rather than swapping two numbers is
     deliberate and cheap at this scale: a playlist is tens of rows at
@@ -3143,8 +3139,8 @@ async def move_playlist_item(
 async def mark_playlist_for_delete(conn: asyncpg.Connection, playlist_id, grace_seconds: int) -> None:
     """Flip a playlist to `pending_delete` with `delete_at = now() +
     grace_seconds` -- the same shape `mark_for_delete` already gives a
-    title. `GET /p/{slug}` answers 404 for this status immediately (D-103:
-    no tombstone), the grace window only delays the reaper's physical
+    title. `GET /p/{slug}` answers 404 for this status immediately (no
+    tombstone), the grace window only delays the reaper's physical
     delete.
     """
     await conn.execute(
@@ -3522,8 +3518,8 @@ async def credential_by_username(
 async def set_password_and_revoke_sessions(
     conn: asyncpg.Connection, operator_id, password_hash: str
 ) -> None:
-    """Change the stored hash and kill every session in one transaction
-    (D-86). A password is changed when someone believes it was taken, so
+    """Change the stored hash and kill every session in one transaction.
+    A password is changed when someone believes it was taken, so
     leaving live sessions alive would leave exactly the access the change
     was meant to remove.
     """
@@ -3564,8 +3560,8 @@ async def create_session(
     waits for it, then re-evaluates its condition against the updated
     row, finds a different hash and inserts nothing; if this statement
     holds the row first, the reset waits, and its delete then removes the
-    session that was just created. Either way the outcome is the one
-    D-86 asks for.
+    session that was just created. Either way the outcome is the
+    intended one.
 
     The caller treats False exactly like a wrong password -- the same
     generic message, the same delay -- because from the operator's side
@@ -3651,12 +3647,12 @@ async def validate_and_renew_session(
 
 
 async def delete_session(conn: asyncpg.Connection, token_hash: str) -> None:
-    """Sign out one device (D-82) -- other sessions are untouched."""
+    """Sign out one device -- other sessions are untouched."""
     await conn.execute("DELETE FROM sessions WHERE token_hash = $1", token_hash)
 
 
 async def delete_sessions_for_operator(conn: asyncpg.Connection, operator_id) -> None:
-    """Every session for this operator, gone -- the bulk half of D-86's
+    """Every session for this operator, gone -- the bulk half of the
     password-reset revocation, called directly by tests and by the CLI
     reset path.
     """
@@ -3674,7 +3670,7 @@ async def sweep_expired_sessions(conn: asyncpg.Connection) -> int:
     return int(result.split()[-1])
 
 
-# --- The durable job queue (D-118) --------------------------------------
+# --- The durable job queue --------------------------------------
 #
 # One table, `jobs` (migrations/versions/0005_jobs.py), holds all three
 # kinds of background work -- `remux`, `playlist`, `transcode`. Every
@@ -3722,9 +3718,9 @@ async def enqueue_job(
 ):
     """Insert a queued job of `kind` and return its id.
 
-    Carries only what the operator chose (D-119) -- source path, audio
-    track, subtitle choice, 3D layout, an external audio choice (D-180)
-    beside the embedded one, and now the default-edition request (D-178):
+    Carries only what the operator chose -- source path, audio
+    track, subtitle choice, 3D layout, an external audio choice
+    beside the embedded one, and now the default-edition request:
     `make_default_when_ready` is stored on the job rather than applied at
     save time, read back and acted on only once the job's own terminal
     write finds the edition it produced actually ready
@@ -3771,10 +3767,9 @@ async def claim_job(
     convenient -- a claim spread across an opened transaction, a return to
     the caller, and a commit made later holds the row lock for as long as
     the caller works, which for a conversion is minutes across a network,
-    and serialises the whole queue the moment a second claimer exists
-    (WORK-03). Skipping locked rows rather than waiting on them means a
-    slow or wedged claimer never blocks any other claimer behind it
-    (T-04-15).
+    and serialises the whole queue the moment a second claimer exists.
+    Skipping locked rows rather than waiting on them means a
+    slow or wedged claimer never blocks any other claimer behind it.
 
     Ordered by `(created_at, id)`, the same two-column key
     `count_queued_ahead` and every live-job reader compare on (migration
@@ -3815,7 +3810,7 @@ async def heartbeat_job(
 ) -> asyncpg.Record | None:
     """Write progress only when the job id, the worker name and the
     attempt number all match the row as it currently stands; returns the
-    row it wrote, or None when they do not (T-04-06).
+    row it wrote, or None when they do not.
 
     The mismatch case is the whole point, not an edge case: a converter
     that lost contact with the orchestrator and kept encoding must not be
@@ -3861,12 +3856,12 @@ async def finish_job(
     """Record the terminal outcome (`done`, `failed` or `cancelled`) and
     report whether it wrote. Like `heartbeat_job`, writes only when the
     job id, the worker name and the attempt all match the row as it
-    currently stands (T-04-06) -- both halves are the contract: a
+    currently stands -- both halves are the contract: a
     superseded attempt must neither silently write the row nor silently
     report success.
 
     `reason_key` is required for `outcome='failed'` and is validated
-    against a dotted catalog-key shape before it is stored (T-04-07), so
+    against a dotted catalog-key shape before it is stored, so
     tool output cannot reach the column the library row renders even if a
     caller passes it.
 
@@ -3908,7 +3903,7 @@ async def finish_job(
 async def request_job_cancel(
     conn: asyncpg.Connection, job_id
 ) -> asyncpg.Record | None:
-    """Ask for a job to stop (D-129).
+    """Ask for a job to stop.
 
     A running job has no way to be told anything except through its next
     heartbeat, so this only sets the flag and leaves the row `running` --
@@ -3946,7 +3941,7 @@ async def due_for_requeue(
 ) -> list[asyncpg.Record]:
     """Every `running` job whose heartbeat has gone stale -- what the
     reaper's sweep reads before deciding, per row, whether to requeue it,
-    fail it outright (attempts exhausted) or finish it cancelled (D-129).
+    fail it outright (attempts exhausted) or finish it cancelled.
     """
     return await conn.fetch(
         """
@@ -3998,7 +3993,7 @@ async def record_worker_seen(
     conn: asyncpg.Connection, *, worker_name: str, status: str
 ) -> None:
     """Upsert a converter's check-in: when it was last seen, and whether
-    it is idle, working, or waiting for room on the shared card (D-113).
+    it is idle, working, or waiting for room on the shared card.
 
     `clock_timestamp()`, not `now()` -- the same reason `slug_history`
     uses it (migrations/versions/0001_initial_catalog.py): `now()` is
@@ -4020,8 +4015,8 @@ async def record_worker_seen(
 
 async def last_worker_seen(conn: asyncpg.Connection) -> asyncpg.Record | None:
     """The most recently seen converter's name, time and status, or None
-    when none has ever checked in -- the interface's three sentences
-    (D-113/D-131): a named worker some minutes ago, none ever, or the
+    when none has ever checked in -- the interface's three sentences:
+    a named worker some minutes ago, none ever, or the
     named worker waiting for the card.
     """
     return await conn.fetchrow(
@@ -4032,7 +4027,7 @@ async def last_worker_seen(conn: asyncpg.Connection) -> asyncpg.Record | None:
 
 async def count_queued_ahead(conn: asyncpg.Connection, job_id) -> int:
     """How many queued jobs of the *same kind* were created before this
-    one (D-118) -- counted within a kind so a playlist assembly never
+    one -- counted within a kind so a playlist assembly never
     appears to be ahead of a conversion in the position an operator is
     told.
 
@@ -4067,7 +4062,7 @@ async def job_for_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | 
 
     Ordered the same way the job LATERAL of `_LIBRARY_ROW_FROM` picks the
     live job for that same row's own chip: running first, then
-    `(created_at, id)` (D-188 gap closure). This one has to agree with
+    `(created_at, id)`. This one has to agree with
     that row query for a reason stronger than consistency -- before this
     ordering, both picked the newest job, which under a real order
     (migration 0008) is a season's *last* episode. A season with episode
@@ -4088,7 +4083,7 @@ async def job_for_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | 
 
 async def job_for_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
     """The live (queued or running) job for one edition, if any -- the
-    per-episode Cancel action's own read (D-164), scoped one level below
+    per-episode Cancel action's own read, scoped one level below
     `job_for_title`: an episode's default edition is what its row's own
     in-flight chip and Cancel control are keyed on.
     """
@@ -4142,7 +4137,7 @@ async def job_for_episode(conn: asyncpg.Connection, episode_id) -> asyncpg.Recor
 
 async def last_job_for_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
     """The most recent job of any status for one edition -- what a
-    per-episode Retry reads to requeue the same choices (D-164), the
+    per-episode Retry reads to requeue the same choices, the
     edition-scoped twin of `last_job_for_title`.
     """
     return await conn.fetchrow(
@@ -4175,7 +4170,7 @@ async def job_for_playlist(
 
 async def last_job_for_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
     """The most recent job of any status for a title -- what Retry reads
-    to requeue the same choices (D-130), unlike `job_for_title`, which
+    to requeue the same choices, unlike `job_for_title`, which
     only ever answers a *live* job and would find nothing for the failed
     row Retry acts on.
     """
@@ -4225,7 +4220,7 @@ async def edition_object_key(conn: asyncpg.Connection, edition_id) -> str | None
     destination a transcode result lands at is always the edition's own,
     fixed when the edition row was created -- so this is the worker-facing
     routes' own lookup for it, from the job row rather than from anything
-    the request itself claims (T-04-06).
+    the request itself claims.
     """
     return await conn.fetchval(
         "SELECT object_key FROM editions WHERE id = $1", edition_id
@@ -4257,7 +4252,7 @@ async def set_edition_conversion_detail(
     subtitle_burned_title: str | None,
     stereo_layout: str | None,
 ) -> None:
-    """Record what a conversion made and what it made it from (D-146) --
+    """Record what a conversion made and what it made it from --
     a *separate* function from `set_edition_technical` above rather than
     five more keyword arguments on it: that one records what the stored
     object is, and every one of its callers knows all of it; this one
@@ -4285,7 +4280,7 @@ async def median_realtime_factor(
     conn: asyncpg.Connection, kind: str = "transcode", last_n: int = 20
 ) -> float | None:
     """The median recorded speed of the last `last_n` finished jobs of
-    `kind`, or None when none has finished yet -- what makes D-148's
+    `kind`, or None when none has finished yet -- what makes the
     pre-start time estimate measured rather than assumed. Median, not
     mean: one pathological source triples a mean and leaves the estimate
     lying for weeks.
