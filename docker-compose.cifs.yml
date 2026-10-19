@@ -1,0 +1,42 @@
+# Mounts the source share from a CIFS server instead of the local ./share
+# directory. It replaces the api service's /share mount and must never add a
+# second one, and nothing else in docker-compose.yml changes.
+#
+# Bring the stack up with:
+#   docker compose -f docker-compose.yml -f docker-compose.cifs.yml up -d
+#
+# Both -f flags are required: without the base file there is no api service
+# to attach the mount to, and without this one the local directory is used.
+services:
+  api:
+    volumes:
+      - share:/share:ro
+
+volumes:
+  # Read-only twice over: `ro` in the option string and `:ro` on the mount
+  # above. Nothing in this project writes back to the source.
+  #
+  # The mount happens when api starts, not when compose reads this file, so a
+  # wrong address or credential surfaces as api failing to start with the
+  # mount error in `docker compose logs api` -- not as a config error.
+  share:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: ${MYTUBE_SHARE_URL}
+      # `vers=3.0` is not a preference, it is required. Docker's local driver
+      # hands this string to the mount syscall directly instead of running
+      # mount.cifs, and that path does no protocol negotiation: without an
+      # explicit version the kernel refuses the mount with a bare "invalid
+      # argument" that says nothing about what is missing. Measured against a
+      # real server -- every version accepted the option and got as far as
+      # authentication; only its absence failed this way.
+      #
+      # `domain=` appears only when one is configured: an empty value is worse
+      # than no option at all, so the `:+` form -- which expands to nothing
+      # when the variable is empty -- is load-bearing rather than tidiness.
+      #
+      # No uid/gid: the mount's ownership is whatever the server reports. The
+      # interface runs as uid 10001, so if the library comes up empty, add
+      # uid=10001,gid=10001 (or file_mode/dir_mode) to this option string.
+      o: username=${MYTUBE_SHARE_USERNAME},password=${MYTUBE_SHARE_PASSWORD},${MYTUBE_SHARE_DOMAIN:+domain=${MYTUBE_SHARE_DOMAIN},}vers=3.0,ro

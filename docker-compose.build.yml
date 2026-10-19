@@ -1,0 +1,14 @@
+# Builds the interface image from this checkout instead of pulling the
+# published one. It only adds a build context to api and changes nothing else
+# in docker-compose.yml.
+#
+# Build and bring the stack up with:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# Both -f flags are required on every command: without this file compose pulls
+# the published image and ignores your local changes.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
