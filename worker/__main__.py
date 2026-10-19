@@ -330,7 +330,7 @@ async def _process_job(
             subtitle_share_path = safe_join(root, subtitle_rel_path)
 
         # Resolved the same way every other operator-supplied path in this
-        # program is (T-05-09) -- contained against this converter's own
+        # program is -- contained against this converter's own
         # read-only share mount, exactly as the subtitle path above already
         # is.
         external_audio_rel_path = job.get("external_audio_path")
@@ -389,7 +389,7 @@ async def _process_job(
 
         # The layout is the operator's own choice, carried in the job --
         # not re-detected here. It was already confirmed against the file
-        # once, at add time (D-139's selector); re-guessing it now would
+        # once, at add time (the selector); re-guessing it now would
         # let a second, independent detection silently disagree with what
         # the operator actually picked.
         stereo_layout = job.get("stereo_layout") or "2d"
@@ -427,7 +427,7 @@ async def _process_job(
         # Resolved to a scratch-local file for both text kinds -- the
         # burn-in filter reads a file this converter just wrote, never the
         # source container by a stream selector and never the operator's
-        # own path on the share (CR-04/CR-05).
+        # own path on the share.
         subtitle_burn_path = None
         font_dir = None
         charenc = None
@@ -564,7 +564,7 @@ async def _process_job(
 
         output_verdict = compat.analyze(output_probe_json)
         # The stored object's own audio track -- exactly one always
-        # survives into the output (D-42), so the first (and only) entry
+        # survives into the output, so the first (and only) entry
         # `audio_tracks` finds is it; `Verdict` itself carries the
         # reconciled codec/rate/layout but not the language/title tags,
         # which live on the track, not the format block.
@@ -577,7 +577,7 @@ async def _process_job(
         # A poster extracted from the output, not the source: the output
         # is what the edition actually is, on local disk, carrying the
         # burned subtitles and the final geometry. Same timestamp helper
-        # and command builder the as-is path already uses (D-72); a
+        # and command builder the as-is path already uses; a
         # poster that will not extract must never fail a conversion,
         # exactly as it never fails an add.
         scratch_poster = job_scratch / "poster.jpg"
@@ -604,7 +604,7 @@ async def _process_job(
 
         # Writing the dictionary is the whole of setting this stage --
         # the loop picks it up on its next tick and keeps reporting
-        # throughout the transfer, which is the whole point (CR-01):
+        # throughout the transfer, which is the whole point:
         # a multi-gigabyte upload is now covered the same as the encode.
         progress_state["stage"] = "uploading"
         try:
@@ -669,7 +669,7 @@ async def _process_job(
                 )
             except ReportRejected:
                 # The job moved on to a different attempt. This converter
-                # has no delete beyond its own keys (D-115): only abort a
+                # has no delete beyond its own keys: only abort a
                 # dangling multipart upload of its own -- the service
                 # removes the completed object itself, on this same
                 # refusal, since only it holds the credential wide enough

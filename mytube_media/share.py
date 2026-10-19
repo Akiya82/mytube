@@ -1,8 +1,8 @@
 """Path containment and a single cheap directory listing for the mounted
-network share (D-54 through D-56).
+network share.
 
 Every route that turns a browser-chosen path segment into a filesystem call
-goes through `safe_join` first (T-02-01): resolve, then require the result
+goes through `safe_join` first: resolve, then require the result
 sits under the mount root. That is the whole control -- a blacklist that
 hunts for a parent-directory marker is the known-wrong answer here, since it
 misses percent-encodings, symlinks, and platform quirks that resolve-then-
@@ -13,9 +13,8 @@ seeing such a link never costs the operator the whole folder.
 
 `list_dir` does not filter by file extension. An allowlist would quietly
 hide a container the operator knows is a video, which is worse than showing
-a subtitle file that later says, honestly, that it could not be read (D-56
-already decided that this screen opens instantly with names and sizes only,
-not a verdict on every file). Names are returned exactly as the filesystem
+a subtitle file that later says, honestly, that it could not be read (this screen opens
+instantly with names and sizes only, not a verdict on every file). Names are returned exactly as the filesystem
 has them -- this module sanitizes nothing; the template that renders them
 is what escapes.
 """

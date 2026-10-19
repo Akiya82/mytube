@@ -4,7 +4,7 @@ has one environment file, but never importing `orchestrator.config`
 itself (see `worker/__init__.py`).
 
 **The storage credential carries its own prefix, with no fallback.**
-D-115 gives the converter a narrower storage account -- put and
+The converter gets a narrower storage account -- put and
 abort-multipart within one bucket, nothing else -- and the whole point of
 a narrower account is defeated if the process silently picks up the
 service's wider one. `MYTUBE_S3_KEY`/`MYTUBE_S3_SECRET` are the service's
@@ -13,8 +13,7 @@ own pair; this class never reads them. `MYTUBE_WORKER_S3_KEY`/
 default -- an absent worker key is an error naming the worker variable,
 never a silent promotion to the service's key. Sharing a variable name
 with the service would make that substitution not merely possible but
-the *default outcome* on a single machine with one environment file
-(Pitfall 6, `04-RESEARCH.md`).
+the *default outcome* on a single machine with one environment file.
 
 The storage endpoint, bucket and region *do* share names with the
 service, because they are the same endpoint and the same bucket -- only
@@ -28,13 +27,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from mytube_media.transcode import MAX_OUTPUT_WIDTH as _SHARED_MAX_OUTPUT_WIDTH
 
 # The free-memory floor below which the converter reports "waiting for
-# GPU" on every poll instead of claiming (D-113). No measured VRAM
+# GPU" on every poll instead of claiming. No measured VRAM
 # figure exists for this project yet -- experiment 10's end-to-end
 # 1080p NVENC+NVDEC run on the real card recorded encoder/decoder
 # *utilisation* (74%/48% peak) but not a VRAM figure -- so this default
 # is a margin, not a measurement: generous enough to leave headroom for
 # the embedder, reranker and speech-to-text containers already sharing
-# the card's 8 GiB (D-113's own "the card is shared" framing), and
+# the card's 8 GiB, and
 # comfortably above what one 1080p NVENC session plus its NVDEC decode
 # buffers need. Override with MYTUBE_WORKER_VRAM_MIN_MIB if a real job
 # is ever refused with room actually free, or claims and then fails for

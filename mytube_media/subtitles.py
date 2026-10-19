@@ -1,7 +1,7 @@
-"""Subtitle track enumeration: embedded (D-122) and external (D-121, D-122),
+"""Subtitle track enumeration: embedded and external,
 plus the charset ladder external files need. Also the font collection, the
 plain-text house style, cue timing for the preview and the missing-font
-notice (D-124, D-126) -- everything `transcode.build_filter_chain`'s
+notice -- everything `transcode.build_filter_chain`'s
 caller needs beyond knowing which tracks exist. Stdlib and the media
 tool's own binaries only, matching the rest of this package's rule.
 
@@ -11,7 +11,7 @@ that pair would produce a preview and a conversion that both render the
 operator's cp1251 subtitles as mojibake.
 
 `walk_sidecars` is the one directory walk behind both subtitle sidecar
-discovery and external audio dub discovery (D-173, D-180): the source's
+discovery and external audio dub discovery: the source's
 own folder, then a set of named subfolders beside it, then a bounded
 recursive walk, every candidate contained against the share root before
 it is ever returned. `external_tracks` and `external_audio_tracks` are
@@ -37,7 +37,7 @@ from pathlib import Path
 
 from mytube_media.share import ShareEscape, safe_join
 
-# D-122's split: text tracks go through libass (`subtitles=` filter),
+# Text tracks go through libass (`subtitles=` filter),
 # bitmap tracks through `overlay` -- a different filter chain and its own
 # preview path. Mirrors `compat.py`'s own codec-name walk over
 # `probe_json["streams"]`.
@@ -45,25 +45,25 @@ TEXT_SUBTITLE_CODECS = frozenset({"ass", "ssa", "subrip", "srt", "webvtt"})
 BITMAP_SUBTITLE_CODECS = frozenset({"hdmv_pgs_subtitle", "dvd_subtitle"})
 
 # What `external_tracks` will treat as a subtitle file at all -- the
-# formats this project's own library actually carries (D-122).
+# formats this project's own library actually carries.
 SUBTITLE_EXTENSIONS = frozenset({"srt", "ass", "ssa", "vtt"})
 
-# What `external_audio_tracks` will treat as a dub file at all (D-180).
+# What `external_audio_tracks` will treat as a dub file at all.
 # `.mka` is the owner's own real extension -- every dub in the library is
-# a Matroska audio container (confirmed in 05-CONTEXT.md's read of the
-# live share, "RUS Sound/<studio>/*.mka"). The rest are the same family of
+# a Matroska audio container (seen on the live share,
+# "RUS Sound/<studio>/*.mka"). The rest are the same family of
 # standalone-audio containers a release group ships a dub in, kept narrow
 # rather than every audio extension ffmpeg can demux.
 AUDIO_SIDECAR_EXTENSIONS = frozenset({"mka", "ac3", "eac3", "aac", "flac", "m4a"})
 
 # The refusal boundary `read_text` enforces before it ever calls
-# `read_bytes()` (T-04-41): a manual subtitle path is operator-chosen and
+# `read_bytes()`: a manual subtitle path is operator-chosen and
 # may name any file on the share, including the video itself by a typo of
 # the same stem with the wrong extension. 8 MiB is generous for any real
 # subtitle file and small next to the multi-gigabyte source it refuses.
 MAX_SUBTITLE_BYTES = 8 * 1024 * 1024
 
-# Bounds on the recursive step of `external_tracks` (T-04-11): a share
+# Bounds on the recursive step of `external_tracks`: a share
 # folder with a very large tree must not turn drawing the add form into an
 # unbounded filesystem crawl. Both caps stop the walk cleanly rather than
 # partially -- whichever is hit first ends the search with whatever was
@@ -71,14 +71,14 @@ MAX_SUBTITLE_BYTES = 8 * 1024 * 1024
 MAX_VISITED_DIRECTORIES = 500
 MAX_EXTERNAL_RESULTS = 50
 
-# Named folders D-122 checks before falling back to a full recursive walk.
+# Named folders checked before falling back to a full recursive walk.
 _NAMED_SUBTITLE_FOLDERS = ("Subs", "Subtitles")
 
-# The folder names D-180's dub search checks before falling back to a full
+# The folder names the dub search checks before falling back to a full
 # recursive walk, the same two-stage shape as `_NAMED_SUBTITLE_FOLDERS`.
 # "RUS Sound" is the owner's own real folder name; "Sound" and "Audio" are
 # the English equivalents the same search must also recognise, since the
-# product ships in two languages (D-66).
+# product ships in two languages.
 AUDIO_SIDECAR_FOLDER_NAMES = ("RUS Sound", "Sound", "Audio")
 
 _NO_MATCH = object()
@@ -99,10 +99,10 @@ class SubtitleExtractError(Exception):
     """
 
 
-# collect_fonts (D-124): what a fansub's own font files look like, and how
+# collect_fonts: what a fansub's own font files look like, and how
 # much of them this module is willing to copy for one job. A directory
 # full of fonts must not be able to fill the scratch space before a
-# conversion even starts (T-04-19) -- both caps stop the collection
+# conversion even starts -- both caps stop the collection
 # cleanly with whatever was already copied.
 FONT_EXTENSIONS = frozenset({"ttf", "otf"})
 MAX_FONT_FILES = 50
@@ -116,7 +116,7 @@ _EXTRACT_TIMEOUT_SECONDS = 30
 MIN_EXTRACT_BYTES_PER_SECOND = 8 * 1024 * 1024
 
 # The `mimetype` tag values a real muxer sets on a font attachment stream
-# (T-04-40): a font whose container tags it at all uses one of these,
+#: a font whose container tags it at all uses one of these,
 # never a codec name alone. Consulted only when the attachment carries no
 # `codec_name` a probe can classify on its own.
 _FONT_MIMETYPES = frozenset({
@@ -128,14 +128,12 @@ _FONT_MIMETYPES = frozenset({
     "font/sfnt",
 })
 
-# D-124: the family both images install (`fonts-dejavu-core`, added to the
-# interface image in an earlier plan and to the converter image in a
-# later one) and one of the few Cyrillic-capable families available as a
+# The family both images install (`fonts-dejavu-core`) and one of the few Cyrillic-capable families available as a
 # plain package -- the fallback when a plain-text subtitle has no
 # collected font of its own to name.
 BUNDLED_FONT_FAMILY = "DejaVu Sans"
 
-# The one house style for plain text (D-124): a readable size for a
+# The one house style for plain text: a readable size for a
 # full-height frame, an outline, no shadow. `{family}` is filled by the
 # caller with a collected font's family name when `collect_fonts` found
 # one, or `BUNDLED_FONT_FAMILY` otherwise -- this constant never decides
@@ -158,8 +156,8 @@ _FONTSELECT_RE = re.compile(r"fontselect:\s*\(([^,]+),")
 # One arrow-separated timestamp line (SubRip/WebVTT) or one ASS/SSA
 # Dialogue line's own start time. Two fixed, simple formats -- a handful
 # of lines of parsing, no new dependency, matching how this project
-# already handles other small fixed formats (D-126). The hours group is
-# optional (IN-04): WebVTT allows a cue written as `mm:ss.mmm`, unlike
+# already handles other small fixed formats. The hours group is
+# optional: WebVTT allows a cue written as `mm:ss.mmm`, unlike
 # SubRip which always carries the hour.
 _SRT_CUE_RE = re.compile(
     r"^((?:\d{1,2}:)?\d{2}:\d{2}[.,]\d{3})\s*-->\s*(?:\d{1,2}:)?\d{2}:\d{2}[.,]\d{3}"
@@ -167,7 +165,7 @@ _SRT_CUE_RE = re.compile(
 _ASS_DIALOGUE_RE = re.compile(r"^Dialogue:\s*[^,]*,(\d{1,2}:\d{2}:\d{2}\.\d{2}),")
 
 # The read window `bitmap_cue_after` asks ffprobe to search from the
-# requested offset (IN-03): without it, ffprobe demuxes every packet of
+# requested offset: without it, ffprobe demuxes every packet of
 # the whole file looking for the first match, which on a 20-30 GB remux
 # outruns the function's own timeout before an answer ever comes back.
 _CUE_SEARCH_WINDOW_SECONDS = 120
@@ -219,7 +217,7 @@ def embedded_subtitle_kind(probe_json: dict, stream_index: int) -> str | None:
     """`"embedded_text"`/`"embedded_bitmap"` for a stream index the probe
     actually reported among its subtitle streams, `None` otherwise -- the
     check that keeps a stream index nobody was ever offered from reaching
-    the filter chain (T-04-01 in spirit: never trust an index from a form
+    the filter chain (never trust an index from a form
     over what the file, re-probed just now, actually has).
 
     Both programs need this answer and neither may import the other, so it
@@ -258,7 +256,7 @@ def _match_sidecar(path: Path, stem: str):
     return language
 
 
-# The last standalone run of one to three digits in a filename (D-173): a
+# The last standalone run of one to three digits in a filename: a
 # sidecar filename such as "Crunchyroll_05.ass" or "AniStar - 05.mka" does
 # not need the full recognition machinery (`anitopy`/`guessit`), only a
 # number to pair against the episode it sits beside. Deliberately narrow,
@@ -283,9 +281,9 @@ def _episode_number_from_filename(name: str) -> int | None:
 
 
 def match_by_episode_number(episode_number: int):
-    """A `walk_sidecars` match predicate (D-173): a candidate belongs to
+    """A `walk_sidecars` match predicate: a candidate belongs to
     this episode when the last standalone 1-3 digit run in its own
-    filename equals `episode_number`. This is the match D-180's external
+    filename equals `episode_number`. This is the match the external
     audio search uses -- a season's dub folder almost never shares a stem
     with the episode file it pairs with, so base-name equality
     (`_match_sidecar`'s own rule) cannot be reused here; the episode
@@ -337,8 +335,8 @@ class SidecarCandidate:
 def walk_sidecars(
     source, share_root, *, extensions: frozenset[str], folder_names: tuple[str, ...], match
 ) -> list[SidecarCandidate]:
-    """The shared, hardened directory walk behind `external_tracks` (D-122)
-    and `external_audio_tracks` (D-180): the source's own folder, then each
+    """The shared, hardened directory walk behind `external_tracks`
+    and `external_audio_tracks`: the source's own folder, then each
     of `folder_names` beside it, then a bounded recursive walk under the
     source's folder. Every bound and every check stays exactly where it
     was before this function existed: the same `MAX_EXTERNAL_RESULTS`
@@ -353,7 +351,7 @@ def walk_sidecars(
     plus a language suffix for a subtitle sidecar, an episode number for a
     dub. A path that escapes containment (a symlink pointing outside the
     share, say) is skipped, never raised, so one stray entry cannot cost
-    the whole list (T-04-01).
+    the whole list.
     """
     source = Path(source)
     root = Path(share_root)
@@ -432,13 +430,13 @@ def walk_sidecars(
 
 
 def external_tracks(source, share_root) -> list[SubtitleTrack]:
-    """Sidecar subtitle files for `source`, searched in D-122's order:
+    """Sidecar subtitle files for `source`, searched in this order:
     the source's own folder, then `Subs`/`Subtitles` beside it, then
     recursively under the source's folder. Every candidate is resolved
     and contained against `share_root` the same way `share.safe_join`
     guarantees for every other operator-supplied path in this codebase --
     a path that escapes is skipped, never raised, so one stray symlink
-    cannot cost the whole list (T-04-01).
+    cannot cost the whole list.
 
     A thin caller of `walk_sidecars`: this function's own signature and
     return type are unchanged from before that extraction, so nothing that
@@ -469,10 +467,9 @@ def external_tracks(source, share_root) -> list[SubtitleTrack]:
 
 def external_audio_tracks(source, share_root, episode_number: int) -> list[SidecarCandidate]:
     """External dub candidates for one episode's `source` file, searched in
-    D-180's order -- identical in shape to `external_tracks`'s own D-122
-    order (the source's own folder, then `AUDIO_SIDECAR_FOLDER_NAMES`
+    the same order as `external_tracks` (the source's own folder, then `AUDIO_SIDECAR_FOLDER_NAMES`
     beside it, then a bounded recursive walk), matched by the episode
-    number in the candidate's own filename (D-173's number match) rather
+    number in the candidate's own filename rather
     than by base-name equality, since a season's dub folder almost never
     shares a stem with the episode file it pairs with.
 
@@ -516,7 +513,7 @@ def read_text(path) -> tuple[str, str]:
     encoding produces mojibake that nothing downstream reports as a
     failure.
 
-    Refuses before reading a single byte (T-04-41): every caller -- the
+    Refuses before reading a single byte: every caller -- the
     convert branch, the preview route, the converter -- routes through
     this one function, so the guard placed here covers a manual path typed
     into a form the same way it covers a sidecar this module found itself.
@@ -573,12 +570,12 @@ def copy_external_track(path, scratch_dir) -> Path:
     return destination
 
 
-# --- fonts (D-124) ----------------------------------------------------
+# --- fonts ----------------------------------------------------
 
 
 def _is_font_attachment(stream: dict) -> bool:
     """Whether an attachment stream from the probe is worth dumping at
-    all -- the mimetype/codec filter T-04-40 also requires, so that this
+    all -- the mimetype/codec filter, so that this
     module dumps fonts and not, say, an attached cover image. A stream
     with neither a usable `codec_name` nor a `mimetype` tag keeps today's
     behaviour and is dumped anyway: a fansub's own TTF is routinely
@@ -607,7 +604,7 @@ def _dump_container_font_attachments(source: Path, destination: Path) -> None:
     caller) are still used, and this module never blocks a conversion
     over a font.
 
-    Never lets ffmpeg choose the output name (T-04-40): the bare selector
+    Never lets ffmpeg choose the output name: the bare selector
     with an empty path reads the attachment's own `filename` tag and opens
     it relative to the process's working directory, which is exactly the
     path-traversal surface a hostile container can use. This function
@@ -707,7 +704,7 @@ def collect_fonts(source, subtitle_path, scratch_dir) -> str | None:
     byte_total = 0
 
     def copy_from(directory: Path) -> None:
-        # T-04-42: the cap is enforced here, before each copy, so the
+        # The cap is enforced here, before each copy, so the
         # scratch disk cannot fill up before the cap is ever consulted --
         # `_enforce_font_caps` only trims what already landed, which is too
         # late for the disk itself.
@@ -760,7 +757,7 @@ def collect_fonts(source, subtitle_path, scratch_dir) -> str | None:
 
 
 # The container extension `-c:s copy` can actually write a probed subtitle
-# codec into (CR-05): ffmpeg's muxers are codec-specific for text
+# codec into: ffmpeg's muxers are codec-specific for text
 # subtitles -- the ASS muxer refuses a SubRip stream outright ("ass muxer
 # supports only codec ass for type subtitle") and produces a zero-byte
 # file rather than an error the caller could act on. Falls back to `ass`
@@ -833,7 +830,7 @@ def extract_embedded_track(source, stream_index: int, scratch_dir, *, extension:
     return destination
 
 
-# --- cue timing (D-126) -------------------------------------------------
+# --- cue timing -------------------------------------------------
 
 
 def _timestamp_to_seconds(value: str) -> float:
@@ -886,7 +883,7 @@ def bitmap_cue_after(source, stream_index: int, offset_seconds: float) -> float 
     has no text to parse.
 
     Bounds the read to a `_CUE_SEARCH_WINDOW_SECONDS` window starting at
-    `offset_seconds` (IN-03) rather than demuxing the whole container --
+    `offset_seconds` rather than demuxing the whole container --
     on a 20-30 GB Blu-ray remux the unbounded read outruns this call's own
     timeout and returns `None` regardless, so the window is what makes an
     answer possible at all, not only faster.
@@ -923,7 +920,7 @@ def bitmap_cue_after(source, stream_index: int, offset_seconds: float) -> float 
     return first_cue_after(times, offset_seconds)
 
 
-# --- the missing-font notice (D-124) -------------------------------------
+# --- the missing-font notice -------------------------------------
 
 
 def missing_font_from_log(log_text: str) -> str | None:

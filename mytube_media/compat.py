@@ -1,5 +1,5 @@
 """ffprobe-driven compatibility verdict, audio track listing, and the
-moov-before-mdat atom check (D-39..D-44, D-59).
+moov-before-mdat atom check.
 
 This module's imports stay standard-library only (`struct`, `json`,
 `subprocess`, `pathlib`, `dataclasses`) -- `tools/check_faststart.py`
@@ -14,21 +14,19 @@ sys.path bootstrap that lets it reach this module at all.
 `tools/check_faststart.py` rather than duplicated: the image that runs the
 orchestrator copies `orchestrator/`, `alembic.ini` and `migrations/`, and
 never `tools/` (see the Dockerfile) -- the check that decides whether a
-file can skip ffmpeg entirely (D-44) was previously unreachable from the
+file can skip ffmpeg entirely was previously unreachable from the
 running container. `check_faststart.py` now imports from here and stays a
 thin CLI wrapper with its own Russian operator-facing messages, since it
 remains a dev/CI diagnostic, not part of the localized web interface.
 
 Every not-eligible verdict below carries a translation catalog key (never
 an English sentence) plus a parameter dict -- the interface is localized
-(D-66) and renders these through `t(key)` with the parameters substituted.
-See `.planning/phases/02-as-is-clips/02-UI-SPEC.md` "Incompatibility
-reasons" for the exact four keys and which of them take parameters.
+and renders these through `t(key)` with the parameters substituted.
 
 `Verdict.plan` is one of two values -- `"passthrough"` for an eligible
 source, `"transcode"` for one that is not -- and `plan_reason_key`/
 `plan_reason_params` are exactly the eligibility branch's own `reason_key`/
-`reason_params`, never a second sentence computed here (CONV-01). The
+`reason_params`, never a second sentence computed here. The
 bitrate ceiling `over_bitrate_ceiling` compares against is advisory only:
 nothing in `_video_eligibility` or in the `plan` computation ever reads
 it, so a compatible source above the ceiling still plans a passthrough
@@ -66,8 +64,8 @@ def read_top_level_atoms(path) -> list[str]:
     """Read the top-level box/atom type sequence of an MP4/QuickTime file
     without decoding any media -- just the box headers, `struct.unpack`
     over raw bytes. Enough to tell whether `moov` precedes `mdat`
-    (D-44/the `-movflags +faststart` pitfall); not a general MP4 parser and
-    never grows into one (see 02-RESEARCH.md's own Anti-Patterns section).
+    (the `-movflags +faststart` pitfall); not a general MP4 parser and
+    never grows into one.
     """
     atoms = []
     with open(path, "rb") as f:
@@ -97,7 +95,7 @@ def read_top_level_atoms(path) -> list[str]:
 
 def moov_before_mdat(path) -> bool:
     """True only when both `moov` and `mdat` are present as top-level
-    atoms and `moov` comes first -- the D-44 "already correct, skip
+    atoms and `moov` comes first -- the "already correct, skip
     ffmpeg" precondition. False (never raises) for anything else,
     including a file missing one of the two atoms entirely.
     """
@@ -114,8 +112,7 @@ PROBE_TIMEOUT_SECONDS = 30
 # A whitelist, not a comparison -- ffprobe's `profile` field is a human
 # string ("Baseline", "Main", "High", "High 10", "High 4:2:2", "High 4:4:4
 # Predictive", ...) and these do not sort as "levels of High". "High 10" is
-# a *different*, incompatible 10-bit profile, not "above High" (see
-# 02-RESEARCH.md Anti-Patterns and Pitfall 2's sibling warning).
+# a *different*, incompatible 10-bit profile, not "above High".
 COMPATIBLE_PROFILES = frozenset({"Baseline", "Constrained Baseline", "Main", "High"})
 
 # ffprobe reports the H.264 level multiplied by ten -- 41 means 4.1, not a
@@ -125,7 +122,7 @@ COMPATIBLE_PROFILES = frozenset({"Baseline", "Constrained Baseline", "Main", "Hi
 # contains "level": 41.
 MAX_H264_LEVEL = 41
 
-# D-136: the per-viewer bandwidth figure the constraint section names, as
+# The per-viewer bandwidth figure the constraint section names, as
 # a default for the keyword `analyze` takes -- passed in rather than read
 # from settings, so this module stays free of the application's config
 # (the whole point of the package it lives in). Advisory only: see the
@@ -137,12 +134,12 @@ DEFAULT_BITRATE_CEILING_BPS = 9_000_000
 class AudioTrack:
     """One audio stream from ffprobe, in file order. `language`/`title`
     are `None` -- never an invented placeholder -- when the source has no
-    such tag (D-43's track list must not lie about what it found).
+    such tag, so the track list never lies about what it found.
 
     `external_path`, `folder_label` and `duration_seconds` are `None` for
     every embedded track `audio_tracks` returns; `external_audio_track`
     below is the one place that fills them, so a caller can hold embedded
-    and external candidates in one flat list (D-181) and tell them apart
+    and external candidates in one flat list and tell them apart
     by whether `external_path` is set, never by a second type.
     """
 
@@ -163,10 +160,10 @@ class Verdict:
     """The whole answer the add form needs from one `ffprobe` call.
 
     `reason_key`/`reason_params` are `None`/`{}` when `eligible` is True.
-    `already_correct` is the D-44 "skip ffmpeg entirely" signal -- see
+    `already_correct` is the "skip ffmpeg entirely" signal -- see
     `analyze`'s docstring for exactly what has to line up for it to be
     True. `audio_needs_reencode` reflects the *selected* track only: it is
-    the audio half of the "video untouched, audio converted" line (D-39),
+    the audio half of the "video untouched, audio converted" line,
     independent of whether the video itself is eligible.
 
     The seven fields below (`fps` through `audio_channel_layout`) exist
@@ -179,13 +176,13 @@ class Verdict:
     `video_level`/`pix_fmt` are the same video-stream fields
     `_video_eligibility` already inspects, not a second probe. The three
     `audio_*` fields describe the *selected* track only (the only one
-    that survives into the output, D-42) -- reconciling the codec to what
+    that survives into the output) -- reconciling the codec to what
     the remux actually stores is `effective_audio_codec`'s job, not this
     dataclass's: this module describes the source, and the caller that
     knows the remux's own outcome does the reconciliation.
 
     The eight fields below (`plan` through `stereo_layout_source`) are
-    CONV-01's "why this path" answer. `plan`/`plan_reason_key`/
+    the "why this path" answer. `plan`/`plan_reason_key`/
     `plan_reason_params` are the eligibility branch's own verdict restated
     as a plan -- one place decides the reason, this dataclass just carries
     it under a second name. `bitrate_bps` is read from the probe's own
@@ -315,7 +312,7 @@ def audio_tracks(probe_json: dict) -> list[AudioTrack]:
     return tracks
 
 
-# D-182: the gap above which the interface shows a duration-mismatch
+# The gap above which the interface shows a duration-mismatch
 # warning next to an external audio track. A starting figure, not a
 # measurement -- ordinary container-overhead differences between a video
 # and a standalone dub sit well under a second, so a few seconds already
@@ -327,7 +324,7 @@ DURATION_MISMATCH_THRESHOLD_SECONDS = 5.0
 
 def external_audio_track(path, *, folder_label: str | None = None) -> AudioTrack:
     """Probe one external audio file and return it in the same
-    `AudioTrack` shape an embedded stream takes (D-181), so a caller can
+    `AudioTrack` shape an embedded stream takes, so a caller can
     hold embedded and external candidates in one flat list.
 
     Runs `probe()` against `path` itself, then reads its first (and, for
@@ -357,9 +354,9 @@ def external_audio_track(path, *, folder_label: str | None = None) -> AudioTrack
 
 def duration_gap_seconds(a: float | None, b: float | None) -> float | None:
     """The absolute difference between two probed durations -- the pure
-    comparison D-182's warning is built from, computed here so nothing
-    downstream re-derives it from ffmpeg's own mux-time behaviour (Pitfall
-    4: `-shortest` is not how this project measures a mismatch; the two
+    comparison the duration-mismatch warning is built from, computed here so
+    nothing downstream re-derives it from ffmpeg's own mux-time behaviour
+    (`-shortest` is not how this project measures a mismatch; the two
     `format.duration` values are already available from each file's own
     probe, before any mux command is built). Commutative, and `None` when
     either duration is unmeasurable -- the same "absence is not a warning"
@@ -443,9 +440,8 @@ def _video_eligibility(video: dict | None) -> tuple[bool, str | None, dict[str, 
     determines which one fires for a stream that fails more than one check
     at once -- codec, then profile, then level, then pixel format.
 
-    `reason.level` and `reason.pixfmt` carry no parameters (see
-    02-UI-SPEC.md's Copywriting Contract: those two strings are fixed
-    sentences with nothing to substitute); `reason.codec`/`reason.profile`
+    `reason.level` and `reason.pixfmt` carry no parameters (those
+    two strings are fixed sentences with nothing to substitute); `reason.codec`/`reason.profile`
     each carry the offending value.
     """
     if video is None:
@@ -481,13 +477,13 @@ def analyze(
 
     `selected_audio_index` defaults to `_default_track_index`'s pick (first
     AAC, else first track) when the caller has not overridden it yet --
-    the same default the track picker radio group pre-selects (D-43).
+    the same default the track picker radio group pre-selects.
 
-    `already_correct` (D-44's "skip ffmpeg entirely" signal) is true only
+    `already_correct` (the "skip ffmpeg entirely" signal) is true only
     when *all* of: the container is MP4, the video is eligible, the
     selected audio track is AAC, it is the *only* audio stream in the
     source, and `moov_first` is true. The "only audio stream" condition is
-    not incidental: D-42 says only the selected track ever survives into
+    not incidental: only the selected track ever survives into
     the output, and a file that is uploaded as-is (no ffmpeg pass) cannot
     drop the tracks it did not select -- so a source with more than one
     audio stream can never be already-correct, no matter how compliant the
@@ -509,7 +505,7 @@ def analyze(
         # eligible with an empty track list -- the form then renders a live
         # Add button above a track picker with no options, and the POST's
         # required audio_track field can only be answered with a raw 422.
-        # Only the selected track survives into the output (D-42), so a
+        # Only the selected track survives into the output, so a
         # source with none has no add path; refusing it here routes it
         # through the same localized banner as every other rejection
         # instead of leaving that third, unreachable state.

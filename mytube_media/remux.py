@@ -1,4 +1,4 @@
-"""ffmpeg argument construction and the runner (D-39..D-44, D-72).
+"""ffmpeg argument construction and the runner.
 
 The boundary this module keeps is "build the argument list" versus "run
 it" -- `build_remux_command`/`build_poster_command` are pure functions
@@ -6,7 +6,7 @@ over strings, unit-testable with no ffmpeg present, and `run_ffmpeg` is
 the one place that actually calls `subprocess.run`. Never interpolate a
 path into a string command: every argument is its own list element, so a
 source path containing a space, a quote or a semicolon still reaches
-ffmpeg as exactly one argument (T-02-06).
+ffmpeg as exactly one argument.
 
 Video is always `-c:v copy` in every branch this module builds -- the
 compatibility gate in `mytube_media.compat` is what guarantees the
@@ -14,7 +14,7 @@ source is already H.264/High/<=4.1/yuv420p before this module ever runs,
 so there is no video-encode branch here to guard. `-movflags +faststart`
 is present in both remux branches without exception: without it the
 `moov` atom sits at the end of the file and a player downloads the whole
-thing before the first frame (`.claude/CLAUDE.md`, trap 1).
+thing before the first frame.
 
 A note that belongs here because the next reader will otherwise "fix" it:
 this project's other ffmpeg trap -- stating `-pix_fmt yuv420p` and
@@ -29,11 +29,11 @@ import subprocess
 
 from mytube_media.compat import stored_audio_codec
 
-# D-41: roughly 96 kbit/s per audio channel, floored so a mono/stereo
+# Roughly 96 kbit/s per audio channel, floored so a mono/stereo
 # re-encode never drops below a sane minimum, capped so a source with an
 # implausible channel count never asks ffmpeg for an absurd bitrate. The
 # floor and the per-channel rate are both above the flat 192k placeholder
-# 02-RESEARCH.md flagged as under-serving a 5.1 track -- see aac_bitrate_for.
+# that under-serves a 5.1 track -- see aac_bitrate_for.
 AAC_KBPS_PER_CHANNEL = 96
 AAC_MIN_KBPS = 128
 AAC_MAX_KBPS = 640
@@ -41,7 +41,7 @@ AAC_MAX_KBPS = 640
 AC3_KBPS = 640
 
 POSTER_WIDTH = 640
-# D-72: ten percent of the duration, capped so a long film's poster is not
+# Ten percent of the duration, capped so a long film's poster is not
 # pulled from deep in the runtime, with a fallback when duration is unknown
 # (an unreadable/zero duration must never crash the extraction attempt).
 POSTER_FRACTION = 0.1
@@ -58,7 +58,7 @@ class RemuxError(Exception):
 
 
 def aac_bitrate_for(channels: int) -> int:
-    """~96 kbit/s per channel, floored at 128k, capped at 640k -- D-41
+    """~96 kbit/s per channel, floored at 128k, capped at 640k. It
     preserves the channel count on purpose (no `-ac` downmix anywhere in
     this module), so the bitrate has to scale with it or a 5.1/7.1 track
     gets starved at the same flat rate a mono commentary track would get.
@@ -101,10 +101,10 @@ def build_remux_command(
     index (`0:{index}`), never a relative audio-track selector
     (`0:a:{n}`) -- the analyzer reports absolute indices, and the
     relative form would pick the wrong track on any file whose streams
-    are not in the obvious video-then-audio order (D-42: only the
+    are not in the obvious video-then-audio order (only the
     selected track is ever muxed in).
 
-    `external_audio` (D-180), when given, is a second input added right
+    `external_audio`, when given, is a second input added right
     after the source: the audio map then points at that input's own first
     audio stream (`1:a:0`) instead of any stream on the source, and the
     track is always encoded with `audio_encode_args(channels)` --
@@ -118,7 +118,7 @@ def build_remux_command(
     video, a 7s dub), that flag truncates the *video* down to the shorter
     dub, exactly backwards for a stream this module never touches; leaving
     it out is what makes the output carry the full video while the dub
-    simply ends early (`tests/test_external_audio.py`, Pitfall 4). With no
+    simply ends early (`tests/test_external_audio.py`). With no
     `external_audio`, the emitted argv is byte-identical to what this
     function produced before this parameter existed.
     """

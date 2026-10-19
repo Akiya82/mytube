@@ -2,11 +2,11 @@
 five conversations `orchestrator/web/routes_worker.py` answers.
 
 Every call carries the credential in the authorization header, the
-protocol version and the converter's own name (D-111, D-117). The claim
+protocol version and the converter's own name. The claim
 returns nothing on an empty-queue answer rather than raising. Every call
 retries a genuine network failure and a server error (5xx) with a
 backoff that grows and is capped, giving up at a bounded window and
-raising then (D-116) -- a server error joined the retryable set in this
+raising then -- a server error joined the retryable set in this
 plan, since a transient database failure at the moment of reporting is
 exactly the condition this retry exists for, and it must not cost a
 finished GPU encode. A refusal of the credential (401), a conflict
@@ -25,16 +25,14 @@ import asyncio
 import httpx
 
 # Raised to 3 alongside the service's own constant in the same change: the
-# claim response widened to carry `external_audio_path` (D-180), which
+# claim response widened to carry `external_audio_path`, which
 # this converter now reads. See `orchestrator/web/routes_worker.py`'s own
 # copy of this constant for why the two images cannot be rolled apart.
 WORKER_PROTOCOL_VERSION = 3
 
-# D-116: "retries the heartbeat and the final report for a bounded time".
-# No existing precedent in this codebase names a duration -- this is this
-# module's own reasonable default (04-RESEARCH.md's own Assumptions Log
-# flags exactly this as a planner decision, not a verified requirement):
-# long enough that a brief network blip or an orchestrator pod restart
+# How long the heartbeat and the final report keep retrying. No existing
+# precedent in this codebase names a duration -- this is a reasonable
+# default, not a measured requirement: long enough that a brief network blip or an orchestrator pod restart
 # does not throw away a finished GPU encode, short enough that it does
 # not delay the reaper's own stale-job recovery beyond JOB_STALE_SECONDS.
 REPORT_RETRY_WINDOW_SECONDS = 300.0
@@ -175,7 +173,7 @@ class WorkerClient:
 
     async def claim(self, *, status: str = "idle") -> dict | None:
         """One claim, at most one job. `status` is `"idle"` (ready) or
-        `"waiting_for_gpu"` (D-113) -- either way the check-in is
+        `"waiting_for_gpu"` -- either way the check-in is
         recorded; an empty queue answers no-content, returned here as
         `None` rather than raised.
         """

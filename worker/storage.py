@@ -1,7 +1,6 @@
 """The converter's own storage client, built from its own scoped
-credential (D-115) -- never `orchestrator.storage.get_s3_client()`, which
-reads the service's own settings object this process does not have
-(Pitfall 6, `04-RESEARCH.md`).
+credential -- never `orchestrator.storage.get_s3_client()`, which
+reads the service's own settings object this process does not have.
 
 Three operations only: build the client, upload a file, and abort a
 dangling multipart upload of its own. The call shapes mirror
@@ -11,7 +10,7 @@ constructed from `WorkerSettings`, so the credential is this program's
 own.
 
 **No delete, anywhere in this module.** The converter's storage account
-carries put and abort-multipart within one bucket, nothing else (D-115).
+carries put and abort-multipart within one bucket, nothing else.
 Removing an object a superseded report left behind is the service's job:
 it knows the key from the job row and holds the bucket's full credential
 (`orchestrator/web/routes_worker.py`'s `_reject_superseded`). A delete

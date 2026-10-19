@@ -1,5 +1,4 @@
-"""The conversion and preview command builders (CONV-04..08, D-133, D-135,
-D-136, D-137, D-140). Stdlib only, matching the rest of this package's
+"""The conversion and preview command builders. Stdlib only, matching the rest of this package's
 rule -- see `mytube_media/__init__.py`.
 
 Every argument list is exactly that: a Python list, never a shell string
@@ -14,12 +13,11 @@ the graph string itself, and the label the video is mapped from -- a
 caller hand-deriving the flag and the map from the subtitle kind a second
 time is exactly where a preview and a conversion eventually disagree.
 
-Two ffmpeg traps first paid for in `.claude/CLAUDE.md` become load-bearing
-here for the first time in this codebase: `-pix_fmt yuv420p -profile:v
-high -level 4.1` stated explicitly (an implicit ten-bit stream out of an
-anime rip shows black), and `-movflags +faststart` on the rewrite (a
-`moov` atom left at the end forces a full download before the first
-frame). Every earlier ffmpeg branch in this project only copied streams or
+Two ffmpeg traps become load-bearing here for the first time in this
+codebase: `-pix_fmt yuv420p -profile:v high -level 4.1` stated
+explicitly (an implicit ten-bit stream out of an anime rip shows black),
+and `-movflags +faststart` on the rewrite (a `moov` atom left at the end forces a full download before the
+first frame). Every earlier ffmpeg branch in this project only copied streams or
 pulled a single frame, so neither trap could bite until now.
 """
 from dataclasses import dataclass
@@ -28,14 +26,14 @@ from pathlib import Path
 from mytube_media.remux import audio_encode_args
 from mytube_media.subtitles import BUNDLED_FONT_FAMILY, SRT_FORCE_STYLE
 
-# --- rate control (D-136, D-137) --------------------------------------
+# --- rate control --------------------------------------
 
 # A 1080p flat output at the reference bitrate -- every other figure below
 # scales off this pair by pixel area.
 REFERENCE_AREA_PX = 1920 * 1080
 REFERENCE_BITRATE_BPS = 6_000_000
 
-# D-136's per-viewer bandwidth figure. This is also the ceiling
+# The per-viewer bandwidth figure. This is also the ceiling
 # `bitrate_for_output` caps a full-frame stereo budget at, not a second
 # unrelated number -- see the cap's own comment for why they have to be
 # the same figure.
@@ -44,7 +42,7 @@ BITRATE_CEILING_BPS = 9_000_000
 MAXRATE_RATIO = 1.33
 BUFSIZE_RATIO = 2.0
 
-# Two seconds of frames is the locked GOP length (D-137); the fallback
+# Two seconds of frames is the locked GOP length; the fallback
 # below covers a source whose frame rate ffprobe could not report, so the
 # GOP is never zero (a zero GOP is not "no keyframes", it is a
 # division-by-zero waiting to happen further down the encode chain).
@@ -58,11 +56,11 @@ GOP_FALLBACK = round(_GOP_FALLBACK_FPS * GOP_SECONDS)
 # one eye's worth of pixels) is left to land on the area formula alone.
 FULL_FRAME_LAYOUTS = frozenset({"sbs_full", "ou_full"})
 
-# --- scaling (CONV-08) ---------------------------------------------------
+# --- scaling ---------------------------------------------------
 
 MAX_OUTPUT_WIDTH = 1920
 
-# --- decode side (D-133) --------------------------------------------------
+# --- decode side --------------------------------------------------
 
 NVDEC_SUPPORTED_CODECS = frozenset({"h264", "hevc", "vp9", "av1"})
 
@@ -181,10 +179,10 @@ def bitrate_for_output(
     the 1080p reference.
 
     A full-frame stereo layout is budgeted by area too -- it genuinely
-    carries two pictures side by side, and D-137 authorises scaling the
+    carries two pictures side by side, and scaling the
     budget by area for exactly that reason -- but the result is then
     capped at `ceiling`, never doubled. 9 Mbit/s is the same per-viewer
-    bandwidth figure D-136's analyzer warns other files about; a stereo
+    bandwidth figure the analyzer warns other files about; a stereo
     conversion that shipped at the bare doubling (12 Mbit/s) would be this
     product exceeding the very ceiling it recommends conversion to stay
     under. Half-frame stereo carries one eye's worth of pixels and is left
@@ -229,7 +227,7 @@ def required_free_bytes_for_transcode(
     return encoded_bytes * 2
 
 
-# --- the filter chain (CONV-07, D-122, D-124, D-140) -----------------------
+# --- the filter chain -----------------------
 
 
 # Two grammars read this value in sequence, and both have to be satisfied
@@ -242,7 +240,7 @@ def required_free_bytes_for_transcode(
 # `'` again, because the graph-level tokenizer also has to recognise a
 # quoted run in order to know that a comma or semicolon inside it is not a
 # structural separator. That double duty is why measuring against a real
-# ffmpeg (CR-04) turned up three backslashes as the only form that opens a
+# ffmpeg turned up three backslashes as the only form that opens a
 # file named with an apostrophe: `:` and `[`/`]`/`,`/`;` are read by one
 # grammar each and need one round of escaping, but `'` is read by both and
 # needs two. A real library filename carrying brackets --
@@ -261,7 +259,7 @@ def _escape_filter_value(value: str) -> str:
     `_FILTER_OPTION_ESCAPED_CHARACTERS` for why `'` runs through both. No
     surrounding quoting is added -- this project's pinned ffmpeg accepts
     backslash-escaped values with no quotes, and the injection test
-    (T-04-02) exercises this path with several of these characters at
+    exercises this path with several of these characters at
     once.
     """
     for character in _FILTER_OPTION_ESCAPED_CHARACTERS:
@@ -293,13 +291,13 @@ def _subtitle_term(subtitle: SubtitleChoice) -> str:
         parts.append(f"fontsdir={_escape_filter_value(subtitle.font_dir)}")
     if subtitle.charenc and subtitle.charenc.lower() not in ("utf-8", "utf8"):
         # Omitted for the Unicode default -- emitted for anything else
-        # (D-122's older Cyrillic library), since a burn-in that assumes
+        # (an older Cyrillic library), since a burn-in that assumes
         # Unicode renders every cp1251 file in the operator's library as
         # mojibake: the conversion still succeeds, uploads and plays, and
         # is wrong.
         parts.append(f"charenc={_escape_filter_value(subtitle.charenc)}")
 
-    # D-124's house style for plain text: SubRip/WebVTT carry no styling
+    # House style for plain text: SubRip/WebVTT carry no styling
     # information of their own, so without this every SRT/VTT burn rendered
     # in the renderer's bare defaults. An ASS/SSA track already carries its
     # own design end-to-end and never gets this style forced onto it.
@@ -319,7 +317,7 @@ def build_filter_chain(plan: TranscodePlan, subtitle: SubtitleChoice) -> FilterG
     `build_preview_command` draw from.
 
     Refuses first: a stereo source (any layout other than `"2d"`) with any
-    real subtitle choice is refused outright (D-140) -- 3D burn-in is a
+    real subtitle choice is refused outright -- 3D burn-in is a
     manual BD3D2MK3D step, and a naive burn here would draw one caption
     across both eyes. The same layout with no subtitle choice proceeds
     normally; SAR/DAR are preserved either way.
@@ -366,7 +364,7 @@ def build_filter_chain(plan: TranscodePlan, subtitle: SubtitleChoice) -> FilterG
     return FilterGraph(flag="-vf", value=",".join(parts), video_map="0:v:0")
 
 
-# --- the conversion command (CONV-05, CONV-06, D-133, D-135, D-137) --------
+# --- the conversion command --------
 
 
 def build_transcode_command(
@@ -385,7 +383,7 @@ def build_transcode_command(
     `overlay` all run on the processor and one filter chain has to serve
     both this command and the preview.
 
-    `external_audio` (D-180) mirrors `remux.build_remux_command`'s own
+    `external_audio` mirrors `remux.build_remux_command`'s own
     parameter of the same name: a second input added right after the
     source, mapped by its own first audio stream (`1:a:0`) instead of
     `plan.audio_stream_index`, always encoded with
@@ -395,7 +393,7 @@ def build_transcode_command(
     source's own `-i`, is a per-input option and never applies to this
     second input, which is exactly right -- an audio-only file needs no
     hardware decode. Never emits the flag that would end the output at
-    whichever stream finishes first (Pitfall 4), the same reasoning
+    whichever stream finishes first, the same reasoning
     `build_remux_command`'s own docstring states in full. With no
     `external_audio`, every emitted argument is unchanged from before this
     parameter existed.
@@ -421,9 +419,8 @@ def build_transcode_command(
         "-bufsize", str(bufsize),
     ]
 
-    # .claude/CLAUDE.md trap 2: without these stated explicitly, the
-    # encoder happily carries a ten-bit stream out of an anime rip and the
-    # player shows black.
+    # Without these stated explicitly, the encoder happily carries a ten-bit
+    # stream out of an anime rip and the player shows black.
     cmd += ["-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.1"]
     cmd += ["-g", str(plan.gop), "-keyint_min", str(plan.gop)]
 
@@ -435,16 +432,15 @@ def build_transcode_command(
     else:
         cmd += ["-c:a", "copy"]
 
-    # .claude/CLAUDE.md trap 1: without this, the moov atom sits at the end
-    # of the file and a player downloads the whole thing before the first
-    # frame.
+    # Without this, the moov atom sits at the end of the file and a player
+    # downloads the whole thing before the first frame.
     cmd += ["-movflags", "+faststart"]
     cmd += ["-progress", "pipe:1", "-nostats"]
     cmd += [str(destination)]
     return cmd
 
 
-# --- the preview command (CONV-04, D-125, D-126) ----------------------------
+# --- the preview command ----------------------------
 
 
 def build_preview_command(

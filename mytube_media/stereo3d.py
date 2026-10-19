@@ -1,4 +1,4 @@
-"""3D layout detection over one probe's output plus a filename (D-138).
+"""3D layout detection over one probe's output plus a filename.
 
 Pure, stdlib-only, no I/O -- the same discipline `compat.py` states for
 itself, since `analyze()` calls this once per verdict from data it already
@@ -11,7 +11,7 @@ from geometry -- nothing in ffprobe's stereo vocabulary distinguishes a
 half (anamorphic) frame from a full one, and geometry alone cannot either
 (a half-SBS frame is 1920x1080, an entirely ordinary size for a flat
 film). Half is reachable only through a filename token or the operator's
-own correction in the form (D-139).
+own correction in the form.
 """
 import re
 from pathlib import Path
@@ -34,7 +34,7 @@ FILENAME_TOKENS = {
     "3D": "sbs_full",
 }
 
-# The two frame sizes D-138 names as unambiguous -- a full-frame stereo
+# The two frame sizes that are unambiguous -- a full-frame stereo
 # picture packed into one image, nothing else this project's library
 # produces is this shape. Every other size, including the perfectly
 # ordinary 1920x1080 a half-SBS source also reports, is left as flat.
@@ -47,8 +47,8 @@ _GEOMETRY_LAYOUTS = {
 # project's own pinned ffmpeg -- see tests/test_stereo3d.py's module
 # docstring). The tag alone cannot distinguish a half frame from a full
 # one, so every value here maps to a full layout; the correction path for
-# a half-frame source whose tag lies is the operator's own selector
-# (D-139), not a guess made here.
+# a half-frame source whose tag lies is the operator's own selector,
+# not a guess made here.
 _TAG_LAYOUTS = {
     "left_right": "sbs_full",
     "right_left": "sbs_full",
@@ -105,7 +105,7 @@ def detect_layout(probe_json: dict, filename: str) -> tuple[str, str]:
     """`(layout, source)`, `layout` always one of `LAYOUTS` and `source`
     always one of `LAYOUT_SOURCES`. `source` names which of the three
     checks actually decided it, so the form can tell the operator why it
-    pre-filled what it pre-filled (D-139).
+    pre-filled what it pre-filled.
     """
     video = _video_stream(probe_json)
 

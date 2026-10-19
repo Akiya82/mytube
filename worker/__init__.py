@@ -1,5 +1,5 @@
 """The converter: a second program, the only part of this project that
-ever touches a graphics card (D-109, D-120).
+ever touches a graphics card.
 
 This package installs no web framework and no database driver, and
 imports nothing from `orchestrator`. Not a style preference: the
@@ -9,7 +9,7 @@ values this program has no reason to hold -- `secure_link_secret`,
 with a complaint about a hostname the converter never needed, or, worse,
 quietly succeeds against a shared environment file and uploads with the
 service's own storage key instead of the narrower one this program is
-supposed to use (D-115, Pitfall 6 in `04-RESEARCH.md`).
+supposed to use.
 
 Everything this package needs from the rest of the codebase comes from
 `mytube_media` -- the probe, the command builders, the progress runner --

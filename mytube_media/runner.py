@@ -1,5 +1,5 @@
 """Running a conversion while reading its progress, and stopping it
-without leaving a process holding the card (WORK-08, D-128, D-129).
+without leaving a process holding the card.
 Stdlib only, matching the rest of this package's rule.
 
 Every earlier ffmpeg invocation in this project (`remux.run_ffmpeg`,
@@ -37,7 +37,7 @@ TERMINATE_GRACE_SECONDS = 5.0
 _CANCEL_POLL_INTERVAL_SECONDS = 0.5
 
 # How many trailing stderr lines `FfmpegFailed` carries -- enough for a
-# log line, never the whole stream (T-04-08: a chatty failure must not
+# log line, never the whole stream (a chatty failure must not
 # turn a bounded log tail into an unbounded one).
 _STDERR_TAIL_LINES = 20
 

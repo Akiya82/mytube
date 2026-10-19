@@ -1,4 +1,4 @@
-"""The card's free memory, read from the vendor's own query tool (D-113).
+"""The card's free memory, read from the vendor's own query tool.
 
 No card library, no bindings -- one small subprocess call and a parse, in
 the same "run it, parse the output, wrap failures in a typed error"
