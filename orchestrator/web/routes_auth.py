@@ -214,7 +214,7 @@ async def login_submit_route(
     if row is None:
         # Nothing to verify against -- run the same-cost dummy verify
         # so "no such user" is not measurably faster than "wrong
-        # password" (T-02.1-21).
+        # password".
         await auth.verify_absent_credential()
         ok = False
     else:
@@ -233,7 +233,7 @@ async def login_submit_route(
         # insert -- a password reset landing during the second or so
         # verification takes. From the operator's side it is not a
         # special case: the password they typed is no longer the
-        # password (T-02.1-80).
+        # password.
         return await _reject_login(request, username, next_value)
 
     logger.info("operator %r signed in", username)
@@ -291,7 +291,7 @@ async def logout_route(request: Request):
 
 def _setup_token_valid(request: Request, token: str) -> bool:
     """Constant-time, crash-proof comparison of a submitted token against
-    `app.state.setup_token` (T-02.1-83).
+    `app.state.setup_token`.
 
     `token` is compared as **bytes**, never as `str`:
     `secrets.compare_digest` on two `str` requires both to be ASCII-only
@@ -321,7 +321,7 @@ async def setup_form_route(request: Request):
     **An operator exists.** The spent-link banner renders for every
     request, whatever token was submitted and whether or not one was. A
     wrong token and an arrival after the account already exists are
-    indistinguishable on purpose (T-02.1-28) -- checked first, before the
+    indistinguishable on purpose -- checked first, before the
     token is even read, so the two cases share not just their output but
     their code path.
 
@@ -469,7 +469,7 @@ async def setup_submit_route(
     except asyncpg.exceptions.UniqueViolationError:
         # Two submissions at once, or a credential created from the
         # command line between this request's check above and this
-        # insert (T-02.1-84). The database now admits exactly one
+        # insert. The database now admits exactly one
         # operator by constraint -- this is what a genuine race looks
         # like, and the constraint is the truth the fast check above only
         # approximates.
