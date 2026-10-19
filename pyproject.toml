@@ -1,6 +1,7 @@
 [project]
 name = "mytube"
-version = "0.1.0"
+# The release is the dated image tag; the build backend only requires this field.
+version = "0.0.0"
 description = "Self-hosted progressive-MP4 delivery for VRChat AVPro and browser playback"
 requires-python = ">=3.13"
 license = { text = "MIT" }
@@ -66,6 +67,8 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "testcontainers[postgres]",
+    "ruff==0.16.7",
+    "pyyaml",
 ]
 
 [build-system]
@@ -81,3 +84,10 @@ testpaths = ["tests"]
 markers = [
     "integration: requires Docker",
 ]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
