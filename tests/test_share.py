@@ -6,15 +6,21 @@ The route tests at the bottom of this file cover GET /, GET /add/{path},
 and GET /lang/{code} -- the containment and escaping proven at the unit
 level above, wired into HTTP responses.
 """
+
 import httpx
 import pytest
+from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
-from mytube_media.share import ShareEntry, ShareEscape, ShareUnavailable, list_dir, safe_join
+from mytube_media.share import (
+    ShareEntry,
+    ShareEscape,
+    ShareUnavailable,
+    list_dir,
+    safe_join,
+)
 from orchestrator.config import get_settings
 from orchestrator.main import app
 from orchestrator.web import routes_share
-
-from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 
 def test_safe_join_empty_rel_returns_resolved_root(share_root):
@@ -109,7 +115,9 @@ def test_list_dir_links_an_inside_symlink_by_its_own_name(share_root):
     except OSError:
         pytest.skip("host has no permission to create symlinks")
 
-    entry = next(e for e in list_dir(share_root, share_root) if e.name == "shortcut.mkv")
+    entry = next(
+        e for e in list_dir(share_root, share_root) if e.name == "shortcut.mkv"
+    )
 
     assert entry.rel_path == "shortcut.mkv"
 

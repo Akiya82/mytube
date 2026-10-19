@@ -10,6 +10,7 @@ because a shared environment file happened to define it, which is not a
 hypothetical, it is what a single-machine setup does by default when the
 names collide.
 """
+
 from unittest.mock import MagicMock
 
 import pytest

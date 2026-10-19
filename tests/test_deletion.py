@@ -6,17 +6,17 @@ authenticated HTTP client -- the same "exercise the real function against
 a real Postgres, skip the transport" trade this file's own reaper tests
 already make. Storage is mocked -- no real S3 delete.
 """
+
 import uuid
 
 import pytest
+from conftest import ADMIN_FQDN, WORKER_TOKEN
 
+from orchestrator import reaper
 from orchestrator.cli import __main__ as cli
 from orchestrator.config import get_settings
 from orchestrator.db import queries
-from orchestrator import reaper
 from orchestrator.web import routes_episodes
-
-from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 pytestmark = pytest.mark.integration
 
@@ -67,7 +67,9 @@ def episode_route_deleted_objects(monkeypatch):
 async def _create_title(conn, name: str, slug: str) -> tuple[uuid.UUID, str]:
     edition_id = uuid.uuid4()
     object_key = f"{edition_id}.mp4"
-    title_id = await queries.create_title_with_edition(conn, name, slug, edition_id, object_key)
+    title_id = await queries.create_title_with_edition(
+        conn, name, slug, edition_id, object_key
+    )
     return title_id, object_key
 
 
@@ -114,8 +116,12 @@ class _FakeRequest:
         self.app = _FakeApp(_SinglePoolLike(conn))
 
 
-async def test_remove_marks_pending_delete_and_slug_resolves_non_active_immediately(raw_conn):
-    title_id, _ = await _create_title(raw_conn, "Deletion Wording", "deletion-wording-slug")
+async def test_remove_marks_pending_delete_and_slug_resolves_non_active_immediately(
+    raw_conn,
+):
+    title_id, _ = await _create_title(
+        raw_conn, "Deletion Wording", "deletion-wording-slug"
+    )
 
     await cli._remove("deletion-wording-slug")
 
@@ -136,7 +142,9 @@ async def test_remove_unknown_slug_fails(capsys):
 async def test_reaper_deletes_object_and_finishes_delete_after_grace_expires(
     raw_conn, deleted_objects
 ):
-    title_id, object_key = await _create_title(raw_conn, "Reaper Target", "reaper-target-slug")
+    title_id, object_key = await _create_title(
+        raw_conn, "Reaper Target", "reaper-target-slug"
+    )
     await queries.mark_for_delete(raw_conn, title_id, grace_seconds=0)
 
     row = await queries.resolve_slug(raw_conn, "reaper-target-slug")
@@ -162,7 +170,11 @@ async def test_reaper_deletes_poster_key_alongside_video_key(raw_conn, deleted_o
     object_key = f"{edition_id}.mp4"
     poster_key = f"{edition_id}.jpg"
     title_id = await queries.create_title_with_edition(
-        raw_conn, "Reaper Poster Target", "reaper-poster-target-slug", edition_id, object_key
+        raw_conn,
+        "Reaper Poster Target",
+        "reaper-poster-target-slug",
+        edition_id,
+        object_key,
     )
     await queries.set_edition_poster(raw_conn, edition_id, poster_key)
     await queries.mark_for_delete(raw_conn, title_id, grace_seconds=0)
@@ -176,7 +188,9 @@ async def test_reaper_deletes_poster_key_alongside_video_key(raw_conn, deleted_o
     assert row_after["status"] == "deleted"
 
 
-async def test_reaper_does_not_touch_titles_before_grace_expires(raw_conn, deleted_objects):
+async def test_reaper_does_not_touch_titles_before_grace_expires(
+    raw_conn, deleted_objects
+):
     title_id, object_key = await _create_title(
         raw_conn, "Reaper Not Yet", "reaper-not-yet-slug"
     )
@@ -189,7 +203,9 @@ async def test_reaper_does_not_touch_titles_before_grace_expires(raw_conn, delet
     assert row["status"] == "pending_delete"
 
 
-async def test_reaper_retries_next_cycle_when_an_object_delete_fails(raw_conn, monkeypatch):
+async def test_reaper_retries_next_cycle_when_an_object_delete_fails(
+    raw_conn, monkeypatch
+):
     """A storage outage during a reap must not end with the title recorded
     as deleted and the bytes still in the bucket: nothing would ever retry,
     and the object becomes an orphan no audit can attribute.
@@ -307,7 +323,11 @@ async def test_episode_cancel_drops_a_never_active_episode_leaving_sibling_untou
         raw_conn, "Episode Cancel", "episode-cancel-slug", second_status="preparing"
     )
     await queries.enqueue_job(
-        raw_conn, kind="remux", title_id=title_id, edition_id=edition2, source_path="a.mkv"
+        raw_conn,
+        kind="remux",
+        title_id=title_id,
+        edition_id=edition2,
+        source_path="a.mkv",
     )
 
     resp = await routes_episodes.cancel_episode_route(str(ep2), _FakeRequest(raw_conn))
@@ -328,7 +348,10 @@ async def test_episode_cancel_reaches_only_that_episodes_own_job(
     to the editions of the episode it is given.
     """
     title_id, ep1, ep2, edition2 = await _create_two_episode_series(
-        raw_conn, "Episode Cancel Scope", "episode-cancel-scope-slug", second_status="preparing"
+        raw_conn,
+        "Episode Cancel Scope",
+        "episode-cancel-scope-slug",
+        second_status="preparing",
     )
     ep1_row = await queries.episode_for_action(raw_conn, ep1)
     sibling_job_id = await queries.enqueue_job(
@@ -339,7 +362,11 @@ async def test_episode_cancel_reaches_only_that_episodes_own_job(
         source_path="sibling.mkv",
     )
     await queries.enqueue_job(
-        raw_conn, kind="remux", title_id=title_id, edition_id=edition2, source_path="a.mkv"
+        raw_conn,
+        kind="remux",
+        title_id=title_id,
+        edition_id=edition2,
+        source_path="a.mkv",
     )
 
     resp = await routes_episodes.cancel_episode_route(str(ep2), _FakeRequest(raw_conn))
@@ -365,14 +392,20 @@ async def test_episode_cancel_reaches_a_second_editions_job_and_keeps_the_ready_
         raw_conn, ep2, "dub", second, f"{second}.mp4", status="preparing"
     )
     await queries.enqueue_job(
-        raw_conn, kind="remux", title_id=title_id, edition_id=second, source_path="dub.mkv"
+        raw_conn,
+        kind="remux",
+        title_id=title_id,
+        edition_id=second,
+        source_path="dub.mkv",
     )
 
     resp = await routes_episodes.cancel_episode_route(str(ep2), _FakeRequest(raw_conn))
 
     assert resp.status_code == 302
     assert episode_route_deleted_objects == [f"{second}.mp4"]
-    assert await raw_conn.fetchrow("SELECT id FROM editions WHERE id = $1", second) is None
+    assert (
+        await raw_conn.fetchrow("SELECT id FROM editions WHERE id = $1", second) is None
+    )
     after = await queries.episode_for_action(raw_conn, ep2)
     assert after["episode_status"] == "active"
     assert after["default_edition_id"] == edition2
@@ -386,7 +419,10 @@ async def test_episode_cancel_with_nothing_left_to_stop_returns_to_the_library(
     404 page: the library re-renders the row as it is now.
     """
     _, _, ep2, _ = await _create_two_episode_series(
-        raw_conn, "Episode Cancel Stale", "episode-cancel-stale-slug", second_status="preparing"
+        raw_conn,
+        "Episode Cancel Stale",
+        "episode-cancel-stale-slug",
+        second_status="preparing",
     )
 
     resp = await routes_episodes.cancel_episode_route(str(ep2), _FakeRequest(raw_conn))
@@ -396,16 +432,23 @@ async def test_episode_cancel_with_nothing_left_to_stop_returns_to_the_library(
     assert await queries.episode_for_action(raw_conn, ep2) is not None
 
 
-async def test_episode_retry_requeues_only_that_episodes_job_leaving_sibling_untouched(raw_conn):
+async def test_episode_retry_requeues_only_that_episodes_job_leaving_sibling_untouched(
+    raw_conn,
+):
     title_id, ep1, ep2, edition2 = await _create_two_episode_series(
         raw_conn, "Episode Retry", "episode-retry-slug", second_status="preparing"
     )
     await queries.mark_edition_failed(raw_conn, edition2, "failed.reason.upload")
     old_job_id = await queries.enqueue_job(
-        raw_conn, kind="remux", title_id=title_id, edition_id=edition2, source_path="a.mkv"
+        raw_conn,
+        kind="remux",
+        title_id=title_id,
+        edition_id=edition2,
+        source_path="a.mkv",
     )
     await raw_conn.execute(
-        "UPDATE jobs SET status = 'failed', finished_at = now() WHERE id = $1", old_job_id
+        "UPDATE jobs SET status = 'failed', finished_at = now() WHERE id = $1",
+        old_job_id,
     )
 
     resp = await routes_episodes.retry_episode_route(str(ep2), _FakeRequest(raw_conn))
@@ -444,7 +487,9 @@ async def test_episode_dismiss_deletes_objects_before_rows(raw_conn, monkeypatch
     routes_titles.dismiss_route already guarantees for a whole title.
     """
     _title_id, _ep1, ep2, edition2 = await _create_two_episode_series(
-        raw_conn, "Episode Objects Before Rows", "episode-objects-before-rows-slug",
+        raw_conn,
+        "Episode Objects Before Rows",
+        "episode-objects-before-rows-slug",
         second_status="preparing",
     )
     await queries.mark_edition_failed(raw_conn, edition2, "failed.reason.upload")

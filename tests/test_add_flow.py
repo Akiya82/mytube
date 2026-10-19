@@ -11,6 +11,7 @@ can reach (the `storage` service publishes no port and sits on an
 configured against now is the owner's real storage). The real object is
 confirmed in the manual live-run row of this plan's own SUMMARY.
 """
+
 import asyncio
 import contextlib
 import subprocess
@@ -19,6 +20,7 @@ import uuid
 
 import httpx
 import pytest
+from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 from httpx import ASGITransport
 
 from mytube_media import remux as remux_module
@@ -29,8 +31,6 @@ from orchestrator.main import app
 from orchestrator.media import queue as queue_module
 from orchestrator.media.add import AudioChoiceRefused, parse_audio_choice
 from orchestrator.media.queue import AddJob
-
-from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 pytestmark = pytest.mark.integration
 
@@ -53,16 +53,48 @@ def clips(tmp_path_factory):
     needs_reencode = root / "needs-reencode.mp4"
 
     common = [
-        "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24",
-        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-        "-t", "1",
-        "-c:v", "libx264", "-profile:v", "high", "-level", "4.1", "-pix_fmt", "yuv420p",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=320x240:rate=24",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000",
+        "-t",
+        "1",
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "high",
+        "-level",
+        "4.1",
+        "-pix_fmt",
+        "yuv420p",
     ]
     _run_ffmpeg(
-        [*common, "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(already_correct)]
+        [
+            *common,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            str(already_correct),
+        ]
     )
     _run_ffmpeg(
-        [*common, "-c:a", "libmp3lame", "-b:a", "128k", "-movflags", "+faststart", str(needs_reencode)]
+        [
+            *common,
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            str(needs_reencode),
+        ]
     )
 
     ac_track = audio_tracks(ffprobe_probe(already_correct))[0]
@@ -177,7 +209,9 @@ async def _wait_until(predicate, timeout=30.0, interval=0.05):
     raise AssertionError("timed out waiting for condition")
 
 
-def _post_data(clip: dict, *, name: str, slug: str, confirm_reuse: str = "false") -> dict:
+def _post_data(
+    clip: dict, *, name: str, slug: str, confirm_reuse: str = "false"
+) -> dict:
     return {
         "name": name,
         "slug": slug,
@@ -246,7 +280,9 @@ async def test_worker_drains_to_active_upload_called_and_v_slug_redirects(
     assert resp.status_code == 302
 
     async def is_active():
-        row = await raw_conn.fetchrow("SELECT status FROM titles WHERE name = $1", "Drain Clip")
+        row = await raw_conn.fetchrow(
+            "SELECT status FROM titles WHERE name = $1", "Drain Clip"
+        )
         return row is not None and row["status"] == "active"
 
     await _wait_until(is_active)
@@ -331,7 +367,9 @@ async def test_poster_key_set_after_successful_add(client, raw_conn, clips):
     assert resp.status_code == 302
 
     async def is_active():
-        row = await raw_conn.fetchrow("SELECT status FROM titles WHERE name = $1", "Poster OK")
+        row = await raw_conn.fetchrow(
+            "SELECT status FROM titles WHERE name = $1", "Poster OK"
+        )
         return row is not None and row["status"] == "active"
 
     await _wait_until(is_active)
@@ -366,7 +404,9 @@ async def test_poster_extraction_failure_still_ends_active_with_null_poster_key(
     assert resp.status_code == 302
 
     async def is_active():
-        row = await raw_conn.fetchrow("SELECT status FROM titles WHERE name = $1", "Poster Fail")
+        row = await raw_conn.fetchrow(
+            "SELECT status FROM titles WHERE name = $1", "Poster Fail"
+        )
         return row is not None and row["status"] == "active"
 
     await _wait_until(is_active)
@@ -617,7 +657,9 @@ async def test_attach_branch_refuses_an_already_taken_number(
     assert episode_count_after == episode_count_before
 
 
-async def test_attach_branch_refuses_a_title_that_does_not_exist(client, raw_conn, clips):
+async def test_attach_branch_refuses_a_title_that_does_not_exist(
+    client, raw_conn, clips
+):
     clip = clips["already_correct"]
     before = await raw_conn.fetchval("SELECT count(*) FROM titles")
 
@@ -674,7 +716,8 @@ async def test_edition_branch_creates_a_new_edition_without_touching_the_default
     assert {e["slug"] for e in editions} == {None, "dub-ru"}
 
     default_after = await raw_conn.fetchval(
-        "SELECT default_edition_id FROM episodes WHERE id = $1", episode_row["episode_id"]
+        "SELECT default_edition_id FROM episodes WHERE id = $1",
+        episode_row["episode_id"],
     )
     assert default_after == original_default
 
@@ -720,7 +763,9 @@ async def test_edition_branch_with_make_default_stores_the_request_on_the_job(
     default_still = await raw_conn.fetchval(
         "SELECT default_edition_id FROM episodes WHERE id = $1", episode_id
     )
-    editions = await raw_conn.fetch("SELECT id, slug FROM editions WHERE episode_id = $1", episode_id)
+    editions = await raw_conn.fetch(
+        "SELECT id, slug FROM editions WHERE episode_id = $1", episode_id
+    )
     new_edition_id = next(e["id"] for e in editions if e["slug"] == "dub-ru")
     assert default_still != new_edition_id
 
@@ -734,7 +779,9 @@ async def test_edition_branch_refuses_an_already_taken_slug(
         data=_post_data(clip, name="Taken Slug Show", slug="taken-slug-show"),
         follow_redirects=False,
     )
-    title_id = await raw_conn.fetchval("SELECT id FROM titles WHERE name = $1", "Taken Slug Show")
+    title_id = await raw_conn.fetchval(
+        "SELECT id FROM titles WHERE name = $1", "Taken Slug Show"
+    )
     episode_id = await raw_conn.fetchval(
         "SELECT ep.id FROM episodes ep JOIN seasons s ON s.id = ep.season_id "
         "WHERE s.title_id = $1",
@@ -771,7 +818,9 @@ async def test_edition_branch_refuses_an_already_taken_slug(
     assert count_after == count_before
 
 
-async def test_edition_branch_refuses_an_all_digit_slug(client, raw_conn, clips, gated_worker):
+async def test_edition_branch_refuses_an_all_digit_slug(
+    client, raw_conn, clips, gated_worker
+):
     clip = clips["already_correct"]
     r1 = await client.post(
         f"/add/{clip['path'].name}",
@@ -804,7 +853,9 @@ async def test_edition_branch_refuses_an_all_digit_slug(client, raw_conn, clips,
     assert count == 1
 
 
-async def test_edition_branch_refuses_an_episode_that_does_not_exist(client, raw_conn, clips):
+async def test_edition_branch_refuses_an_episode_that_does_not_exist(
+    client, raw_conn, clips
+):
     clip = clips["already_correct"]
     before = await raw_conn.fetchval("SELECT count(*) FROM editions")
 
@@ -844,8 +895,12 @@ async def test_single_file_add_still_ends_active_through_the_aggregate_rule(raw_
 
     edition_id = uuid.uuid4()
     title_id = await queries_module.create_title_with_edition(
-        raw_conn, "Single File Aggregate Show", "single-file-aggregate-show", edition_id,
-        f"{edition_id}.mp4", status="preparing",
+        raw_conn,
+        "Single File Aggregate Show",
+        "single-file-aggregate-show",
+        edition_id,
+        f"{edition_id}.mp4",
+        status="preparing",
     )
 
     await queries_module.mark_edition_active(raw_conn, edition_id)
@@ -862,12 +917,20 @@ async def test_aggregate_status_title_is_active_from_its_first_ready_episode(raw
 
     edition_id = uuid.uuid4()
     title_id = await queries_module.create_title_with_edition(
-        raw_conn, "Aggregate Ready Show", "aggregate-ready-show", edition_id,
-        f"{edition_id}.mp4", status="preparing",
+        raw_conn,
+        "Aggregate Ready Show",
+        "aggregate-ready-show",
+        edition_id,
+        f"{edition_id}.mp4",
+        status="preparing",
     )
     sibling_edition_id = uuid.uuid4()
     await queries_module.attach_episode_to_title(
-        raw_conn, title_id, 2, sibling_edition_id, f"{sibling_edition_id}.mp4",
+        raw_conn,
+        title_id,
+        2,
+        sibling_edition_id,
+        f"{sibling_edition_id}.mp4",
         status="preparing",
     )
 
@@ -884,12 +947,20 @@ async def test_sibling_edition_failure_does_not_flip_an_already_active_title(raw
 
     edition_id = uuid.uuid4()
     title_id = await queries_module.create_title_with_edition(
-        raw_conn, "Sibling Failure Show", "sibling-failure-show", edition_id,
-        f"{edition_id}.mp4", status="preparing",
+        raw_conn,
+        "Sibling Failure Show",
+        "sibling-failure-show",
+        edition_id,
+        f"{edition_id}.mp4",
+        status="preparing",
     )
     sibling_edition_id = uuid.uuid4()
     await queries_module.attach_episode_to_title(
-        raw_conn, title_id, 2, sibling_edition_id, f"{sibling_edition_id}.mp4",
+        raw_conn,
+        title_id,
+        2,
+        sibling_edition_id,
+        f"{sibling_edition_id}.mp4",
         status="preparing",
     )
     await queries_module.mark_edition_active(raw_conn, edition_id)
@@ -907,22 +978,36 @@ async def test_sibling_edition_failure_does_not_flip_an_already_active_title(raw
     assert await _edition_status(raw_conn, sibling_edition_id) == "failed"
 
 
-async def test_aggregate_status_title_fails_only_once_every_episode_has_failed(raw_conn):
+async def test_aggregate_status_title_fails_only_once_every_episode_has_failed(
+    raw_conn,
+):
     from orchestrator.db import queries as queries_module
 
     edition_id = uuid.uuid4()
     title_id = await queries_module.create_title_with_edition(
-        raw_conn, "All Failed Show", "all-failed-show", edition_id,
-        f"{edition_id}.mp4", status="preparing",
+        raw_conn,
+        "All Failed Show",
+        "all-failed-show",
+        edition_id,
+        f"{edition_id}.mp4",
+        status="preparing",
     )
     sibling_edition_id = uuid.uuid4()
     await queries_module.attach_episode_to_title(
-        raw_conn, title_id, 2, sibling_edition_id, f"{sibling_edition_id}.mp4",
+        raw_conn,
+        title_id,
+        2,
+        sibling_edition_id,
+        f"{sibling_edition_id}.mp4",
         status="preparing",
     )
 
-    await queries_module.mark_edition_failed(raw_conn, edition_id, "failed.reason.unknown")
-    await queries_module.sync_title_status(raw_conn, title_id, reason_key="failed.reason.unknown")
+    await queries_module.mark_edition_failed(
+        raw_conn, edition_id, "failed.reason.unknown"
+    )
+    await queries_module.sync_title_status(
+        raw_conn, title_id, reason_key="failed.reason.unknown"
+    )
     # One down, one still preparing -- not failed yet.
     assert await _title_status(raw_conn, title_id) == "preparing"
 
@@ -941,7 +1026,10 @@ async def test_default_pointer_moves_for_a_ready_edition_that_asked_for_it(raw_c
 
     edition_id = uuid.uuid4()
     title_id = await queries_module.create_title_with_edition(
-        raw_conn, "Default Pointer Ready Show", "default-pointer-ready-show", edition_id,
+        raw_conn,
+        "Default Pointer Ready Show",
+        "default-pointer-ready-show",
+        edition_id,
         f"{edition_id}.mp4",
     )
     episode_id = await raw_conn.fetchval(
@@ -951,7 +1039,11 @@ async def test_default_pointer_moves_for_a_ready_edition_that_asked_for_it(raw_c
     )
     new_edition_id = uuid.uuid4()
     await queries_module.add_edition_to_episode(
-        raw_conn, episode_id, "dub-ru", new_edition_id, f"{new_edition_id}.mp4",
+        raw_conn,
+        episode_id,
+        "dub-ru",
+        new_edition_id,
+        f"{new_edition_id}.mp4",
         status="preparing",
     )
 
@@ -973,7 +1065,10 @@ async def test_default_pointer_does_not_move_for_a_failed_edition(raw_conn):
 
     edition_id = uuid.uuid4()
     title_id = await queries_module.create_title_with_edition(
-        raw_conn, "Default Pointer Failed Show", "default-pointer-failed-show", edition_id,
+        raw_conn,
+        "Default Pointer Failed Show",
+        "default-pointer-failed-show",
+        edition_id,
         f"{edition_id}.mp4",
     )
     episode_id = await raw_conn.fetchval(
@@ -983,14 +1078,20 @@ async def test_default_pointer_does_not_move_for_a_failed_edition(raw_conn):
     )
     new_edition_id = uuid.uuid4()
     await queries_module.add_edition_to_episode(
-        raw_conn, episode_id, "dub-ru", new_edition_id, f"{new_edition_id}.mp4",
+        raw_conn,
+        episode_id,
+        "dub-ru",
+        new_edition_id,
+        f"{new_edition_id}.mp4",
         status="preparing",
     )
 
     # The job failed -- mark_edition_failed runs, set_default_edition never
     # does (this is the terminal helper's own branch, exercised directly
     # here rather than through a real converter failure).
-    await queries_module.mark_edition_failed(raw_conn, new_edition_id, "failed.reason.unknown")
+    await queries_module.mark_edition_failed(
+        raw_conn, new_edition_id, "failed.reason.unknown"
+    )
 
     default_still = await raw_conn.fetchval(
         "SELECT default_edition_id FROM episodes WHERE id = $1", episode_id
@@ -1017,8 +1118,11 @@ async def test_cancelled_single_file_add_leaves_both_levels_consistent(
 
     resp = await client.post(
         f"/add/{clips['already_correct']['path'].name}",
-        data=_post_data(clips["already_correct"], name="Cancel Consistency Show",
-                         slug="cancel-consistency-show"),
+        data=_post_data(
+            clips["already_correct"],
+            name="Cancel Consistency Show",
+            slug="cancel-consistency-show",
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 302
@@ -1125,7 +1229,10 @@ async def test_plan_edition_slug_refuses_an_all_digit_candidate(raw_conn, clips)
 
     edition_id = uuid.uuid4()
     title_id = await queries_module.create_title_with_edition(
-        raw_conn, "Plan Edition Slug Show", "plan-edition-slug-show", edition_id,
+        raw_conn,
+        "Plan Edition Slug Show",
+        "plan-edition-slug-show",
+        edition_id,
         f"{edition_id}.mp4",
     )
     episode_id = await raw_conn.fetchval(
@@ -1144,7 +1251,10 @@ async def test_plan_edition_slug_refuses_a_slug_already_on_the_episode(raw_conn)
 
     edition_id = uuid.uuid4()
     title_id = await queries_module.create_title_with_edition(
-        raw_conn, "Plan Edition Taken Show", "plan-edition-taken-show", edition_id,
+        raw_conn,
+        "Plan Edition Taken Show",
+        "plan-edition-taken-show",
+        edition_id,
         f"{edition_id}.mp4",
     )
     episode_id = await raw_conn.fetchval(
@@ -1300,7 +1410,9 @@ async def test_failure_after_successful_upload_deletes_the_completed_object(
     async def failing_set_technical(*args, **kwargs):
         raise RuntimeError("db write exploded after upload succeeded")
 
-    monkeypatch.setattr(queue_module.queries, "set_edition_technical", failing_set_technical)
+    monkeypatch.setattr(
+        queue_module.queries, "set_edition_technical", failing_set_technical
+    )
 
     clip = clips["already_correct"]
     resp = await client.post(
@@ -1413,9 +1525,9 @@ async def test_a_superseded_terminal_write_leaves_the_title_untouched(
 async def test_insufficient_free_space_fails_before_any_ffmpeg_starts(
     client, raw_conn, clips, monkeypatch
 ):
-    monkeypatch.setattr(queue_module.shutil, "disk_usage", lambda path: type(
-        "Usage", (), {"free": 0}
-    )())
+    monkeypatch.setattr(
+        queue_module.shutil, "disk_usage", lambda path: type("Usage", (), {"free": 0})()
+    )
 
     ffmpeg_calls = []
     original_run_ffmpeg = remux_module.run_ffmpeg
@@ -1435,7 +1547,9 @@ async def test_insufficient_free_space_fails_before_any_ffmpeg_starts(
     assert resp.status_code == 302
 
     async def is_failed():
-        row = await raw_conn.fetchrow("SELECT status FROM titles WHERE name = $1", "No Space")
+        row = await raw_conn.fetchrow(
+            "SELECT status FROM titles WHERE name = $1", "No Space"
+        )
         return row is not None and row["status"] == "failed"
 
     await _wait_until(is_failed)
@@ -1724,8 +1838,8 @@ async def test_a_restart_mid_remux_leaves_the_row_in_flight_rather_than_failed(
     never calling `process_add` again -- exactly what a killed process
     leaves behind.
     """
-    from orchestrator.db import queries as queries_module
     from orchestrator import reaper as reaper_module
+    from orchestrator.db import queries as queries_module
 
     edition_id = uuid.uuid4()
     title_id = await queries_module.create_title_with_edition(
@@ -1790,7 +1904,9 @@ async def test_a_restart_mid_remux_leaves_the_row_in_flight_rather_than_failed(
     assert job_after_sweep["stage"] == "queued"
     assert job_after_sweep["worker_name"] is None
     assert job_after_sweep["heartbeat_at"] is None
-    assert job_after_sweep["attempts"] == 1, "the attempt cap's own memory survives a requeue"
+    assert job_after_sweep["attempts"] == 1, (
+        "the attempt cap's own memory survives a requeue"
+    )
 
     # Still not failed -- the sweep never touches titles at all, only jobs.
     title_after_sweep = await raw_conn.fetchrow(

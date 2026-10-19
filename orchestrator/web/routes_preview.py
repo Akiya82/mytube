@@ -45,6 +45,7 @@ font collection, the render itself, and the frame sweep -- goes through
 docstring states for the same reason: this route shares an event loop with
 `GET /v/{slug}` and `/healthz`.
 """
+
 import asyncio
 import re
 import secrets
@@ -61,13 +62,13 @@ from mytube_media.share import ShareEscape, safe_join
 from mytube_media.subtitles import (
     SubtitleExtractError,
     SubtitleReadError,
+    bitmap_cue_after,
     collect_fonts,
     copy_external_track,
     cue_times,
     extract_embedded_track,
     extraction_extension,
     first_cue_after,
-    bitmap_cue_after,
     missing_font_from_log,
     read_text,
 )
@@ -78,7 +79,11 @@ from mytube_media.transcode import (
     build_preview_command,
 )
 from orchestrator.config import get_settings
-from orchestrator.media.add import SubtitleChoiceRefused, embedded_subtitle_kind, parse_subtitle_choice
+from orchestrator.media.add import (
+    SubtitleChoiceRefused,
+    embedded_subtitle_kind,
+    parse_subtitle_choice,
+)
 from orchestrator.web.routes_share import _resolve_share_path
 from orchestrator.web.templates import render
 
@@ -139,13 +144,18 @@ def _sweep_old_frames(directory: Path) -> None:
 
 def _video_stream(probe_json: dict) -> dict | None:
     return next(
-        (s for s in probe_json.get("streams", []) if s.get("codec_type") == "video"), None
+        (s for s in probe_json.get("streams", []) if s.get("codec_type") == "video"),
+        None,
     )
 
 
 def _error_panel(request: Request, *, rel_path: str, state: str = "error"):
     return render(
-        request, "partials/preview_panel.html", status_code=200, state=state, rel_path=rel_path
+        request,
+        "partials/preview_panel.html",
+        status_code=200,
+        state=state,
+        rel_path=rel_path,
     )
 
 
@@ -277,7 +287,10 @@ async def preview_render_route(
             at_seconds = first_cue_after(cues, after_seconds)
             subtitle_path_for_burn = str(copied)
             subtitle = SubtitleChoice(
-                kind="external", path=subtitle_path_for_burn, font_dir=None, charenc=charenc
+                kind="external",
+                path=subtitle_path_for_burn,
+                font_dir=None,
+                charenc=charenc,
             )
 
         if at_seconds is None:
@@ -385,4 +398,6 @@ async def preview_frame_route(token: str, request: Request):
     # the same token is never reused for two different frames, but a
     # frame is removed right after this one read, and a stale 200 for a
     # swept frame would be worse than a fresh re-render.
-    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    return Response(
+        content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"}
+    )

@@ -20,6 +20,7 @@ obvious implementation is the one where the uploader cleans up after
 itself, and that is exactly the implementation this module refuses to
 write.
 """
+
 import boto3
 from botocore.client import Config
 
@@ -44,7 +45,11 @@ def build_client(settings: WorkerSettings):
 
 
 def upload_file(
-    client, settings: WorkerSettings, path: str, key: str, content_type: str = "video/mp4"
+    client,
+    settings: WorkerSettings,
+    path: str,
+    key: str,
+    content_type: str = "video/mp4",
 ) -> None:
     """Multipart-capable upload -- the same call shape as
     `orchestrator.storage.put_object_from_file`, for the same reason:

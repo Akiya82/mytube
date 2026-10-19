@@ -20,6 +20,7 @@ on the share freezes video resolution and `/healthz` for every viewer
 while the add form draws. Every filesystem and subprocess call here goes
 through `asyncio.to_thread`.
 """
+
 import asyncio
 import shutil
 import uuid
@@ -38,7 +39,6 @@ from mytube_media.compat import (
     moov_before_mdat,
     probe,
 )
-from mytube_media.subtitles import external_audio_tracks, external_tracks
 from mytube_media.share import (
     ShareEscape,
     ShareUnavailable,
@@ -46,6 +46,7 @@ from mytube_media.share import (
     relative_to_root,
     safe_join,
 )
+from mytube_media.subtitles import external_audio_tracks, external_tracks
 from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import queries
@@ -74,7 +75,9 @@ _PICKER_KINDS = frozenset({"subtitle", "audio"})
 # in, kept narrow rather than every extension a media player recognises --
 # a stray .txt or .nfo sitting beside the episodes must never be offered a
 # checkbox on the folder screen.
-VIDEO_EXTENSIONS = frozenset({"mp4", "mkv", "avi", "webm", "mov", "wmv", "m4v", "ts", "m2ts"})
+VIDEO_EXTENSIONS = frozenset(
+    {"mp4", "mkv", "avi", "webm", "mov", "wmv", "m4v", "ts", "m2ts"}
+)
 
 # Below this count the folder button does not render at all -- a single
 # video file already has its own one-at-a-time add form, and a folder
@@ -95,10 +98,14 @@ def _folder_href(rel_path: str) -> str:
     """
     if not rel_path:
         return "/add-folder"
-    return "/add-folder/" + "/".join(quote(part, safe="") for part in rel_path.split("/"))
+    return "/add-folder/" + "/".join(
+        quote(part, safe="") for part in rel_path.split("/")
+    )
 
 
-def _folder_button_context(rel_path: str, entries, already_added_by_path: dict) -> dict | None:
+def _folder_button_context(
+    rel_path: str, entries, already_added_by_path: dict
+) -> dict | None:
     """`None` when the folder button does not render at all: fewer than
     `MIN_VIDEO_FILES_FOR_FOLDER_ADD` video files
     directly in this listing. Otherwise the button's own label key, href
@@ -203,7 +210,9 @@ def _breadcrumb(rel_path: str) -> list[dict]:
     accumulated: list[str] = []
     for part in parts:
         accumulated.append(part)
-        crumbs.append({"label": part, "href": _href("/".join(accumulated)), "is_root": False})
+        crumbs.append(
+            {"label": part, "href": _href("/".join(accumulated)), "is_root": False}
+        )
     return crumbs
 
 
@@ -299,7 +308,9 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
                     # (`track.language`, `_match_sidecar`'s own raw
                     # return) and the folder tokens are real candidates
                     # here.
-                    "language": _resolve_sidecar_language(track.language, *folder_segments),
+                    "language": _resolve_sidecar_language(
+                        track.language, *folder_segments
+                    ),
                     "track_kind": _resolve_track_kind_from_folders(folder_segments),
                 }
             )
@@ -334,18 +345,23 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
                     # it -- the same degrade-to-absent rule the sidecar
                     # walk itself already applies to a filesystem error.
                     continue
-                gap = duration_gap_seconds(verdict.duration_seconds, probed.duration_seconds)
+                gap = duration_gap_seconds(
+                    verdict.duration_seconds, probed.duration_seconds
+                )
                 audio_tracks_external.append(
                     {
                         "rel_path": audio_rel,
                         "name": Path(candidate.path).name,
                         "folder_label": folder_label,
                         "language": _resolve_sidecar_language(
-                            probed.language, candidate.suffix, *candidate.folder_segments
+                            probed.language,
+                            candidate.suffix,
+                            *candidate.folder_segments,
                         ),
                         "codec": probed.codec,
                         "duration_warning": (
-                            gap is not None and gap > DURATION_MISMATCH_THRESHOLD_SECONDS
+                            gap is not None
+                            and gap > DURATION_MISMATCH_THRESHOLD_SECONDS
                         ),
                         "duration_gap_seconds": gap,
                     }
@@ -385,7 +401,9 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
             except SlugError:
                 candidate_title_slug = None
             if candidate_title_slug:
-                title_match = await queries.title_by_current_slug(conn, candidate_title_slug)
+                title_match = await queries.title_by_current_slug(
+                    conn, candidate_title_slug
+                )
             if title_match is not None:
                 title_match_episode = await queries.episode_by_number(
                     conn, title_match["title_id"], recognised.episode
@@ -405,7 +423,9 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
             except ValueError:
                 parsed_episode_id = None
             if parsed_episode_id is not None:
-                edition_target = await queries.episode_with_title(conn, parsed_episode_id)
+                edition_target = await queries.episode_with_title(
+                    conn, parsed_episode_id
+                )
                 if edition_target is not None:
                     target_episode_id = parsed_episode_id
                     mode = "edition"
@@ -430,7 +450,8 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
                 conn, target_episode_id
             )
             default_track = next(
-                (t for t in verdict.tracks if t.index == verdict.default_track_index), None
+                (t for t in verdict.tracks if t.index == verdict.default_track_index),
+                None,
             )
             candidate_technical = {
                 "audio_language": default_track.language if default_track else None,
@@ -479,7 +500,9 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
 
     estimate_seconds = 0.0
     if settings.add_estimate_mb_per_second > 0:
-        estimate_seconds = size_bytes / (settings.add_estimate_mb_per_second * 1024 * 1024)
+        estimate_seconds = size_bytes / (
+            settings.add_estimate_mb_per_second * 1024 * 1024
+        )
 
     # A title-level match cannot occur any more -- every already-added
     # source or already-taken episode number is offered as an edition
@@ -488,8 +511,8 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
     # The tombstone gate only applies while a brand new title's own slug
     # is actually being claimed (mode == "new").
     gate_pending = (
-        (already_added is not None or title_match_episode is not None) and mode != "edition"
-    )
+        already_added is not None or title_match_episode is not None
+    ) and mode != "edition"
     tombstone_blocks = mode == "new" and slug_plan.is_tombstone and not reuse_confirmed
 
     can_add = bool(
@@ -515,7 +538,9 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
     # runs looks for a literal t("...") string and would otherwise flag
     # the shared prefix "layout.detected." itself as if it were a key.
     layout_detected_key = (
-        "layout.detected." + verdict.stereo_layout_source if verdict is not None else None
+        "layout.detected." + verdict.stereo_layout_source
+        if verdict is not None
+        else None
     )
 
     edition_offer_episode_id = None

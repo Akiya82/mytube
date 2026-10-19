@@ -41,6 +41,7 @@ for the video key and, when one was uploaded, the poster key, before the
 row is marked failed. A cancellation runs the identical pair: an
 operator's stop request leaves the same kind of orphan a crash would.
 """
+
 import asyncio
 import logging
 import os
@@ -58,7 +59,11 @@ from mytube_media.share import ShareEscape, safe_join
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media.add import required_free_bytes
-from orchestrator.storage import abort_dangling_multipart, delete_object, put_object_from_file
+from orchestrator.storage import (
+    abort_dangling_multipart,
+    delete_object,
+    put_object_from_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +116,9 @@ class _JobCancelled(Exception):
 HEARTBEAT_WHILE_INTERVAL_SECONDS = 3.0
 
 
-async def heartbeat_while(work, *, heartbeat, stage: str, interval: float | None = None):
+async def heartbeat_while(
+    work, *, heartbeat, stage: str, interval: float | None = None
+):
     """Run the blocking, zero-argument callable `work` in a thread while
     sending `heartbeat(stage=stage)` on `interval`'s own timer until it
     finishes, for every blocking transfer in this project:
@@ -146,7 +153,9 @@ async def heartbeat_while(work, *, heartbeat, stage: str, interval: float | None
             return task.result()
 
 
-async def _upload(path, key: str, content_type: str = "video/mp4", *, heartbeat) -> None:
+async def _upload(
+    path, key: str, content_type: str = "video/mp4", *, heartbeat
+) -> None:
     """One upload, heartbeating on its own timer while it runs, with its
     failures labelled. The only place `put_object_from_file` is called
     from `process_add`.
@@ -433,7 +442,9 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         if job.external_audio_rel_path:
             external_audio_source = safe_join(root, job.external_audio_rel_path)
             if not external_audio_source.is_file():
-                raise OSError(f"{external_audio_source}: external audio choice not found")
+                raise OSError(
+                    f"{external_audio_source}: external audio choice not found"
+                )
 
         work_dir = Path(settings.work_dir)
         scratch_video = work_dir / f"{job.edition_id}.mp4"
@@ -450,7 +461,9 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         # A dub has to be muxed in by ffmpeg -- the as-is upload-the-source
         # fast path never runs a command at all, so it cannot carry one
         # in (the video stream itself is never touched either way).
-        effective_already_correct = verdict.already_correct and external_audio_source is None
+        effective_already_correct = (
+            verdict.already_correct and external_audio_source is None
+        )
 
         source_size = verdict.size_bytes
         if not source_size:
@@ -459,7 +472,9 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         free_bytes = await asyncio.to_thread(
             lambda: shutil.disk_usage(settings.work_dir).free
         )
-        required = required_free_bytes(source_size, already_correct=effective_already_correct)
+        required = required_free_bytes(
+            source_size, already_correct=effective_already_correct
+        )
         if free_bytes < required:
             raise _InsufficientSpaceError(
                 f"{free_bytes} free bytes < {required} required in {settings.work_dir}"
@@ -540,15 +555,15 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 remux.run_ffmpeg, poster_cmd, timeout=POSTER_TIMEOUT_SECONDS
             )
             candidate_poster_key = f"{job.edition_id}.jpg"
-            await _upload(scratch_poster, candidate_poster_key, "image/jpeg", heartbeat=_heartbeat)
+            await _upload(
+                scratch_poster, candidate_poster_key, "image/jpeg", heartbeat=_heartbeat
+            )
             poster_key = candidate_poster_key
         except Exception:
             # A poster that will not extract must not fail an add that
             # otherwise worked -- the row just degrades to the missing-
             # thumbnail placeholder.
-            logger.exception(
-                "poster extraction failed for edition %s", job.edition_id
-            )
+            logger.exception("poster extraction failed for edition %s", job.edition_id)
             poster_key = None
         finally:
             if await asyncio.to_thread(scratch_poster.exists):
@@ -577,10 +592,14 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                 width=verdict.width or 0,
                 height=verdict.height or 0,
                 audio_language=(
-                    audio_track_for_technical.language if audio_track_for_technical else None
+                    audio_track_for_technical.language
+                    if audio_track_for_technical
+                    else None
                 ),
                 audio_title=(
-                    audio_track_for_technical.title if audio_track_for_technical else None
+                    audio_track_for_technical.title
+                    if audio_track_for_technical
+                    else None
                 ),
                 audio_reencoded=verdict.audio_needs_reencode,
                 # The four video parameters come straight from the verdict:
@@ -606,7 +625,9 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
                     else None
                 ),
                 audio_sample_rate=(
-                    audio_track_for_technical.sample_rate if audio_track_for_technical else None
+                    audio_track_for_technical.sample_rate
+                    if audio_track_for_technical
+                    else None
                 ),
                 audio_channel_layout=(
                     audio_track_for_technical.channel_layout

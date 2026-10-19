@@ -4,6 +4,7 @@ No ORM here or in `db.queries` -- five tables total (a deliberately
 small skeleton), raw SQL over asyncpg is less code than wiring an ORM for
 this size of schema.
 """
+
 import asyncpg
 
 from orchestrator.config import get_settings

@@ -12,6 +12,7 @@ on `PATH` -- this file is not marked `integration` (that marker means a
 Docker daemon in this suite, see `tests/conftest.py`), so it always runs
 in the default collection and simply reports a real absence as a skip.
 """
+
 import json
 import shutil
 import subprocess
@@ -50,19 +51,35 @@ def test_a_real_burn_in_opens_a_subtitle_filename_with_an_apostrophe(tmp_path):
     )
 
     plan = TranscodePlan(
-        width=320, height=240, sample_aspect_ratio="1:1",
-        video_bitrate_bps=500_000, maxrate_bps=650_000, bufsize_bps=1_000_000,
-        gop=50, hwaccel=None, audio_stream_index=0, audio_channels=2,
-        reencode_audio=False, stereo_layout="2d",
+        width=320,
+        height=240,
+        sample_aspect_ratio="1:1",
+        video_bitrate_bps=500_000,
+        maxrate_bps=650_000,
+        bufsize_bps=1_000_000,
+        gop=50,
+        hwaccel=None,
+        audio_stream_index=0,
+        audio_channels=2,
+        reencode_audio=False,
+        stereo_layout="2d",
     )
     subtitle = SubtitleChoice(kind="external", path=srt_name)
     graph = build_filter_chain(plan, subtitle)
 
     argv = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=1",
-        graph.flag, graph.value,
-        "-frames:v", "1", "-update", "1",
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=blue:s=320x240:d=1",
+        graph.flag,
+        graph.value,
+        "-frames:v",
+        "1",
+        "-update",
+        "1",
         "out.jpg",
     ]
     result = _run(argv, cwd=tmp_path)
@@ -83,18 +100,32 @@ def test_a_real_subrip_track_extracts_to_a_non_empty_file(tmp_path):
 
     container = tmp_path / "container.mkv"
     mux_argv = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=1",
-        "-i", str(srt_path),
-        "-c:s:0", "srt",
-        "-map", "0:v", "-map", "1:s",
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=blue:s=64x64:d=1",
+        "-i",
+        str(srt_path),
+        "-c:s:0",
+        "srt",
+        "-map",
+        "0:v",
+        "-map",
+        "1:s",
         str(container),
     ]
     mux_result = _run(mux_argv)
     assert mux_result.returncode == 0, mux_result.stderr
 
     probe_argv = [
-        "ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams",
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_streams",
         str(container),
     ]
     probe_result = _run(probe_argv)
@@ -132,11 +163,18 @@ def test_collect_fonts_never_writes_outside_its_scratch_directory_for_a_hostile_
     container_dir.mkdir()
     container = container_dir / "movie.mkv"
     mux_argv = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=1",
-        "-attach", str(font_path),
-        "-metadata:s:t:0", "filename=../escaped.ttf",
-        "-metadata:s:t:0", "mimetype=application/x-truetype-font",
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=blue:s=64x64:d=1",
+        "-attach",
+        str(font_path),
+        "-metadata:s:t:0",
+        "filename=../escaped.ttf",
+        "-metadata:s:t:0",
+        "mimetype=application/x-truetype-font",
         str(container),
     ]
     mux_result = _run(mux_argv)
@@ -145,7 +183,9 @@ def test_collect_fonts_never_writes_outside_its_scratch_directory_for_a_hostile_
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 
-    result = collect_fonts(source=str(container), subtitle_path=None, scratch_dir=str(scratch))
+    result = collect_fonts(
+        source=str(container), subtitle_path=None, scratch_dir=str(scratch)
+    )
 
     assert result is not None
     fonts_dir = Path(result)

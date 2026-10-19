@@ -11,6 +11,7 @@ accepts directly) — this file is the one place that swaps the scheme to
 `postgresql+asyncpg://` for SQLAlchemy's async engine, matching the async
 driver Alembic runs against in this project.
 """
+
 import asyncio
 from logging.config import fileConfig
 

@@ -19,6 +19,7 @@ a playlist breaks its old address on purpose, so there is nothing to
 tombstone and an address that stops working stops working outright --
 `GET /p/{slug}` never answers 410, unlike `/v/{slug}`.
 """
+
 import asyncio
 import logging
 import uuid
@@ -81,10 +82,7 @@ def _signed_blob_url(request: Request, object_key: str) -> str:
     sig, exp = sign_object_key(
         object_key, settings.secure_link_secret, settings.sign_ttl_seconds
     )
-    return (
-        f"{external_base_url(request)}{blob_path(object_key)}"
-        f"?exp={exp}&sig={sig}"
-    )
+    return f"{external_base_url(request)}{blob_path(object_key)}?exp={exp}&sig={sig}"
 
 
 async def _enqueue_build(request: Request, playlist_id) -> None:
@@ -214,7 +212,9 @@ async def update_playlist_route(
 
         clean_name = name.strip()
         try:
-            candidate = normalize_slug(slug) if slug.strip() else normalize_slug(clean_name)
+            candidate = (
+                normalize_slug(slug) if slug.strip() else normalize_slug(clean_name)
+            )
         except SlugError:
             members = await queries.playlist_members(conn, parsed)
             editions = await queries.active_editions_for_picker(conn)
@@ -267,7 +267,9 @@ async def playlist_items_fragment_route(playlist_id: str, request: Request):
             return Response(status_code=404)
         members = await queries.playlist_members(conn, parsed)
 
-    return render(request, "partials/playlist_members.html", playlist=playlist, members=members)
+    return render(
+        request, "partials/playlist_members.html", playlist=playlist, members=members
+    )
 
 
 @router.post("/playlists/{playlist_id}/items")
@@ -354,7 +356,9 @@ async def move_playlist_item_route(
     if direction in ("up", "down"):
         pool = request.app.state.db_pool
         async with pool.acquire() as conn:
-            await queries.move_playlist_item(conn, parsed_playlist, parsed_item, direction)
+            await queries.move_playlist_item(
+                conn, parsed_playlist, parsed_item, direction
+            )
 
     return RedirectResponse(f"/playlists/{playlist_id}/edit", status_code=302)
 
@@ -562,7 +566,9 @@ async def delete_playlist_route(playlist_id: str, request: Request):
         row = await queries.playlist_row(conn, parsed)
         if row is None or row["status"] != "active":
             return Response(status_code=404)
-        await queries.mark_playlist_for_delete(conn, parsed, settings.delete_grace_seconds)
+        await queries.mark_playlist_for_delete(
+            conn, parsed, settings.delete_grace_seconds
+        )
 
     return RedirectResponse("/library", status_code=302)
 

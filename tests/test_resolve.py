@@ -2,6 +2,7 @@
 is monkeypatched, no real database involved (see conftest.py's `settings`
 fixture for the env vars this needs).
 """
+
 import uuid
 
 import httpx
@@ -74,7 +75,9 @@ async def test_resolve_active_slug_returns_302_with_signed_absolute_location(
 
     async with client:
         resp = await client.get(
-            "/v/ataka-titanov", headers={"host": "mytube.example"}, follow_redirects=False
+            "/v/ataka-titanov",
+            headers={"host": "mytube.example"},
+            follow_redirects=False,
         )
 
     assert resp.status_code == 302
@@ -200,9 +203,7 @@ async def test_refresh_valid_edition_returns_302_with_retry_marker(monkeypatch, 
     monkeypatch.setattr(queries, "resolve_edition", fake_resolve_edition)
 
     async with client:
-        resp = await client.get(
-            f"/refresh/{ACTIVE_EDITION_ID}", follow_redirects=False
-        )
+        resp = await client.get(f"/refresh/{ACTIVE_EDITION_ID}", follow_redirects=False)
 
     assert resp.status_code == 302
     assert "retry=1" in resp.headers["location"]
@@ -228,9 +229,7 @@ async def test_refresh_deleted_titles_edition_returns_410(monkeypatch, client):
     monkeypatch.setattr(queries, "resolve_edition", fake_resolve_edition)
 
     async with client:
-        resp = await client.get(
-            f"/refresh/{ACTIVE_EDITION_ID}", follow_redirects=False
-        )
+        resp = await client.get(f"/refresh/{ACTIVE_EDITION_ID}", follow_redirects=False)
 
     assert resp.status_code == 410
 
@@ -269,4 +268,6 @@ async def test_signature_expiry_matches_sign_ttl_seconds(monkeypatch, client, se
     params = dict(p.split("=") for p in query.split("&"))
     exp = int(params["exp"])
 
-    assert before + settings.sign_ttl_seconds <= exp <= after + settings.sign_ttl_seconds
+    assert (
+        before + settings.sign_ttl_seconds <= exp <= after + settings.sign_ttl_seconds
+    )

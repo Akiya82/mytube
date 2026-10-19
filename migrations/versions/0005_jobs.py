@@ -110,14 +110,10 @@ def upgrade() -> None:
     )
     # The claim's own access path: the oldest queued row of a given kind.
     op.execute(
-        "CREATE INDEX jobs_kind_status_created_at "
-        "ON jobs (kind, status, created_at)"
+        "CREATE INDEX jobs_kind_status_created_at ON jobs (kind, status, created_at)"
     )
     # The stale sweep's own access path: running rows by heartbeat age.
-    op.execute(
-        "CREATE INDEX jobs_status_heartbeat_at "
-        "ON jobs (status, heartbeat_at)"
-    )
+    op.execute("CREATE INDEX jobs_status_heartbeat_at ON jobs (status, heartbeat_at)")
 
     op.execute(
         """

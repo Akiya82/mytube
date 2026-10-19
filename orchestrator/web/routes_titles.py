@@ -38,6 +38,7 @@ reason `orchestrator.media.queue`'s docstring states in full: they share
 an event loop with `GET /v/{slug}` and `/healthz`, and a bucket
 enumeration on a cold cache run bare stops both for its whole duration.
 """
+
 import asyncio
 import uuid
 from datetime import datetime, timezone
@@ -66,7 +67,12 @@ from orchestrator.media.add import (
 )
 from orchestrator.reaper import reap_once
 from orchestrator.slugs import EditionSlugRefused, SlugError
-from orchestrator.storage import delete_object, get_object_bytes, reconcile, storage_usage
+from orchestrator.storage import (
+    delete_object,
+    get_object_bytes,
+    reconcile,
+    storage_usage,
+)
 from orchestrator.web.routes_episodes import cancel_never_active_episode
 from orchestrator.web.routes_share import (
     _folder_segments_relative_to,
@@ -74,7 +80,12 @@ from orchestrator.web.routes_share import (
     _resolve_share_path,
     _unreachable_response,
 )
-from orchestrator.web.templates import humanize_seconds, render, resolve_lang, translator
+from orchestrator.web.templates import (
+    humanize_seconds,
+    render,
+    resolve_lang,
+    translator,
+)
 
 
 def _resolve_signs_only(source: Path, subtitle_target: Path) -> bool | None:
@@ -125,6 +136,7 @@ router = APIRouter()
 # The sort fallback library_route uses for a merged row missing
 # created_at -- see that route's own docstring.
 _EPOCH_FALLBACK = datetime.min.replace(tzinfo=timezone.utc)
+
 
 async def convert_estimate_seconds(conn, duration_seconds, settings) -> float | None:
     """The pre-start time estimate: source duration divided by the
@@ -255,7 +267,9 @@ async def add_confirm_route(
         if not exists:
             return _unreachable_response(request, status_code=400)
         try:
-            probed_external = await asyncio.to_thread(external_audio_track, audio_target)
+            probed_external = await asyncio.to_thread(
+                external_audio_track, audio_target
+            )
         except ProbeError:
             return _unreachable_response(request, status_code=400)
         external_audio_rel_path = relative_to_root(root, audio_target)
@@ -340,7 +354,9 @@ async def add_confirm_route(
                 # An edition of an episode the operator already
                 # named (this page's own confirm-gate CTA, or a deep link
                 # from the library's own "Add edition" action).
-                edition_target = await queries.episode_with_title(conn, target_episode_uuid)
+                edition_target = await queries.episode_with_title(
+                    conn, target_episode_uuid
+                )
                 if edition_target is None:
                     return _unreachable_response(request, status_code=400)
                 try:
@@ -395,7 +411,9 @@ async def add_confirm_route(
                 # through to create_title_with_edition, which claims it in
                 # the same transaction -- no second number claim here.
                 try:
-                    slug_plan: SlugPlan = await plan_slug(conn, clean_name, explicit_slug=slug)
+                    slug_plan: SlugPlan = await plan_slug(
+                        conn, clean_name, explicit_slug=slug
+                    )
                 except SlugError:
                     return _unreachable_response(request, status_code=400)
 
@@ -441,7 +459,9 @@ async def add_confirm_route(
                     audio_stream_index=audio_index,
                     audio_channels=audio_channels,
                     stereo_layout=edition_stereo_layout,
-                    number=parsed_episode_number if parsed_episode_number is not None else 1,
+                    number=parsed_episode_number
+                    if parsed_episode_number is not None
+                    else 1,
                 )
 
             if subtitle_signs_only is not None:
@@ -707,7 +727,11 @@ async def _row_context(conn, settings, row, t) -> dict:
     # only by `set_edition_conversion_detail`), and only computable when
     # both the size and the duration are known.
     data["output_bytes_per_second"] = None
-    if data.get("source_codec") and data.get("size_bytes") and data.get("duration_seconds"):
+    if (
+        data.get("source_codec")
+        and data.get("size_bytes")
+        and data.get("duration_seconds")
+    ):
         data["output_bytes_per_second"] = data["size_bytes"] / data["duration_seconds"]
     return data
 
@@ -732,7 +756,8 @@ def _group_episodes_by_title(rows, settings, t) -> dict:
         derive_job_ui(data, settings, t)
         data["failed"] = data.get("edition_status") == "failed"
         data["add_edition_href"] = (
-            _href(data.get("source_path") or "") + f"?target_episode_id={data['episode_id']}"
+            _href(data.get("source_path") or "")
+            + f"?target_episode_id={data['episode_id']}"
         )
         by_title.setdefault(data["title_id"], []).append(data)
     return by_title
@@ -821,7 +846,9 @@ async def library_route(request: Request):
         video_rows = [await _row_context(conn, settings, row, t) for row in raw_rows]
         for row in video_rows:
             row["kind"] = "video"
-        await _attach_series_episodes(conn, settings, video_rows, t, apply_default_open=True)
+        await _attach_series_episodes(
+            conn, settings, video_rows, t, apply_default_open=True
+        )
 
         raw_playlist_rows = await queries.playlist_rows(conn)
         playlist_rows = [dict(row) for row in raw_playlist_rows]
@@ -879,7 +906,9 @@ async def library_row_fragment_route(title_id: str, request: Request):
         if row is None:
             return Response(status_code=404)
         data = await _row_context(conn, settings, row, t)
-        await _attach_series_episodes(conn, settings, [data], t, apply_default_open=False)
+        await _attach_series_episodes(
+            conn, settings, [data], t, apply_default_open=False
+        )
 
     return render(request, "partials/library_row.html", row=data)
 

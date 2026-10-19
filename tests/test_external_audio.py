@@ -14,6 +14,7 @@ real container until the mux section, where a real `ffmpeg`/`ffprobe` is
 used and every test that needs one is individually marked to skip rather
 than fail when neither is on `PATH`.
 """
+
 import json
 import shutil
 import subprocess
@@ -89,7 +90,10 @@ def test_a_resolution_or_a_year_in_the_filename_does_not_pair(tmp_path):
     """A four-digit run is never a standalone 1-3 digit match -- the same
     conservatism the episode-recognition regexes already use.
     """
-    from mytube_media.subtitles import _episode_number_from_filename, external_audio_tracks
+    from mytube_media.subtitles import (
+        _episode_number_from_filename,
+        external_audio_tracks,
+    )
 
     assert _episode_number_from_filename("AniStar - 1080p.mka") is None
     assert _episode_number_from_filename("AniStar - 2024.mka") is None
@@ -186,7 +190,9 @@ def _fake_ffprobe_result(streams, duration="7.007000"):
     return MagicMock(returncode=0, stdout=json.dumps(payload).encode(), stderr=b"")
 
 
-def test_an_external_file_probes_into_the_same_shape_an_embedded_track_takes(monkeypatch):
+def test_an_external_file_probes_into_the_same_shape_an_embedded_track_takes(
+    monkeypatch,
+):
     from mytube_media import compat
 
     def fake_run(argv, **kwargs):
@@ -206,7 +212,9 @@ def test_an_external_file_probes_into_the_same_shape_an_embedded_track_takes(mon
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    track = compat.external_audio_track("/share/RUS Sound/AniStar/05.mka", folder_label="RUS Sound/AniStar")
+    track = compat.external_audio_track(
+        "/share/RUS Sound/AniStar/05.mka", folder_label="RUS Sound/AniStar"
+    )
 
     assert isinstance(track, compat.AudioTrack)
     assert track.codec == "flac"
@@ -285,7 +293,11 @@ def _remux_cmd(**overrides):
 
 
 def _transcode_cmd(**overrides):
-    from mytube_media.transcode import SubtitleChoice, TranscodePlan, build_transcode_command
+    from mytube_media.transcode import (
+        SubtitleChoice,
+        TranscodePlan,
+        build_transcode_command,
+    )
 
     plan_kwargs = dict(
         width=1920,
@@ -306,7 +318,10 @@ def _transcode_cmd(**overrides):
     plan = TranscodePlan(**plan_kwargs)
     subtitle = SubtitleChoice(kind="none")
     return build_transcode_command(
-        "/share/movie.mkv", "/work/out.mp4", plan=plan, subtitle=subtitle,
+        "/share/movie.mkv",
+        "/work/out.mp4",
+        plan=plan,
+        subtitle=subtitle,
         external_audio=external_audio,
     )
 
@@ -395,23 +410,41 @@ def test_a_real_mux_carries_the_full_video_with_the_shorter_dub_ending_early(tmp
 
     _run(
         [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=blue:s=320x240:r=25:d=10",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video),
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=320x240:r=25:d=10",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(video),
         ]
     )
     _run(
         [
-            "ffmpeg", "-y", "-f", "lavfi",
-            "-i", "sine=frequency=440:sample_rate=48000:duration=7",
-            "-c:a", "flac", str(dub),
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=7",
+            "-c:a",
+            "flac",
+            str(dub),
         ]
     )
     assert video.is_file() and dub.is_file()
 
     destination = tmp_path / "out.mp4"
     cmd = build_remux_command(
-        video, destination,
-        audio_stream_index=0, reencode_audio=False, channels=2,
+        video,
+        destination,
+        audio_stream_index=0,
+        reencode_audio=False,
+        channels=2,
         external_audio=str(dub),
     )
     result = _run(cmd)
@@ -420,8 +453,14 @@ def test_a_real_mux_carries_the_full_video_with_the_shorter_dub_ending_early(tmp
 
     probe = _run(
         [
-            "ffprobe", "-v", "quiet", "-print_format", "json",
-            "-show_format", "-show_streams", str(destination),
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            str(destination),
         ]
     )
     assert probe.returncode == 0, probe.stderr

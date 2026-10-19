@@ -1,6 +1,7 @@
 """ffmpeg argument construction (mytube_media.remux) -- no ffmpeg
 invoked anywhere in this file, only the produced argv lists inspected.
 """
+
 import subprocess
 from unittest.mock import MagicMock
 
@@ -133,7 +134,11 @@ def test_no_external_audio_argv_is_unchanged_from_before_the_parameter_existed()
 def test_source_path_with_special_characters_is_one_argument():
     dangerous = '/share/it\'s "weird"; rm -rf.mkv'
     cmd = build_remux_command(
-        dangerous, "/work/out.mp4", audio_stream_index=0, reencode_audio=False, channels=2
+        dangerous,
+        "/work/out.mp4",
+        audio_stream_index=0,
+        reencode_audio=False,
+        channels=2,
     )
     assert dangerous in cmd
     assert cmd.count(dangerous) == 1

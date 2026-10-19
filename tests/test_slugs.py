@@ -112,7 +112,9 @@ def test_parse_public_address_bare_title():
 
 
 def test_parse_public_address_title_and_number():
-    assert parse_public_address("horimiya/5") == PublicAddress(slug="horimiya", number=5)
+    assert parse_public_address("horimiya/5") == PublicAddress(
+        slug="horimiya", number=5
+    )
 
 
 def test_parse_public_address_title_and_edition_slug():

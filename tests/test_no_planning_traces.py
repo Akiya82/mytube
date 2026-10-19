@@ -59,6 +59,7 @@ Every collector has a test on a small `tmp_path` tree that asserts the
 exact list it returns, and a walk-reach test on the real tree, so a walk
 that silently collects nothing cannot report a clean repository.
 """
+
 import ast
 import io
 import json
@@ -299,7 +300,7 @@ def test_a_shell_comment_is_skipped_but_an_output_string_is_not(tmp_path):
     `collect_config_comment_lines` reads it instead.
     """
     (tmp_path / "t.sh").write_text(
-        '# Step 13: the cache-off switch (DELIV-08).\n'
+        "# Step 13: the cache-off switch (DELIV-08).\n"
         'pass "step 13: cache off, bytes still served"\n'
         'fail "step 13 (DELIV-08): expected 206"\n',
         encoding="utf-8",
@@ -370,7 +371,9 @@ def collect_message_strings(root: Path) -> list[tuple[Path, int, str]]:
 def test_no_shipped_config_comment_carries_a_planning_pointer():
     offenders = [
         (str(path.relative_to(REPO_ROOT)), lineno, text)
-        for path, lineno, text in collect_config_comment_lines(CONFIG_FILES_FOR_COMMENT_SCAN)
+        for path, lineno, text in collect_config_comment_lines(
+            CONFIG_FILES_FOR_COMMENT_SCAN
+        )
         if _has_pointer(text)
     ]
     assert not offenders, offenders
@@ -382,7 +385,12 @@ def test_the_config_comment_walk_actually_reaches_the_files():
     found = collect_config_comment_lines(CONFIG_FILES_FOR_COMMENT_SCAN)
     assert len(found) > 100
     reached = {path.name for path, _, _ in found}
-    assert {".env.example", "docker-compose.yml", "Dockerfile", "nginx.conf.template"} <= reached
+    assert {
+        ".env.example",
+        "docker-compose.yml",
+        "Dockerfile",
+        "nginx.conf.template",
+    } <= reached
 
 
 def test_a_config_comment_identifier_is_flagged_wherever_it_stands(tmp_path):
@@ -394,7 +402,9 @@ def test_a_config_comment_identifier_is_flagged_wherever_it_stands(tmp_path):
         encoding="utf-8",
     )
     offenders = [
-        text for _, _, text in collect_config_comment_lines([sample]) if _has_pointer(text)
+        text
+        for _, _, text in collect_config_comment_lines([sample])
+        if _has_pointer(text)
     ]
     assert offenders == [
         "D-99: leads, so this stands in for the reason instead of following it",
@@ -406,7 +416,8 @@ def test_no_worker_or_media_message_string_carries_a_planning_identifier():
     offenders = [
         (str(path.relative_to(REPO_ROOT)), lineno, text)
         for path, lineno, text in (
-            collect_message_strings(WORKER_DIR) + collect_message_strings(MYTUBE_MEDIA_DIR)
+            collect_message_strings(WORKER_DIR)
+            + collect_message_strings(MYTUBE_MEDIA_DIR)
         )
         if _has_pointer(text)
     ]
@@ -414,7 +425,9 @@ def test_no_worker_or_media_message_string_carries_a_planning_identifier():
 
 
 def test_the_message_string_walk_actually_reaches_worker_and_media():
-    found = collect_message_strings(WORKER_DIR) + collect_message_strings(MYTUBE_MEDIA_DIR)
+    found = collect_message_strings(WORKER_DIR) + collect_message_strings(
+        MYTUBE_MEDIA_DIR
+    )
     assert len(found) > 15
 
 
@@ -498,8 +511,7 @@ def test_a_jinja_comment_is_left_out_of_the_body_pass_but_read_by_its_own(tmp_pa
     comment pass reads exactly what the body pass removed.
     """
     (tmp_path / "page.html").write_text(
-        "{# rendered per D-49, the poll interval #}\n"
-        "<p>Waiting</p>\n",
+        "{# rendered per D-49, the poll interval #}\n<p>Waiting</p>\n",
         encoding="utf-8",
     )
     lines = [text for _, _, text in collect_template_body_lines(tmp_path)]
@@ -522,9 +534,7 @@ def test_a_catalog_value_carrying_an_identifier_is_caught(tmp_path):
         encoding="utf-8",
     )
     offenders = [
-        value
-        for _, _, value in collect_catalog_values(tmp_path)
-        if _has_pointer(value)
+        value for _, _, value in collect_catalog_values(tmp_path) if _has_pointer(value)
     ]
     assert offenders == ["Working (D-49), about {estimate} left"]
 
@@ -535,18 +545,20 @@ def test_a_catalog_value_carrying_an_identifier_is_caught(tmp_path):
 def test_guard_flags_an_identifier_added_to_a_help_string(tmp_path):
     (tmp_path / "cmd.py").write_text(
         textwrap.dedent(
-            '''
+            """
             import typer
 
             def f(x: str = typer.Option(..., help="Confirm reuse (D-99)")):
                 pass
-            '''
+            """
         ),
         encoding="utf-8",
     )
 
     offenders = [
-        text for _, _, text in collect_user_facing_strings(tmp_path) if _has_pointer(text)
+        text
+        for _, _, text in collect_user_facing_strings(tmp_path)
+        if _has_pointer(text)
     ]
     assert offenders == ["Confirm reuse (D-99)"]
 
@@ -554,23 +566,27 @@ def test_guard_flags_an_identifier_added_to_a_help_string(tmp_path):
 def test_guard_passes_again_once_the_identifier_is_removed(tmp_path):
     (tmp_path / "cmd.py").write_text(
         textwrap.dedent(
-            '''
+            """
             import typer
 
             def f(x: str = typer.Option(..., help="Confirm reuse of a deleted title's address")):
                 pass
-            '''
+            """
         ),
         encoding="utf-8",
     )
 
     offenders = [
-        text for _, _, text in collect_user_facing_strings(tmp_path) if _has_pointer(text)
+        text
+        for _, _, text in collect_user_facing_strings(tmp_path)
+        if _has_pointer(text)
     ]
     assert offenders == []
 
 
-def test_docstring_and_comment_identifiers_are_collected_by_the_comment_pass_only(tmp_path):
+def test_docstring_and_comment_identifiers_are_collected_by_the_comment_pass_only(
+    tmp_path,
+):
     (tmp_path / "mod.py").write_text(
         textwrap.dedent(
             '''
@@ -597,16 +613,18 @@ def test_docstring_and_comment_identifiers_are_collected_by_the_comment_pass_onl
 def test_guard_collects_bare_print_as_well_as_typer_echo(tmp_path):
     (tmp_path / "report.py").write_text(
         textwrap.dedent(
-            '''
+            """
             def f():
                 print("violates D-99 right here")
-            '''
+            """
         ),
         encoding="utf-8",
     )
 
     offenders = [
-        text for _, _, text in collect_user_facing_strings(tmp_path) if _has_pointer(text)
+        text
+        for _, _, text in collect_user_facing_strings(tmp_path)
+        if _has_pointer(text)
     ]
     assert offenders == ["violates D-99 right here"]
 
@@ -639,7 +657,8 @@ def collect_python_comments_and_docstrings(roots) -> list[tuple[Path, int, str]]
                     entries.append((token.start[0], token.string.lstrip("#").strip()))
             for node in ast.walk(ast.parse(source, filename=str(path))):
                 if not isinstance(
-                    node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+                    node,
+                    (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
                 ):
                     continue
                 first = node.body[0] if node.body else None
@@ -681,7 +700,9 @@ def collect_asset_comments(paths) -> list[tuple[Path, int, str]]:
         # is not read a second time.
         rest = _BLOCK_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
         for match in _LINE_COMMENT.finditer(rest):
-            found.append((path, rest.count("\n", 0, match.start()) + 1, match.group(1).strip()))
+            found.append(
+                (path, rest.count("\n", 0, match.start()) + 1, match.group(1).strip())
+            )
     return sorted(found, key=lambda item: (item[0], item[1]))
 
 
@@ -696,7 +717,9 @@ def collect_document_lines(root: Path) -> list[tuple[Path, int, str]]:
         paths += sorted(p for p in github.rglob("*") if p.suffix in _DOCUMENT_SUFFIXES)
     found: list[tuple[Path, int, str]] = []
     for path in paths:
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
             if line.strip():
                 found.append((path, lineno, line))
     return found
@@ -753,7 +776,9 @@ def test_a_python_comment_and_a_docstring_are_both_collected(tmp_path):
 def test_the_only_excluded_file_is_the_guard_itself(tmp_path):
     assert EXCLUDED_FILES == {Path(__file__).resolve()}
     assert len(EXCLUDED_FILES) == 1
-    collected = {path for path, _, _ in collect_python_comments_and_docstrings([TESTS_DIR])}
+    collected = {
+        path for path, _, _ in collect_python_comments_and_docstrings([TESTS_DIR])
+    }
     assert Path(__file__).resolve() not in collected
     assert collected, "the rest of tests/ is still walked"
 
@@ -804,7 +829,11 @@ def test_the_document_walk_actually_reaches_the_setup_guide():
 
 
 def test_the_document_walk_never_enters_docs():
-    assert not [p for p, _, _ in collect_document_lines(REPO_ROOT) if "docs" in p.relative_to(REPO_ROOT).parts]
+    assert not [
+        p
+        for p, _, _ in collect_document_lines(REPO_ROOT)
+        if "docs" in p.relative_to(REPO_ROOT).parts
+    ]
 
 
 def test_root_markdown_and_github_files_are_collected_and_a_missing_github_is_not_an_error(

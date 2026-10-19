@@ -21,6 +21,7 @@ False proves only that Python assigns variables. Each test asserts what
 the worker *did* with the answer: which call it made next, with which
 arguments, and which call it did not make at all.
 """
+
 import asyncio
 import contextlib
 import shutil
@@ -30,6 +31,7 @@ from collections import namedtuple
 from pathlib import Path
 
 import pytest
+from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 from mytube_media import compat, remux
 from mytube_media.runner import Progress, RunResult
@@ -48,8 +50,6 @@ from orchestrator.media.playlist_queue import (
     process_playlist_build,
     run_playlist_consumer,
 )
-
-from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 MEGABYTE = 1024 * 1024
 
@@ -131,7 +131,11 @@ def _claim_row(playlist_id, *, job_id=None, attempt=1):
     `playlist` kind -- only the three fields `PlaylistBuildJob.from_row`
     reads.
     """
-    return {"id": job_id or uuid.uuid4(), "attempts": attempt, "playlist_id": playlist_id}
+    return {
+        "id": job_id or uuid.uuid4(),
+        "attempts": attempt,
+        "playlist_id": playlist_id,
+    }
 
 
 @pytest.fixture
@@ -221,8 +225,15 @@ def build(tmp_path, monkeypatch):
         return state["pending_claims"].pop(0)
 
     async def heartbeat_job(
-        conn, job_id, *, worker_name, attempt, stage,
-        progress_pct=None, eta_seconds=None, realtime_factor=None,
+        conn,
+        job_id,
+        *,
+        worker_name,
+        attempt,
+        stage,
+        progress_pct=None,
+        eta_seconds=None,
+        realtime_factor=None,
     ):
         index = len(calls["heartbeats"])
         calls["heartbeats"].append(
@@ -234,8 +245,14 @@ def build(tmp_path, monkeypatch):
         return {"cancel_requested": cancel}
 
     async def finish_job(
-        conn, job_id, *, worker_name, attempt, outcome,
-        reason_key=None, realtime_factor=None,
+        conn,
+        job_id,
+        *,
+        worker_name,
+        attempt,
+        outcome,
+        reason_key=None,
+        realtime_factor=None,
     ):
         calls["finished"].append(
             {"job_id": job_id, "outcome": outcome, "reason_key": reason_key}
@@ -301,7 +318,9 @@ def build(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "put_object_from_file", fake_put)
     monkeypatch.setattr(worker, "abort_dangling_multipart", fake_abort)
     monkeypatch.setattr(worker, "delete_object", fake_delete)
-    monkeypatch.setattr(worker, "run_ffmpeg_with_progress", fake_run_ffmpeg_with_progress)
+    monkeypatch.setattr(
+        worker, "run_ffmpeg_with_progress", fake_run_ffmpeg_with_progress
+    )
     monkeypatch.setattr(compat, "probe", fake_probe)
 
     yield state, calls
@@ -321,7 +340,9 @@ def _outcomes(calls):
 
 
 async def _run(playlist_id="playlist-a", *, job_id=None, attempt=1) -> PlaylistBuildJob:
-    job = PlaylistBuildJob(job_id=job_id or uuid.uuid4(), attempt=attempt, playlist_id=playlist_id)
+    job = PlaylistBuildJob(
+        job_id=job_id or uuid.uuid4(), attempt=attempt, playlist_id=playlist_id
+    )
     await process_playlist_build(_PoolLike(), job)
     return job
 
@@ -347,7 +368,9 @@ async def test_a_playlist_deleted_mid_build_leaves_none_of_its_objects_behind(bu
     assert calls["deleted"] == keys
 
 
-async def test_a_deleted_playlist_is_not_marked_failed_and_the_swap_is_not_retried(build):
+async def test_a_deleted_playlist_is_not_marked_failed_and_the_swap_is_not_retried(
+    build,
+):
     """Nothing went wrong -- the operator deleted the playlist. Writing a
     refusal onto a row the reaper has already finished would resurrect a
     deleted playlist as a failed one. The job itself still needs a
@@ -489,7 +512,9 @@ async def test_more_than_one_heartbeat_covers_a_download_that_outlasts_the_inter
     assert len(working) > 1
 
 
-async def test_a_download_failure_still_reaches_the_assembly_failure_handler(build, monkeypatch):
+async def test_a_download_failure_still_reaches_the_assembly_failure_handler(
+    build, monkeypatch
+):
     """The download now runs wrapped in `heartbeat_while` -- its
     own exception must still propagate unchanged and land on the same
     reason key it did before the wrapper existed.
@@ -597,12 +622,16 @@ async def test_the_combined_percentage_advances_across_segments(build):
     await _run()
 
     working = [
-        h for h in calls["heartbeats"] if h["stage"] == "working" and h["progress_pct"] is not None
+        h
+        for h in calls["heartbeats"]
+        if h["stage"] == "working" and h["progress_pct"] is not None
     ]
     assert [h["progress_pct"] for h in working] == [50.0, 100.0]
 
     uploading = [h for h in calls["heartbeats"] if h["stage"] == "uploading"]
-    assert len(uploading) == 2, "the uploading stage is set once per segment, same as the addition consumer's own"
+    assert len(uploading) == 2, (
+        "the uploading stage is set once per segment, same as the addition consumer's own"
+    )
 
 
 async def test_a_cancel_mid_build_discards_the_segment_already_uploaded_and_finishes_cancelled(

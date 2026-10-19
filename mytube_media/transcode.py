@@ -20,6 +20,7 @@ and `-movflags +faststart` on the rewrite (a `moov` atom left at the end forces 
 first frame). Every earlier ffmpeg branch in this project only copied streams or
 pulled a single frame, so neither trap could bite until now.
 """
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -414,9 +415,12 @@ def build_transcode_command(
     maxrate = round(plan.video_bitrate_bps * MAXRATE_RATIO)
     bufsize = round(plan.video_bitrate_bps * BUFSIZE_RATIO)
     cmd += [
-        "-b:v", str(plan.video_bitrate_bps),
-        "-maxrate", str(maxrate),
-        "-bufsize", str(bufsize),
+        "-b:v",
+        str(plan.video_bitrate_bps),
+        "-maxrate",
+        str(maxrate),
+        "-bufsize",
+        str(bufsize),
     ]
 
     # Without these stated explicitly, the encoder happily carries a ten-bit

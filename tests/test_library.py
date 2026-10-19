@@ -5,6 +5,7 @@ GET /poster/{edition_id}, POST /library/{id}/dismiss). The database layer is mon
 test_add_form.py already uses -- no real Postgres, no real S3, quick-loop
 only.
 """
+
 import pathlib
 import re
 import time
@@ -17,13 +18,13 @@ from botocore.exceptions import ClientError
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
+
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
 from orchestrator.storage import StorageUsage
 from orchestrator.web import routes_titles
-
-from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 
 class _DummyTxCtx:
@@ -154,8 +155,12 @@ def queries_stub(monkeypatch):
     monkeypatch.setattr(queries, "delete_failed_title", _delete_failed_title)
     monkeypatch.setattr(queries, "referenced_objects", _referenced_objects)
     monkeypatch.setattr(queries, "playlist_rows", _playlist_rows, raising=False)
-    monkeypatch.setattr(queries, "episodes_for_library", _episodes_for_library, raising=False)
-    monkeypatch.setattr(queries, "editions_for_library", _editions_for_library, raising=False)
+    monkeypatch.setattr(
+        queries, "episodes_for_library", _episodes_for_library, raising=False
+    )
+    monkeypatch.setattr(
+        queries, "editions_for_library", _editions_for_library, raising=False
+    )
     return stub
 
 
@@ -341,7 +346,13 @@ def _edition(**over) -> dict:
 
 async def test_active_row_renders_technical_detail_and_audio_note(client, queries_stub):
     queries_stub.rows = [
-        _row(title_name="My Clip", size_bytes=1_073_741_824, duration_seconds=125, width=1280, height=720)
+        _row(
+            title_name="My Clip",
+            size_bytes=1_073_741_824,
+            duration_seconds=125,
+            width=1280,
+            height=720,
+        )
     ]
 
     async with client:
@@ -357,7 +368,9 @@ async def test_active_row_renders_technical_detail_and_audio_note(client, querie
     assert "audio re-encoded" in resp.text
 
 
-async def test_active_row_without_edition_measurements_renders_without_detail_line(client, queries_stub):
+async def test_active_row_without_edition_measurements_renders_without_detail_line(
+    client, queries_stub
+):
     """A title added through the command line reaches 'active' with no
     measurements on its edition -- create_title_with_edition defaults to
     'active' and the command line has no ffprobe output to pass. The row
@@ -398,7 +411,9 @@ async def test_active_row_untouched_audio_shows_untouched_note(client, queries_s
     assert "audio re-encoded" not in resp.text
 
 
-async def test_copy_link_data_attribute_is_exact_address_no_query_string(client, queries_stub):
+async def test_copy_link_data_attribute_is_exact_address_no_query_string(
+    client, queries_stub
+):
     queries_stub.rows = [_row(slug="kontrolnyi-rolik")]
 
     async with client:
@@ -474,7 +489,9 @@ async def test_header_shows_no_reconciliation_clause_when_both_counts_are_zero(
     storage_stub.usage = StorageUsage(
         total_bytes=100, object_count=1, free_bytes=None, listing={"a.mp4": 100}
     )
-    queries_stub.referenced = [{"key": "a.mp4", "kind": "video", "title_name": "A", "slug": "a"}]
+    queries_stub.referenced = [
+        {"key": "a.mp4", "kind": "video", "title_name": "A", "slug": "a"}
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -495,9 +512,17 @@ async def test_empty_library_renders_empty_state(client, queries_stub):
 # --- The poster frame ---------------------------------------------------
 
 
-async def test_active_row_with_poster_key_renders_image_with_title_alt(client, queries_stub):
+async def test_active_row_with_poster_key_renders_image_with_title_alt(
+    client, queries_stub
+):
     edition_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_name="Poster Clip", edition_id=edition_id, poster_key=f"{edition_id}.jpg")]
+    queries_stub.rows = [
+        _row(
+            title_name="Poster Clip",
+            edition_id=edition_id,
+            poster_key=f"{edition_id}.jpg",
+        )
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -517,10 +542,17 @@ async def test_active_row_without_poster_key_renders_placeholder(client, queries
     assert "No preview available" in resp.text
 
 
-async def test_preparing_row_with_poster_key_still_shows_placeholder(client, queries_stub):
+async def test_preparing_row_with_poster_key_still_shows_placeholder(
+    client, queries_stub
+):
     edition_id = uuid.uuid4()
     queries_stub.rows = [
-        _row(title_status="preparing", started_at=None, edition_id=edition_id, poster_key=f"{edition_id}.jpg")
+        _row(
+            title_status="preparing",
+            started_at=None,
+            edition_id=edition_id,
+            poster_key=f"{edition_id}.jpg",
+        )
     ]
 
     async with client:
@@ -534,7 +566,7 @@ async def test_script_tag_title_escaped_in_alt_attribute(client, queries_stub):
     edition_id = uuid.uuid4()
     queries_stub.rows = [
         _row(
-            title_name='<script>alert(1)</script>',
+            title_name="<script>alert(1)</script>",
             edition_id=edition_id,
             poster_key=f"{edition_id}.jpg",
         )
@@ -544,7 +576,7 @@ async def test_script_tag_title_escaped_in_alt_attribute(client, queries_stub):
         resp = await client.get("/library")
 
     assert 'alt="<script>' not in resp.text
-    assert "alt=\"&lt;script&gt;" in resp.text
+    assert 'alt="&lt;script&gt;' in resp.text
 
 
 async def test_poster_route_returns_image_bytes(client, storage_stub):
@@ -618,7 +650,12 @@ async def test_working_and_waiting_rows_have_different_state_text(client, querie
             title_id=working_id,
             title_status="preparing",
             started_at="2026-08-22T00:00:00Z",
-            **_job(job_status="running", job_db_stage="working", job_progress_pct=42.0, job_eta_seconds=120),
+            **_job(
+                job_status="running",
+                job_db_stage="working",
+                job_progress_pct=42.0,
+                job_eta_seconds=120,
+            ),
         ),
     ]
 
@@ -642,7 +679,12 @@ async def test_stage_queued_keeps_the_pollers_preparing_value(client, queries_st
             title_id=title_id,
             title_status="preparing",
             started_at=None,
-            **_job(job_kind="remux", job_status="queued", job_db_stage="queued", job_queued_ahead=4),
+            **_job(
+                job_kind="remux",
+                job_status="queued",
+                job_db_stage="queued",
+                job_queued_ahead=4,
+            ),
         )
     ]
 
@@ -654,7 +696,9 @@ async def test_stage_queued_keeps_the_pollers_preparing_value(client, queries_st
     assert "4 ahead of you" in resp.text
 
 
-async def test_stage_waiting_for_converter_names_the_worker_and_time_since_seen(client, queries_stub):
+async def test_stage_waiting_for_converter_names_the_worker_and_time_since_seen(
+    client, queries_stub
+):
     from datetime import datetime, timedelta, timezone
 
     title_id = uuid.uuid4()
@@ -681,7 +725,9 @@ async def test_stage_waiting_for_converter_names_the_worker_and_time_since_seen(
     assert "ml-server" in resp.text
 
 
-async def test_stage_waiting_for_converter_with_no_worker_ever_connected(client, queries_stub):
+async def test_stage_waiting_for_converter_with_no_worker_ever_connected(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     queries_stub.rows = [
         _row(
@@ -702,7 +748,9 @@ async def test_stage_waiting_for_converter_with_no_worker_ever_connected(client,
     assert "none connected yet" in resp.text
 
 
-async def test_stage_queued_recovers_once_the_converter_is_seen_working(client, queries_stub):
+async def test_stage_queued_recovers_once_the_converter_is_seen_working(
+    client, queries_stub
+):
     """The heartbeat now refreshes the check-in, so a
     queued sibling beside a real conversion renders the queued sentence
     for the whole conversion instead of falling into
@@ -825,7 +873,9 @@ async def test_stage_working_carries_percent_and_remaining(client, queries_stub)
     assert "55%" in resp.text
 
 
-async def test_stage_working_with_no_estimate_carries_percent_alone(client, queries_stub):
+async def test_stage_working_with_no_estimate_carries_percent_alone(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     queries_stub.rows = [
         _row(
@@ -851,7 +901,9 @@ async def test_stage_working_with_no_estimate_carries_percent_alone(client, quer
     assert "left" not in resp.text
 
 
-async def test_stage_working_at_the_very_end_still_carries_a_remaining_time(client, queries_stub):
+async def test_stage_working_at_the_very_end_still_carries_a_remaining_time(
+    client, queries_stub
+):
     """Zero is a real estimate, not a missing one. The converter reports it
     for a progress block whose output timestamp has already passed the
     source duration, and the row must say so rather than fall back to the
@@ -910,8 +962,12 @@ def test_no_duration_key_carries_a_hedge_word_of_its_own():
     """
     import json
 
-    en = json.loads((REPO_ROOT / "orchestrator" / "locales" / "en.json").read_text(encoding="utf-8"))
-    ru = json.loads((REPO_ROOT / "orchestrator" / "locales" / "ru.json").read_text(encoding="utf-8"))
+    en = json.loads(
+        (REPO_ROOT / "orchestrator" / "locales" / "en.json").read_text(encoding="utf-8")
+    )
+    ru = json.loads(
+        (REPO_ROOT / "orchestrator" / "locales" / "ru.json").read_text(encoding="utf-8")
+    )
     for catalog, hedge in ((en, "about"), (ru, "около")):
         for key in ("duration.under_a_minute", "duration.minutes", "duration.hours"):
             assert hedge not in catalog[key]
@@ -972,7 +1028,9 @@ async def test_stage_uploading_carries_percent(client, queries_stub):
     assert "90%" in resp.text
 
 
-async def test_stage_cancelling_does_not_carry_the_countdown_class(client, queries_stub):
+async def test_stage_cancelling_does_not_carry_the_countdown_class(
+    client, queries_stub
+):
     """The cancelling chip has its own class rather than reusing
     chip--deleting: that class is selected by name by the countdown
     ticker, and a cancelling row picked up by that selector would start
@@ -1009,7 +1067,9 @@ async def test_stage_cancelling_does_not_carry_the_countdown_class(client, queri
 # --- Converted-edition detail and the stereo badge ----------------------
 
 
-async def test_converted_detail_line_appears_only_for_a_conversion(client, queries_stub):
+async def test_converted_detail_line_appears_only_for_a_conversion(
+    client, queries_stub
+):
     queries_stub.rows = [
         _row(
             title_name="As-is Clip",
@@ -1023,7 +1083,9 @@ async def test_converted_detail_line_appears_only_for_a_conversion(client, queri
     assert "Converted from" not in resp.text
 
 
-async def test_converted_detail_line_names_source_codec_and_bitrate(client, queries_stub):
+async def test_converted_detail_line_names_source_codec_and_bitrate(
+    client, queries_stub
+):
     queries_stub.rows = [
         _row(
             title_name="Converted Clip",
@@ -1151,10 +1213,15 @@ async def test_failed_row_has_reason_prefix_no_copy_no_thumbnail(client, queries
     assert "Dismiss" in resp.text
 
 
-async def test_dismiss_deletes_objects_before_rows_and_frees_slug(client, queries_stub, storage_stub):
+async def test_dismiss_deletes_objects_before_rows_and_frees_slug(
+    client, queries_stub, storage_stub
+):
     title_id = uuid.uuid4()
     edition_id = uuid.uuid4()
-    queries_stub.failed_keys_by_id[title_id] = [f"{edition_id}.mp4", f"{edition_id}.jpg"]
+    queries_stub.failed_keys_by_id[title_id] = [
+        f"{edition_id}.mp4",
+        f"{edition_id}.jpg",
+    ]
 
     async with client:
         resp = await client.post(f"/library/{title_id}/dismiss")
@@ -1182,7 +1249,9 @@ async def test_dismiss_refuses_an_active_title(client, queries_stub, monkeypatch
 # --- Cancel and retry: every kind of work, one lifecycle ----------------
 
 
-async def test_cancel_on_a_queued_job_deletes_objects_before_the_row(client, monkeypatch):
+async def test_cancel_on_a_queued_job_deletes_objects_before_the_row(
+    client, monkeypatch
+):
     title_id = uuid.uuid4()
     calls = []
 
@@ -1202,8 +1271,12 @@ async def test_cancel_on_a_queued_job_deletes_objects_before_the_row(client, mon
     def spy_delete_object(key):
         calls.append(f"object:{key}")
 
-    monkeypatch.setattr(queries, "live_jobs_for_title", fake_job_for_title, raising=False)
-    monkeypatch.setattr(queries, "request_job_cancel", fake_request_cancel, raising=False)
+    monkeypatch.setattr(
+        queries, "live_jobs_for_title", fake_job_for_title, raising=False
+    )
+    monkeypatch.setattr(
+        queries, "request_job_cancel", fake_request_cancel, raising=False
+    )
     monkeypatch.setattr(
         queries, "never_active_title_object_keys", fake_never_active_keys, raising=False
     )
@@ -1219,7 +1292,9 @@ async def test_cancel_on_a_queued_job_deletes_objects_before_the_row(client, mon
     assert calls == ["keys", "object:a.mp4", "object:a.jpg", "delete_rows"]
 
 
-async def test_cancel_on_a_running_job_only_sets_the_flag_no_hard_delete(client, monkeypatch):
+async def test_cancel_on_a_running_job_only_sets_the_flag_no_hard_delete(
+    client, monkeypatch
+):
     title_id = uuid.uuid4()
     delete_calls = []
 
@@ -1232,8 +1307,12 @@ async def test_cancel_on_a_running_job_only_sets_the_flag_no_hard_delete(client,
     async def fake_delete_never_active(conn, tid):
         delete_calls.append(tid)
 
-    monkeypatch.setattr(queries, "live_jobs_for_title", fake_job_for_title, raising=False)
-    monkeypatch.setattr(queries, "request_job_cancel", fake_request_cancel, raising=False)
+    monkeypatch.setattr(
+        queries, "live_jobs_for_title", fake_job_for_title, raising=False
+    )
+    monkeypatch.setattr(
+        queries, "request_job_cancel", fake_request_cancel, raising=False
+    )
     monkeypatch.setattr(
         queries, "delete_never_active_title", fake_delete_never_active, raising=False
     )
@@ -1249,15 +1328,21 @@ async def test_cancel_against_a_title_with_no_live_job_is_refused(client, monkey
     async def fake_job_for_title(conn, tid):
         return []
 
-    monkeypatch.setattr(queries, "live_jobs_for_title", fake_job_for_title, raising=False)
+    monkeypatch.setattr(
+        queries, "live_jobs_for_title", fake_job_for_title, raising=False
+    )
 
     async with client:
-        resp = await client.post(f"/library/{uuid.uuid4()}/cancel", follow_redirects=False)
+        resp = await client.post(
+            f"/library/{uuid.uuid4()}/cancel", follow_redirects=False
+        )
 
     assert resp.status_code == 404
 
 
-async def test_cancel_on_a_season_stops_every_queued_job_then_drops_the_title(client, monkeypatch):
+async def test_cancel_on_a_season_stops_every_queued_job_then_drops_the_title(
+    client, monkeypatch
+):
     title_id = uuid.uuid4()
     cancelled = []
     title_deletes = []
@@ -1276,7 +1361,9 @@ async def test_cancel_on_a_season_stops_every_queued_job_then_drops_the_title(cl
         title_deletes.append(tid)
 
     monkeypatch.setattr(queries, "live_jobs_for_title", fake_live_jobs, raising=False)
-    monkeypatch.setattr(queries, "request_job_cancel", fake_request_cancel, raising=False)
+    monkeypatch.setattr(
+        queries, "request_job_cancel", fake_request_cancel, raising=False
+    )
     monkeypatch.setattr(
         queries, "never_active_title_object_keys", fake_never_active_keys, raising=False
     )
@@ -1320,8 +1407,12 @@ async def test_cancel_on_a_season_with_a_running_job_drops_only_the_queued_episo
         title_deletes.append(tid)
 
     monkeypatch.setattr(queries, "live_jobs_for_title", fake_live_jobs, raising=False)
-    monkeypatch.setattr(queries, "request_job_cancel", fake_request_cancel, raising=False)
-    monkeypatch.setattr(routes_titles, "cancel_never_active_episode", fake_drop_episode, raising=False)
+    monkeypatch.setattr(
+        queries, "request_job_cancel", fake_request_cancel, raising=False
+    )
+    monkeypatch.setattr(
+        routes_titles, "cancel_never_active_episode", fake_drop_episode, raising=False
+    )
     monkeypatch.setattr(
         queries, "delete_never_active_title", fake_delete_never_active, raising=False
     )
@@ -1336,7 +1427,9 @@ async def test_cancel_on_a_season_with_a_running_job_drops_only_the_queued_episo
 
 
 @pytest.mark.integration
-async def test_cancel_never_active_delete_refuses_a_title_that_has_ever_been_active(raw_conn):
+async def test_cancel_never_active_delete_refuses_a_title_that_has_ever_been_active(
+    raw_conn,
+):
     """Proven against real Postgres: a title that
     ever went active can never be hard-deleted through this door, no
     matter how it is reached -- only a title whose address never went
@@ -1419,7 +1512,11 @@ async def test_retry_refuses_a_title_that_is_not_failed(client, queries_stub):
 async def test_failed_row_has_retry_before_dismiss(client, queries_stub):
     title_id = uuid.uuid4()
     queries_stub.rows = [
-        _row(title_id=title_id, title_status="failed", failure_reason="failed.reason.upload")
+        _row(
+            title_id=title_id,
+            title_status="failed",
+            failure_reason="failed.reason.upload",
+        )
     ]
 
     async with client:
@@ -1490,7 +1587,9 @@ async def test_active_row_has_rename_delete_and_check_actions(client, queries_st
     assert "/check/active-actions-clip" in resp.text
 
 
-async def test_pending_delete_row_shows_countdown_chip_and_future_deadline(client, queries_stub):
+async def test_pending_delete_row_shows_countdown_chip_and_future_deadline(
+    client, queries_stub
+):
     from datetime import datetime, timedelta, timezone
 
     deadline = datetime.now(timezone.utc) + timedelta(seconds=200)
@@ -1506,12 +1605,16 @@ async def test_pending_delete_row_shows_countdown_chip_and_future_deadline(clien
     assert int(match.group(1)) > time.time() * 1000
 
 
-async def test_pending_delete_row_has_undo_and_purge_controls_with_native_confirm(client, queries_stub):
+async def test_pending_delete_row_has_undo_and_purge_controls_with_native_confirm(
+    client, queries_stub
+):
     from datetime import datetime, timedelta, timezone
 
     title_id = uuid.uuid4()
     deadline = datetime.now(timezone.utc) + timedelta(seconds=200)
-    queries_stub.rows = [_row(title_id=title_id, title_status="pending_delete", delete_at=deadline)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="pending_delete", delete_at=deadline)
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -1585,15 +1688,23 @@ async def action_client(_action_env, raw_conn, signed_in):
 async def _create_title(conn, name: str, slug: str):
     edition_id = uuid.uuid4()
     object_key = f"{edition_id}.mp4"
-    title_id = await queries.create_title_with_edition(conn, name, slug, edition_id, object_key)
+    title_id = await queries.create_title_with_edition(
+        conn, name, slug, edition_id, object_key
+    )
     return title_id, edition_id, object_key
 
 
 @pytest.mark.integration
-async def test_rename_keeps_old_address_resolving_and_new_one_works(action_client, raw_conn):
-    title_id, _, _ = await _create_title(raw_conn, "Rename Source", "rename-source-slug")
+async def test_rename_keeps_old_address_resolving_and_new_one_works(
+    action_client, raw_conn
+):
+    title_id, _, _ = await _create_title(
+        raw_conn, "Rename Source", "rename-source-slug"
+    )
 
-    resp = await action_client.post(f"/library/{title_id}/rename", data={"name": "Rename Target"})
+    resp = await action_client.post(
+        f"/library/{title_id}/rename", data={"name": "Rename Target"}
+    )
 
     assert resp.status_code == 200
     assert "rename-source-slug" in resp.text
@@ -1605,16 +1716,22 @@ async def test_rename_keeps_old_address_resolving_and_new_one_works(action_clien
     assert new is not None and new["status"] == "active"
     assert old["title_id"] == new["title_id"] == title_id
 
-    old_v_resp = await action_client.get("/v/rename-source-slug", follow_redirects=False)
+    old_v_resp = await action_client.get(
+        "/v/rename-source-slug", follow_redirects=False
+    )
     new_v_resp = await action_client.get("/v/rename-target", follow_redirects=False)
     assert old_v_resp.status_code == 302
     assert new_v_resp.status_code == 302
 
 
 @pytest.mark.integration
-async def test_rename_onto_taken_slug_gets_suffixed_and_banner_names_it(action_client, raw_conn):
+async def test_rename_onto_taken_slug_gets_suffixed_and_banner_names_it(
+    action_client, raw_conn
+):
     await _create_title(raw_conn, "Rename Collision Target", "rename-collision-target")
-    title_id, _, _ = await _create_title(raw_conn, "Rename Collision Source", "rename-collision-source")
+    title_id, _, _ = await _create_title(
+        raw_conn, "Rename Collision Source", "rename-collision-source"
+    )
 
     resp = await action_client.post(
         f"/library/{title_id}/rename", data={"name": "Rename Collision Target"}
@@ -1630,7 +1747,9 @@ async def test_rename_onto_taken_slug_gets_suffixed_and_banner_names_it(action_c
 @pytest.mark.integration
 async def test_rename_similar_slug_shows_warning_in_response(action_client, raw_conn):
     await _create_title(raw_conn, "RenameSimilarWarnCase", "renamesimilarwarncase")
-    title_id, _, _ = await _create_title(raw_conn, "Rename Similar Source", "rename-similar-source")
+    title_id, _, _ = await _create_title(
+        raw_conn, "Rename Similar Source", "rename-similar-source"
+    )
 
     resp = await action_client.post(
         f"/library/{title_id}/rename", data={"name": "Rename:Similar:Warn:Case"}
@@ -1642,8 +1761,12 @@ async def test_rename_similar_slug_shows_warning_in_response(action_client, raw_
 
 
 @pytest.mark.integration
-async def test_delete_marks_pending_and_row_carries_a_future_deadline(action_client, raw_conn):
-    title_id, edition_id, _ = await _create_title(raw_conn, "Delete Wording", "delete-wording-slug")
+async def test_delete_marks_pending_and_row_carries_a_future_deadline(
+    action_client, raw_conn
+):
+    title_id, edition_id, _ = await _create_title(
+        raw_conn, "Delete Wording", "delete-wording-slug"
+    )
     # The row's technical-detail line has to survive a real render -- give
     # this edition the fields the add worker always sets before flipping a
     # title to 'active' (create_title_with_edition alone, the CLI's own
@@ -1691,7 +1814,9 @@ async def test_undo_restores_active_and_v_redirects_again(action_client, raw_con
 
 @pytest.mark.integration
 async def test_undo_refuses_a_title_not_pending_deletion(action_client, raw_conn):
-    title_id, _, _ = await _create_title(raw_conn, "Undo Not Pending", "undo-not-pending-slug")
+    title_id, _, _ = await _create_title(
+        raw_conn, "Undo Not Pending", "undo-not-pending-slug"
+    )
 
     resp = await action_client.post(f"/library/{title_id}/undo")
 
@@ -1729,8 +1854,12 @@ async def test_purge_deletes_objects_and_marks_deleted_before_response_returns(
 
 
 @pytest.mark.integration
-async def test_purge_refuses_a_title_that_is_not_pending_deletion(action_client, raw_conn):
-    title_id, _, _ = await _create_title(raw_conn, "Purge Not Pending", "purge-not-pending-slug")
+async def test_purge_refuses_a_title_that_is_not_pending_deletion(
+    action_client, raw_conn
+):
+    title_id, _, _ = await _create_title(
+        raw_conn, "Purge Not Pending", "purge-not-pending-slug"
+    )
 
     resp = await action_client.post(f"/library/{title_id}/purge")
 
@@ -1740,7 +1869,9 @@ async def test_purge_refuses_a_title_that_is_not_pending_deletion(action_client,
 
 
 def test_routes_titles_never_writes_slug_history_directly():
-    text = (REPO_ROOT / "orchestrator" / "web" / "routes_titles.py").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "orchestrator" / "web" / "routes_titles.py").read_text(
+        encoding="utf-8"
+    )
     assert text.count("INSERT INTO slug_history") == 0
     assert text.count("reap_once") >= 1
 
@@ -1787,7 +1918,9 @@ async def test_the_storage_calls_run_off_the_event_loop_thread(
 # --- Cross-origin write refusal ------------------------------------------
 
 
-async def test_a_destructive_post_from_another_site_is_refused(client, queries_stub, storage_stub):
+async def test_a_destructive_post_from_another_site_is_refused(
+    client, queries_stub, storage_stub
+):
     """A page open in another tab can cross-origin-POST these routes with a
     plain form -- no CORS permission is needed to *send* one, and these
     routes matter for their side effects, not their bodies.
@@ -1870,14 +2003,18 @@ async def test_a_one_episode_title_film_row_context_is_unchanged(client, queries
     assert queries_stub.episodes_for_library_title_ids == []
 
 
-async def test_library_route_query_count_does_not_scale_with_episode_count(client, queries_stub):
+async def test_library_route_query_count_does_not_scale_with_episode_count(
+    client, queries_stub
+):
     """However many series a screen holds, and however many episodes each
     one has, GET /library calls queries.episodes_for_library exactly
     once -- never once per title and never once per episode.
     """
     for _ in range(3):
         title_id = uuid.uuid4()
-        queries_stub.rows.append(_row(title_id=title_id, episode_count=5, ready_count=5))
+        queries_stub.rows.append(
+            _row(title_id=title_id, episode_count=5, ready_count=5)
+        )
         queries_stub.episodes_by_title[title_id] = [
             _episode(title_id=title_id, number=n) for n in range(1, 6)
         ]
@@ -1890,16 +2027,24 @@ async def test_library_route_query_count_does_not_scale_with_episode_count(clien
     assert len(queries_stub.episodes_for_library_title_ids) == 3
 
 
-async def test_episode_size_and_duration_round_trip_into_the_episode_row(client, queries_stub):
+async def test_episode_size_and_duration_round_trip_into_the_episode_row(
+    client, queries_stub
+):
     """The technical detail `episodes_for_library` reads per episode
     (size, duration) survives all the way to the rendered row -- the
     facts the aggregate chip moves down from the title row.
     """
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
     queries_stub.episodes_by_title[title_id] = [
-        _episode(title_id=title_id, number=1, size_bytes=1_073_741_824, duration_seconds=125),
-        _episode(title_id=title_id, number=2, size_bytes=1_073_741_824, duration_seconds=125),
+        _episode(
+            title_id=title_id, number=1, size_bytes=1_073_741_824, duration_seconds=125
+        ),
+        _episode(
+            title_id=title_id, number=2, size_bytes=1_073_741_824, duration_seconds=125
+        ),
     ]
 
     async with client:
@@ -1909,12 +2054,20 @@ async def test_episode_size_and_duration_round_trip_into_the_episode_row(client,
     assert resp.text.count("2:05") == 2
 
 
-async def test_aggregate_chip_shows_ready_of_total_and_current_episode(client, queries_stub):
+async def test_aggregate_chip_shows_ready_of_total_and_current_episode(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(
-        title_id=title_id, title_status="active", episode_count=12, ready_count=3,
-        job_episode_number=4, **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=57.0),
-    )]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            episode_count=12,
+            ready_count=3,
+            job_episode_number=4,
+            **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=57.0),
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=n) for n in range(1, 13)
     ]
@@ -1927,7 +2080,9 @@ async def test_aggregate_chip_shows_ready_of_total_and_current_episode(client, q
 
 async def test_aggregate_chip_absent_once_settled(client, queries_stub):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=4, ready_count=4)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=4, ready_count=4)
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=n) for n in range(1, 5)
     ]
@@ -1938,12 +2093,20 @@ async def test_aggregate_chip_absent_once_settled(client, queries_stub):
     assert "ready, episode" not in resp.text
 
 
-async def test_aggregate_sentence_names_the_in_flight_episode_number(client, queries_stub):
+async def test_aggregate_sentence_names_the_in_flight_episode_number(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(
-        title_id=title_id, title_status="active", episode_count=12, ready_count=4,
-        job_episode_number=5, **_job(job_kind="transcode", job_db_stage="queued"),
-    )]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            episode_count=12,
+            ready_count=4,
+            job_episode_number=5,
+            **_job(job_kind="transcode", job_db_stage="queued"),
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=n) for n in range(1, 13)
     ]
@@ -1957,9 +2120,13 @@ async def test_aggregate_sentence_names_the_in_flight_episode_number(client, que
 # --- The row that opens -------------------------------------------------
 
 
-async def test_disclosure_renders_with_the_right_episode_count_when_settled(client, queries_stub):
+async def test_disclosure_renders_with_the_right_episode_count_when_settled(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=3, ready_count=3)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=3, ready_count=3)
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=n) for n in (1, 2, 3)
     ]
@@ -1972,9 +2139,13 @@ async def test_disclosure_renders_with_the_right_episode_count_when_settled(clie
     assert f'data-episode-id="{title_id}"' in resp.text
 
 
-async def test_disclosure_is_closed_by_default_when_everything_is_settled(client, queries_stub):
+async def test_disclosure_is_closed_by_default_when_everything_is_settled(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1),
         _episode(title_id=title_id, number=2),
@@ -1987,16 +2158,26 @@ async def test_disclosure_is_closed_by_default_when_everything_is_settled(client
     assert " open" not in details_tag
 
 
-async def test_disclosure_is_open_by_default_when_an_episode_is_in_flight(client, queries_stub):
+async def test_disclosure_is_open_by_default_when_an_episode_is_in_flight(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(
-        title_id=title_id, title_status="active", episode_count=2, ready_count=1,
-        job_episode_number=2, **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
-    )]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            episode_count=2,
+            ready_count=1,
+            job_episode_number=2,
+            **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1),
         _episode(
-            title_id=title_id, number=2, edition_status="preparing",
+            title_id=title_id,
+            number=2,
+            edition_status="preparing",
             **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
         ),
     ]
@@ -2008,12 +2189,27 @@ async def test_disclosure_is_open_by_default_when_an_episode_is_in_flight(client
     assert " open" in details_tag
 
 
-async def test_disclosure_is_open_by_default_when_an_episode_has_failed(client, queries_stub):
+async def test_disclosure_is_open_by_default_when_an_episode_has_failed(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            episode_count=2,
+            ready_count=1,
+            failed_count=1,
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1),
-        _episode(title_id=title_id, number=2, edition_status="failed", edition_failure_reason="failed.reason.upload"),
+        _episode(
+            title_id=title_id,
+            number=2,
+            edition_status="failed",
+            edition_failure_reason="failed.reason.upload",
+        ),
     ]
 
     async with client:
@@ -2025,7 +2221,15 @@ async def test_disclosure_is_open_by_default_when_an_episode_has_failed(client, 
 
 async def test_disclosure_summary_shows_failed_count_and_chip(client, queries_stub):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            episode_count=2,
+            ready_count=1,
+            failed_count=1,
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1),
         _episode(title_id=title_id, number=2, edition_status="failed"),
@@ -2038,18 +2242,38 @@ async def test_disclosure_summary_shows_failed_count_and_chip(client, queries_st
     assert "chip--refused" in resp.text
 
 
-async def test_two_chips_render_together_while_the_title_is_already_active(client, queries_stub):
+async def test_two_chips_render_together_while_the_title_is_already_active(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(
-        title_id=title_id, title_status="active", slug="my-season",
-        episode_count=2, ready_count=1, job_episode_number=2,
-        **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=57.0, job_eta_seconds=200),
-    )]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            slug="my-season",
+            episode_count=2,
+            ready_count=1,
+            job_episode_number=2,
+            **_job(
+                job_kind="transcode",
+                job_db_stage="working",
+                job_progress_pct=57.0,
+                job_eta_seconds=200,
+            ),
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1),
         _episode(
-            title_id=title_id, number=2, edition_status="preparing",
-            **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=57.0, job_eta_seconds=200),
+            title_id=title_id,
+            number=2,
+            edition_status="preparing",
+            **_job(
+                job_kind="transcode",
+                job_db_stage="working",
+                job_progress_pct=57.0,
+                job_eta_seconds=200,
+            ),
         ),
     ]
 
@@ -2061,12 +2285,26 @@ async def test_two_chips_render_together_while_the_title_is_already_active(clien
     assert "57%" in resp.text
 
 
-async def test_episode_row_shows_its_own_address_copy_button_chip_size_and_duration(client, queries_stub):
+async def test_episode_row_shows_its_own_address_copy_button_chip_size_and_duration(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", slug="my-show", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            slug="my-show",
+            episode_count=2,
+            ready_count=2,
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [
-        _episode(title_id=title_id, number=1, size_bytes=1_073_741_824, duration_seconds=125),
-        _episode(title_id=title_id, number=2, size_bytes=1_073_741_824, duration_seconds=125),
+        _episode(
+            title_id=title_id, number=1, size_bytes=1_073_741_824, duration_seconds=125
+        ),
+        _episode(
+            title_id=title_id, number=2, size_bytes=1_073_741_824, duration_seconds=125
+        ),
     ]
 
     async with client:
@@ -2074,15 +2312,19 @@ async def test_episode_row_shows_its_own_address_copy_button_chip_size_and_durat
 
     assert "https://mytube.example/v/my-show/1" in resp.text
     assert "https://mytube.example/v/my-show/2" in resp.text
-    assert "data-copy-text=\"https://mytube.example/v/my-show/1\"" in resp.text
+    assert 'data-copy-text="https://mytube.example/v/my-show/1"' in resp.text
     assert resp.text.count("1.0 GB") == 2
 
 
-async def test_episode_row_carries_its_own_data_episode_id_attribute(client, queries_stub):
+async def test_episode_row_carries_its_own_data_episode_id_attribute(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     ep1 = _episode(title_id=title_id, number=1)
     ep2 = _episode(title_id=title_id, number=2)
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
     queries_stub.episodes_by_title[title_id] = [ep1, ep2]
 
     async with client:
@@ -2092,22 +2334,37 @@ async def test_episode_row_carries_its_own_data_episode_id_attribute(client, que
     assert f'data-episode-id="{ep2["episode_id"]}"' in resp.text
 
 
-async def test_episode_row_in_flight_collapses_actions_to_cancel_only(client, queries_stub):
+async def test_episode_row_in_flight_collapses_actions_to_cancel_only(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     ep2 = _episode(
-        title_id=title_id, number=2, edition_status="preparing",
+        title_id=title_id,
+        number=2,
+        edition_status="preparing",
         **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
     )
-    queries_stub.rows = [_row(
-        title_id=title_id, title_status="active", episode_count=2, ready_count=1,
-        job_episode_number=2, **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
-    )]
-    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            episode_count=2,
+            ready_count=1,
+            job_episode_number=2,
+            **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
+        )
+    ]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        ep2,
+    ]
 
     async with client:
         resp = await client.get("/library")
 
-    section = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split("</li>")[0]
+    section = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split(
+        "</li>"
+    )[0]
     assert 'data-control="cancel"' in section
     assert 'data-control="check"' not in section
 
@@ -2125,7 +2382,10 @@ async def test_episode_row_queued_chip_carries_no_number(client, queries_stub):
     queries_stub.rows = [
         _row(title_id=title_id, title_status="active", episode_count=2, ready_count=1)
     ]
-    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        ep2,
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -2165,7 +2425,10 @@ async def test_episode_row_queued_chip_stays_number_free_once_the_converter_is_s
     queries_stub.rows = [
         _row(title_id=title_id, title_status="active", episode_count=2, ready_count=1)
     ]
-    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        ep2,
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -2184,9 +2447,25 @@ async def test_episode_row_queued_chip_stays_number_free_once_the_converter_is_s
 
 async def test_episode_row_failed_variant_and_reason_line(client, queries_stub):
     title_id = uuid.uuid4()
-    ep2 = _episode(title_id=title_id, number=2, edition_status="failed", edition_failure_reason="failed.reason.upload")
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)]
-    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+    ep2 = _episode(
+        title_id=title_id,
+        number=2,
+        edition_status="failed",
+        edition_failure_reason="failed.reason.upload",
+    )
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            episode_count=2,
+            ready_count=1,
+            failed_count=1,
+        )
+    ]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        ep2,
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -2202,7 +2481,15 @@ async def test_episode_row_failed_variant_and_reason_line(client, queries_stub):
 
 async def test_episode_row_ready_and_settled_shows_check_link(client, queries_stub):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", slug="settled-show", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            slug="settled-show",
+            episode_count=2,
+            ready_count=2,
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1),
         _episode(title_id=title_id, number=2),
@@ -2215,14 +2502,24 @@ async def test_episode_row_ready_and_settled_shows_check_link(client, queries_st
     assert 'data-control="check"' in resp.text
 
 
-async def test_episode_row_ready_and_settled_check_link_is_episode_scoped(client, queries_stub):
+async def test_episode_row_ready_and_settled_check_link_is_episode_scoped(
+    client, queries_stub
+):
     """An episode's own Check link points at its own numbered
     check page, not the title's bare one -- distinct from the title row's
     own Check action asserted above, which still exists and still points
     at the bare address.
     """
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", slug="settled-show-2", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            slug="settled-show-2",
+            episode_count=2,
+            ready_count=2,
+        )
+    ]
     ep1 = _episode(title_id=title_id, number=1)
     ep2 = _episode(title_id=title_id, number=2)
     queries_stub.episodes_by_title[title_id] = [ep1, ep2]
@@ -2230,36 +2527,73 @@ async def test_episode_row_ready_and_settled_check_link_is_episode_scoped(client
     async with client:
         resp = await client.get("/library")
 
-    section1 = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split("</li>")[0]
-    section2 = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split("</li>")[0]
+    section1 = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split(
+        "</li>"
+    )[0]
+    section2 = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split(
+        "</li>"
+    )[0]
     assert 'href="/check/settled-show-2/1"' in section1
     assert 'href="/check/settled-show-2/2"' in section2
 
 
-async def test_episode_row_ready_and_settled_shows_delete_episode_button(client, queries_stub):
+async def test_episode_row_ready_and_settled_shows_delete_episode_button(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", slug="deletable-show", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            slug="deletable-show",
+            episode_count=2,
+            ready_count=2,
+        )
+    ]
     ep1 = _episode(title_id=title_id, number=1)
-    queries_stub.episodes_by_title[title_id] = [ep1, _episode(title_id=title_id, number=2)]
+    queries_stub.episodes_by_title[title_id] = [
+        ep1,
+        _episode(title_id=title_id, number=2),
+    ]
 
     async with client:
         resp = await client.get("/library")
 
-    section = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split("</li>")[0]
+    section = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split(
+        "</li>"
+    )[0]
     assert f'action="/library/episode/{ep1["episode_id"]}/delete"' in section
     assert 'data-control="delete"' in section
 
 
 async def test_episode_row_failed_shows_retry_and_dismiss(client, queries_stub):
     title_id = uuid.uuid4()
-    ep2 = _episode(title_id=title_id, number=2, edition_status="failed", edition_failure_reason="failed.reason.upload")
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)]
-    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+    ep2 = _episode(
+        title_id=title_id,
+        number=2,
+        edition_status="failed",
+        edition_failure_reason="failed.reason.upload",
+    )
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            episode_count=2,
+            ready_count=1,
+            failed_count=1,
+        )
+    ]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        ep2,
+    ]
 
     async with client:
         resp = await client.get("/library")
 
-    section = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split("</li>")[0]
+    section = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split(
+        "</li>"
+    )[0]
     assert f'action="/library/episode/{ep2["episode_id"]}/retry"' in section
     assert f'action="/library/episode/{ep2["episode_id"]}/dismiss"' in section
     assert 'data-control="retry"' in section
@@ -2274,40 +2608,74 @@ async def test_episode_row_ready_and_settled_shows_add_edition_control_with_righ
 ):
     title_id = uuid.uuid4()
     ep1 = _episode(title_id=title_id, number=1, source_path="ep-01.mkv")
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
-    queries_stub.episodes_by_title[title_id] = [ep1, _episode(title_id=title_id, number=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
+    queries_stub.episodes_by_title[title_id] = [
+        ep1,
+        _episode(title_id=title_id, number=2),
+    ]
 
     async with client:
         resp = await client.get("/library")
 
-    section = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split("</li>")[0]
+    section = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split(
+        "</li>"
+    )[0]
     assert 'data-control="add-edition"' in section
     assert f'href="/add/ep-01.mkv?target_episode_id={ep1["episode_id"]}"' in section
 
 
 async def test_episode_row_failed_also_shows_add_edition_control(client, queries_stub):
     title_id = uuid.uuid4()
-    ep2 = _episode(title_id=title_id, number=2, edition_status="failed", edition_failure_reason="failed.reason.upload")
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)]
-    queries_stub.episodes_by_title[title_id] = [_episode(title_id=title_id, number=1), ep2]
+    ep2 = _episode(
+        title_id=title_id,
+        number=2,
+        edition_status="failed",
+        edition_failure_reason="failed.reason.upload",
+    )
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            episode_count=2,
+            ready_count=1,
+            failed_count=1,
+        )
+    ]
+    queries_stub.episodes_by_title[title_id] = [
+        _episode(title_id=title_id, number=1),
+        ep2,
+    ]
 
     async with client:
         resp = await client.get("/library")
 
-    section = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split("</li>")[0]
+    section = resp.text.split(f'data-episode-id="{ep2["episode_id"]}"')[1].split(
+        "</li>"
+    )[0]
     assert 'data-control="add-edition"' in section
 
 
-async def test_episode_row_pending_delete_shows_countdown_and_undo_purge(client, queries_stub):
+async def test_episode_row_pending_delete_shows_countdown_and_undo_purge(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     ep1 = _episode(title_id=title_id, number=1, episode_status="pending_delete")
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=1)]
-    queries_stub.episodes_by_title[title_id] = [ep1, _episode(title_id=title_id, number=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=1)
+    ]
+    queries_stub.episodes_by_title[title_id] = [
+        ep1,
+        _episode(title_id=title_id, number=2),
+    ]
 
     async with client:
         resp = await client.get("/library")
 
-    section = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split("</li>")[0]
+    section = resp.text.split(f'data-episode-id="{ep1["episode_id"]}"')[1].split(
+        "</li>"
+    )[0]
     assert "chip--deleting" in section
     assert f'action="/library/episode/{ep1["episode_id"]}/undo"' in section
     assert f'action="/library/episode/{ep1["episode_id"]}/purge"' in section
@@ -2329,9 +2697,13 @@ def _edition_section(resp_text: str, edition_id) -> str:
     return resp_text.split(f'data-edition-id="{edition_id}"')[1].split("</li>")[0]
 
 
-async def test_edition_row_disclosure_absent_for_a_single_edition_episode(client, queries_stub):
+async def test_edition_row_disclosure_absent_for_a_single_edition_episode(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1, edition_count=1),
         _episode(title_id=title_id, number=2, edition_count=1),
@@ -2345,15 +2717,30 @@ async def test_edition_row_disclosure_absent_for_a_single_edition_episode(client
     assert queries_stub.editions_for_library_episode_ids == []
 
 
-async def test_edition_row_disclosure_renders_closed_with_count_for_two_editions(client, queries_stub):
+async def test_edition_row_disclosure_renders_closed_with_count_for_two_editions(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     ep1 = _episode(title_id=title_id, number=1, edition_count=2)
     ep2 = _episode(title_id=title_id, number=2, edition_count=1)
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", slug="two-ed", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            slug="two-ed",
+            episode_count=2,
+            ready_count=2,
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [ep1, ep2]
     default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
-    other_edition = _edition(episode_id=ep1["episode_id"], is_default=False, slug="dub-ru")
-    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, other_edition]
+    other_edition = _edition(
+        episode_id=ep1["episode_id"], is_default=False, slug="dub-ru"
+    )
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [
+        default_edition,
+        other_edition,
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -2364,15 +2751,24 @@ async def test_edition_row_disclosure_renders_closed_with_count_for_two_editions
     assert "2 editions" in resp.text
 
 
-async def test_edition_row_renders_for_every_edition_including_the_default(client, queries_stub):
+async def test_edition_row_renders_for_every_edition_including_the_default(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     ep1 = _episode(title_id=title_id, number=1, edition_count=2)
     ep2 = _episode(title_id=title_id, number=2, edition_count=1)
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
     queries_stub.episodes_by_title[title_id] = [ep1, ep2]
     default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
-    other_edition = _edition(episode_id=ep1["episode_id"], is_default=False, slug="dub-ru")
-    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, other_edition]
+    other_edition = _edition(
+        episode_id=ep1["episode_id"], is_default=False, slug="dub-ru"
+    )
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [
+        default_edition,
+        other_edition,
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -2387,11 +2783,16 @@ async def test_edition_row_default_has_badge_no_make_default_and_disabled_delete
     title_id = uuid.uuid4()
     ep1 = _episode(title_id=title_id, number=1, edition_count=2)
     ep2 = _episode(title_id=title_id, number=2, edition_count=1)
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
     queries_stub.episodes_by_title[title_id] = [ep1, ep2]
     default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
     other_edition = _edition(episode_id=ep1["episode_id"], is_default=False)
-    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, other_edition]
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [
+        default_edition,
+        other_edition,
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -2403,32 +2804,46 @@ async def test_edition_row_default_has_badge_no_make_default_and_disabled_delete
     assert "This is the default edition" in section
 
 
-async def test_edition_row_non_default_has_make_default_and_enabled_delete(client, queries_stub):
+async def test_edition_row_non_default_has_make_default_and_enabled_delete(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     ep1 = _episode(title_id=title_id, number=1, edition_count=2)
     ep2 = _episode(title_id=title_id, number=2, edition_count=1)
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
     queries_stub.episodes_by_title[title_id] = [ep1, ep2]
     default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
     other_edition = _edition(episode_id=ep1["episode_id"], is_default=False)
-    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, other_edition]
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [
+        default_edition,
+        other_edition,
+    ]
 
     async with client:
         resp = await client.get("/library")
 
     section = _edition_section(resp.text, other_edition["edition_id"])
-    assert f'action="/library/edition/{other_edition["edition_id"]}/make-default"' in section
+    assert (
+        f'action="/library/edition/{other_edition["edition_id"]}/make-default"'
+        in section
+    )
     assert f'action="/library/edition/{other_edition["edition_id"]}/delete"' in section
     assert 'data-control="edition-make-default"' in section
     assert 'data-control="edition-delete"' in section
     assert "disabled" not in section
 
 
-async def test_edition_row_signs_only_detail_line_renders_when_resolved(client, queries_stub):
+async def test_edition_row_signs_only_detail_line_renders_when_resolved(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     ep1 = _episode(title_id=title_id, number=1, edition_count=2)
     ep2 = _episode(title_id=title_id, number=2, edition_count=1)
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
     queries_stub.episodes_by_title[title_id] = [ep1, ep2]
     default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
     signs_edition = _edition(
@@ -2437,7 +2852,10 @@ async def test_edition_row_signs_only_detail_line_renders_when_resolved(client, 
         subtitle_burned_language="ru",
         subtitle_burned_signs_only=True,
     )
-    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, signs_edition]
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [
+        default_edition,
+        signs_edition,
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -2447,11 +2865,15 @@ async def test_edition_row_signs_only_detail_line_renders_when_resolved(client, 
     assert "Subtitles burned: ru, signs only" in section
 
 
-async def test_edition_row_detail_line_unaffected_when_signs_only_unresolved(client, queries_stub):
+async def test_edition_row_detail_line_unaffected_when_signs_only_unresolved(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     ep1 = _episode(title_id=title_id, number=1, edition_count=2)
     ep2 = _episode(title_id=title_id, number=2, edition_count=1)
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
     queries_stub.episodes_by_title[title_id] = [ep1, ep2]
     default_edition = _edition(episode_id=ep1["episode_id"], is_default=True, slug=None)
     unresolved_edition = _edition(
@@ -2460,7 +2882,10 @@ async def test_edition_row_detail_line_unaffected_when_signs_only_unresolved(cli
         subtitle_burned_language="ru",
         subtitle_burned_signs_only=None,
     )
-    queries_stub.editions_by_episode[ep1["episode_id"]] = [default_edition, unresolved_edition]
+    queries_stub.editions_by_episode[ep1["episode_id"]] = [
+        default_edition,
+        unresolved_edition,
+    ]
 
     async with client:
         resp = await client.get("/library")
@@ -2509,7 +2934,12 @@ async def test_make_default_moves_the_pointer_and_previous_default_keeps_its_own
 async def test_deleting_the_default_edition_is_blocked_while_another_exists(
     action_client, raw_conn
 ):
-    _title_id, episode_id, edition1, _edition2 = await _create_episode_with_two_editions(
+    (
+        _title_id,
+        episode_id,
+        edition1,
+        _edition2,
+    ) = await _create_episode_with_two_editions(
         raw_conn, "Blocked Default", "blocked-default-slug"
     )
 
@@ -2547,7 +2977,12 @@ async def test_deleting_a_non_default_edition_leaves_the_pointer_where_it_was(
 
 @pytest.mark.integration
 async def test_undo_on_a_pending_edition_cancels_the_countdown(action_client, raw_conn):
-    _title_id, _episode_id, _edition1, edition2 = await _create_episode_with_two_editions(
+    (
+        _title_id,
+        _episode_id,
+        _edition1,
+        edition2,
+    ) = await _create_episode_with_two_editions(
         raw_conn, "Undo Edition", "undo-edition-slug"
     )
     await queries.mark_edition_for_delete(raw_conn, edition2, grace_seconds=3600)
@@ -2568,7 +3003,12 @@ async def test_purge_on_a_pending_edition_deletes_the_object_and_the_row(
     deleted = []
     monkeypatch.setattr(reaper_module, "delete_object", lambda key: deleted.append(key))
 
-    _title_id, _episode_id, _edition1, edition2 = await _create_episode_with_two_editions(
+    (
+        _title_id,
+        _episode_id,
+        _edition1,
+        edition2,
+    ) = await _create_episode_with_two_editions(
         raw_conn, "Purge Edition", "purge-edition-slug"
     )
     await queries.mark_edition_for_delete(raw_conn, edition2, grace_seconds=3600)
@@ -2584,16 +3024,26 @@ async def test_purge_on_a_pending_edition_deletes_the_object_and_the_row(
 # --- The poll that does not throw away what the operator did
 
 
-async def test_poll_status_follows_in_flight_episodes_for_an_already_active_series(client, queries_stub):
+async def test_poll_status_follows_in_flight_episodes_for_an_already_active_series(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(
-        title_id=title_id, title_status="active", episode_count=2, ready_count=1,
-        job_episode_number=2, **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
-    )]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            episode_count=2,
+            ready_count=1,
+            job_episode_number=2,
+            **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1),
         _episode(
-            title_id=title_id, number=2, edition_status="preparing",
+            title_id=title_id,
+            number=2,
+            edition_status="preparing",
             **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=10.0),
         ),
     ]
@@ -2605,9 +3055,13 @@ async def test_poll_status_follows_in_flight_episodes_for_an_already_active_seri
     assert 'data-row-status="preparing"' in li_tag
 
 
-async def test_poll_status_is_the_title_status_once_a_series_settles(client, queries_stub):
+async def test_poll_status_is_the_title_status_once_a_series_settles(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
+    queries_stub.rows = [
+        _row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1),
         _episode(title_id=title_id, number=2),
@@ -2620,17 +3074,27 @@ async def test_poll_status_is_the_title_status_once_a_series_settles(client, que
     assert 'data-row-status="active"' in li_tag
 
 
-async def test_in_flight_active_row_renders_address_copy_button_and_chips_together(client, queries_stub):
+async def test_in_flight_active_row_renders_address_copy_button_and_chips_together(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.rows = [_row(
-        title_id=title_id, title_status="active", slug="in-flight-show",
-        episode_count=2, ready_count=1, job_episode_number=2,
-        **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=40.0),
-    )]
+    queries_stub.rows = [
+        _row(
+            title_id=title_id,
+            title_status="active",
+            slug="in-flight-show",
+            episode_count=2,
+            ready_count=1,
+            job_episode_number=2,
+            **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=40.0),
+        )
+    ]
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1),
         _episode(
-            title_id=title_id, number=2, edition_status="preparing",
+            title_id=title_id,
+            number=2,
+            edition_status="preparing",
             **_job(job_kind="transcode", job_db_stage="working", job_progress_pct=40.0),
         ),
     ]
@@ -2639,18 +3103,26 @@ async def test_in_flight_active_row_renders_address_copy_button_and_chips_togeth
         resp = await client.get("/library")
 
     assert "https://mytube.example/v/in-flight-show" in resp.text
-    assert "data-copy-text=\"https://mytube.example/v/in-flight-show\"" in resp.text
+    assert 'data-copy-text="https://mytube.example/v/in-flight-show"' in resp.text
     assert "1 of 2 ready, episode 2" in resp.text
     assert "40%" in resp.text
 
 
-async def test_fragment_route_never_emits_the_open_attribute_on_the_episode_list(client, queries_stub):
+async def test_fragment_route_never_emits_the_open_attribute_on_the_episode_list(
+    client, queries_stub
+):
     """The default-open rule is initial-render only -- a fragment carries a failed episode
     (which would default-open on a full render) and still never sets `open`, since the poller
     already copied the operator's own choice onto it before the swap.
     """
     title_id = uuid.uuid4()
-    row = _row(title_id=title_id, title_status="active", episode_count=2, ready_count=1, failed_count=1)
+    row = _row(
+        title_id=title_id,
+        title_status="active",
+        episode_count=2,
+        ready_count=1,
+        failed_count=1,
+    )
     queries_stub.row_by_id[title_id] = row
     queries_stub.episodes_by_title[title_id] = [
         _episode(title_id=title_id, number=1),
@@ -2664,9 +3136,17 @@ async def test_fragment_route_never_emits_the_open_attribute_on_the_episode_list
     assert " open" not in details_tag
 
 
-async def test_fragment_route_renders_the_same_episode_content_as_the_full_page(client, queries_stub):
+async def test_fragment_route_renders_the_same_episode_content_as_the_full_page(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    row = _row(title_id=title_id, title_status="active", slug="parity-show", episode_count=2, ready_count=2)
+    row = _row(
+        title_id=title_id,
+        title_status="active",
+        slug="parity-show",
+        episode_count=2,
+        ready_count=2,
+    )
     queries_stub.rows = [row]
     queries_stub.row_by_id[title_id] = dict(row)
     queries_stub.episodes_by_title[title_id] = [
@@ -2692,7 +3172,7 @@ def test_poller_syncs_episode_disclosure_state_and_restores_focus_by_data_episod
     text = (REPO_ROOT / "static" / "app.js").read_text(encoding="utf-8")
     assert "_syncEpisodeState(row, fresh)" in text
     assert "_restoreFocus(fresh, focusKey)" in text
-    assert 'details[data-episode-id' in text
+    assert "details[data-episode-id" in text
     # The poller's existing entry points are unchanged -- same signature,
     # same fetch/redirect/remove/catch shape around the three new lines.
     assert "function pollLibraryRow(row) {" in text
@@ -2717,7 +3197,9 @@ async def _create_two_episode_series(conn, name: str, slug: str):
     episode1 = await queries.episode_by_number(conn, title_id, 1)
     episode1_id = episode1["episode_id"]
 
-    season_id = await conn.fetchval("SELECT id FROM seasons WHERE title_id = $1", title_id)
+    season_id = await conn.fetchval(
+        "SELECT id FROM seasons WHERE title_id = $1", title_id
+    )
     edition2 = uuid.uuid4()
     episode2_id = await conn.fetchval(
         "INSERT INTO episodes (season_id) VALUES ($1) RETURNING id", season_id
@@ -2729,7 +3211,9 @@ async def _create_two_episode_series(conn, name: str, slug: str):
         f"{edition2}.mp4",
     )
     await conn.execute(
-        "UPDATE episodes SET default_edition_id = $1 WHERE id = $2", edition2, episode2_id
+        "UPDATE episodes SET default_edition_id = $1 WHERE id = $2",
+        edition2,
+        episode2_id,
     )
     await queries.claim_episode_number(conn, title_id, episode2_id, 2)
     return title_id, slug, episode1_id, episode2_id
@@ -2767,7 +3251,9 @@ async def test_renumber_confirm_refuses_a_blank_number_inline(action_client, raw
 
 
 @pytest.mark.integration
-async def test_renumber_confirm_refuses_a_number_a_sibling_currently_holds(action_client, raw_conn):
+async def test_renumber_confirm_refuses_a_number_a_sibling_currently_holds(
+    action_client, raw_conn
+):
     _title_id, _slug, episode1_id, _episode2_id = await _create_two_episode_series(
         raw_conn, "Renumber Taken", "renumber-taken-slug"
     )
@@ -2875,6 +3361,7 @@ async def test_renumber_after_a_later_episode_claims_the_old_number_the_newer_cl
     still_reachable = await queries.resolve_episode_slug(raw_conn, slug, 9)
     assert still_reachable["episode_id"] == episode1_id
 
+
 # --- A standalone one-episode title can move into a title, from the
 # --- library ------------------------------------------------------------
 
@@ -2888,7 +3375,12 @@ async def test_move_control_renders_only_on_a_one_episode_title(client, queries_
     series_id = uuid.uuid4()
     queries_stub.rows = [
         _row(title_id=standalone_id, slug="move-control-standalone"),
-        _row(title_id=series_id, slug="move-control-series", episode_count=2, ready_count=2),
+        _row(
+            title_id=series_id,
+            slug="move-control-series",
+            episode_count=2,
+            ready_count=2,
+        ),
     ]
     queries_stub.episodes_by_title[series_id] = [
         _episode(title_id=series_id, number=1),
@@ -2905,7 +3397,9 @@ async def test_move_control_renders_only_on_a_one_episode_title(client, queries_
 
 
 @pytest.mark.integration
-async def test_move_form_prefills_name_and_number_from_the_recogniser(action_client, raw_conn):
+async def test_move_form_prefills_name_and_number_from_the_recogniser(
+    action_client, raw_conn
+):
     title_id, edition_id, _object_key = await _create_title(
         raw_conn, "Bocchi the Rock - 12", "bocchi-move-source"
     )
@@ -2935,7 +3429,11 @@ async def test_move_existing_title_repoints_and_leaves_the_object_key_untouched(
 
     resp = await action_client.post(
         f"/library/title/{source_title_id}/move",
-        data={"mode": "existing", "target_title_id": str(target_title_id), "number": "7"},
+        data={
+            "mode": "existing",
+            "target_title_id": str(target_title_id),
+            "number": "7",
+        },
     )
 
     assert resp.status_code == 200
@@ -2970,7 +3468,11 @@ async def test_move_taken_number_refuses_inline_and_keeps_the_title_selected(
 
     resp = await action_client.post(
         f"/library/title/{source_title_id}/move",
-        data={"mode": "existing", "target_title_id": str(target_title_id), "number": "1"},
+        data={
+            "mode": "existing",
+            "target_title_id": str(target_title_id),
+            "number": "1",
+        },
     )
 
     assert resp.status_code == 200
@@ -2979,7 +3481,9 @@ async def test_move_taken_number_refuses_inline_and_keeps_the_title_selected(
 
 
 @pytest.mark.integration
-async def test_move_filter_narrows_the_candidate_list_server_side(action_client, raw_conn):
+async def test_move_filter_narrows_the_candidate_list_server_side(
+    action_client, raw_conn
+):
     await _create_title(raw_conn, "Filter Match Show", "filter-match-show")
     await _create_title(raw_conn, "Unrelated Other Show", "unrelated-other-show")
     source_title_id, _edition_id, _ = await _create_title(
@@ -2996,7 +3500,9 @@ async def test_move_filter_narrows_the_candidate_list_server_side(action_client,
 
 
 @pytest.mark.integration
-async def test_move_filter_with_pattern_characters_is_matched_as_text(action_client, raw_conn):
+async def test_move_filter_with_pattern_characters_is_matched_as_text(
+    action_client, raw_conn
+):
     await _create_title(raw_conn, "50% Off Show", "fifty-percent-off-show")
     source_title_id, _edition_id, _ = await _create_title(
         raw_conn, "Percent Source Standalone", "percent-source-standalone"
@@ -3049,7 +3555,11 @@ async def test_move_merges_two_standalone_titles_with_both_old_addresses_alive(
 
     resp = await action_client.post(
         f"/library/title/{source_title_id}/move",
-        data={"mode": "existing", "target_title_id": str(target_title_id), "number": "2"},
+        data={
+            "mode": "existing",
+            "target_title_id": str(target_title_id),
+            "number": "2",
+        },
     )
 
     assert resp.status_code == 200
@@ -3079,7 +3589,11 @@ async def test_move_then_renumber_the_same_episode_every_address_it_ever_had_sti
 
     move_resp = await action_client.post(
         f"/library/title/{source_title_id}/move",
-        data={"mode": "existing", "target_title_id": str(target_title_id), "number": "5"},
+        data={
+            "mode": "existing",
+            "target_title_id": str(target_title_id),
+            "number": "5",
+        },
     )
     assert move_resp.status_code == 200
 
@@ -3095,12 +3609,16 @@ async def test_move_then_renumber_the_same_episode_every_address_it_ever_had_sti
     assert old_standalone is not None
     assert old_standalone["title_id"] == target_title_id
 
-    old_number = await queries.resolve_episode_slug(raw_conn, "combined-target-series", 5)
+    old_number = await queries.resolve_episode_slug(
+        raw_conn, "combined-target-series", 5
+    )
     assert old_number is not None
     assert old_number["episode_id"] == episode_id
     assert old_number["edition_id"] == source_edition_id
 
-    new_number = await queries.resolve_episode_slug(raw_conn, "combined-target-series", 8)
+    new_number = await queries.resolve_episode_slug(
+        raw_conn, "combined-target-series", 8
+    )
     assert new_number is not None
     assert new_number["episode_id"] == episode_id
     assert new_number["edition_id"] == source_edition_id

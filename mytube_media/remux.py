@@ -25,6 +25,7 @@ guarantees an 8-bit yuv420p High-at-most-4.1 stream reaches this module at
 all is the compatibility gate refusing anything else before either
 command is built.
 """
+
 import subprocess
 
 from mytube_media.compat import stored_audio_codec
@@ -129,7 +130,9 @@ def build_remux_command(
     else:
         extra_input = []
         audio_map = f"0:{audio_stream_index}"
-        audio_codec_args = audio_encode_args(channels) if reencode_audio else ["-c:a", "copy"]
+        audio_codec_args = (
+            audio_encode_args(channels) if reencode_audio else ["-c:a", "copy"]
+        )
     return [
         "ffmpeg",
         "-y",

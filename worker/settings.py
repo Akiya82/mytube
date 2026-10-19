@@ -19,6 +19,7 @@ The storage endpoint, bucket and region *do* share names with the
 service, because they are the same endpoint and the same bucket -- only
 the credential is the converter's own.
 """
+
 import socket
 
 from pydantic import Field, field_validator

@@ -12,6 +12,7 @@ different, both-valid slugs that a human would read as the same title. That
 detection is this module's job (`similar_key`), not the library's -- the
 library only guarantees a valid slug shape, not semantic uniqueness.
 """
+
 import re
 from dataclasses import dataclass
 
@@ -217,7 +218,9 @@ def parse_public_address(path: str) -> PublicAddress:
         number = _parse_number_segment(segments[1])
         if number is not None:
             return PublicAddress(slug=slug, number=number)
-        return PublicAddress(slug=slug, edition_slug=_parse_edition_segment(segments[1]))
+        return PublicAddress(
+            slug=slug, edition_slug=_parse_edition_segment(segments[1])
+        )
 
     number = _parse_number_segment(segments[1])
     if number is None:

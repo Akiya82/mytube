@@ -10,6 +10,7 @@ the module still collects cleanly and each test fails as its own
 `ModuleNotFoundError` rather than one collection error hiding the whole
 file.
 """
+
 import asyncio
 import sys
 

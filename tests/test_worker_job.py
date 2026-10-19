@@ -10,6 +10,7 @@ exists to catch. It reports success, uploads, plays, and is wrong -- so
 every assertion below is about the command's own filter chain rather than
 about the job having finished.
 """
+
 import asyncio
 import json
 import logging
@@ -28,7 +29,9 @@ _AUDIO_STREAM = 1
 
 
 def _probe_json() -> dict:
-    return json.loads((FIXTURES_DIR / "subtitles_mixed.json").read_text(encoding="utf-8"))
+    return json.loads(
+        (FIXTURES_DIR / "subtitles_mixed.json").read_text(encoding="utf-8")
+    )
 
 
 def _output_probe_json() -> dict:
@@ -37,7 +40,9 @@ def _output_probe_json() -> dict:
     own source fixture, so a test can prove a reported field came from
     here and not from the source.
     """
-    data = json.loads((FIXTURES_DIR / "subtitles_mixed.json").read_text(encoding="utf-8"))
+    data = json.loads(
+        (FIXTURES_DIR / "subtitles_mixed.json").read_text(encoding="utf-8")
+    )
     for stream in data["streams"]:
         if stream["codec_type"] == "video":
             stream["width"] = 1280
@@ -197,7 +202,9 @@ def _run_one_job(
     import worker.__main__ as worker_main
 
     probe_json = probe_json if probe_json is not None else _probe_json()
-    output_probe_json = output_probe_json if output_probe_json is not None else probe_json
+    output_probe_json = (
+        output_probe_json if output_probe_json is not None else probe_json
+    )
     commands = []
     client = _FakeClient(heartbeat_responses=heartbeat_responses)
 
@@ -226,7 +233,10 @@ def _run_one_job(
             # speed is the measured wall time, not whatever this last
             # progress block happened to say.
             await on_progress(
-                Progress(out_time_seconds=elapsed, speed=tail_progress_speed, done=True), 100.0
+                Progress(
+                    out_time_seconds=elapsed, speed=tail_progress_speed, done=True
+                ),
+                100.0,
             )
         return run_result if run_result is not None else _FakeResult()
 
@@ -235,12 +245,16 @@ def _run_one_job(
         # stub file stands in for the track this call would have pulled
         # out of a real container.
         dest = Path(scratch_dir) / f"track_{stream_index}.{extension}"
-        dest.write_text("1\n00:00:01,000 --> 00:00:02,000\nStub cue\n", encoding="utf-8")
+        dest.write_text(
+            "1\n00:00:01,000 --> 00:00:02,000\nStub cue\n", encoding="utf-8"
+        )
         return dest
 
     def fake_copy_external_track(path, scratch_dir):
         dest = Path(scratch_dir) / f"external{Path(path).suffix.lower()}"
-        dest.write_text("1\n00:00:01,000 --> 00:00:02,000\nStub cue\n", encoding="utf-8")
+        dest.write_text(
+            "1\n00:00:01,000 --> 00:00:02,000\nStub cue\n", encoding="utf-8"
+        )
         return dest
 
     def fake_probe(path):
@@ -251,7 +265,9 @@ def _run_one_job(
     monkeypatch.setattr(worker_main.compat, "probe", fake_probe)
     monkeypatch.setattr(worker_main.compat, "moov_before_mdat", lambda path: True)
     monkeypatch.setattr(worker_main, "run_ffmpeg_with_progress", fake_run)
-    monkeypatch.setattr(worker_main, "extract_embedded_track", fake_extract_embedded_track)
+    monkeypatch.setattr(
+        worker_main, "extract_embedded_track", fake_extract_embedded_track
+    )
     monkeypatch.setattr(worker_main, "copy_external_track", fake_copy_external_track)
     monkeypatch.setattr(
         worker_main.worker_storage,
@@ -269,7 +285,9 @@ def _run_one_job(
         poster_run_ffmpeg or (lambda *args, **kwargs: None),
     )
     if heartbeat_interval is not None:
-        monkeypatch.setattr(worker_main, "HEARTBEAT_INTERVAL_SECONDS", heartbeat_interval)
+        monkeypatch.setattr(
+            worker_main, "HEARTBEAT_INTERVAL_SECONDS", heartbeat_interval
+        )
 
     settings = _settings(tmp_path)
     asyncio.run(
@@ -401,7 +419,9 @@ def test_a_finished_job_reports_the_output_probes_own_facts_not_the_sources(
     assert report["source_profile"] == "Constrained Baseline"
 
 
-def test_an_audio_stream_with_no_language_tag_reports_it_as_absent(monkeypatch, tmp_path):
+def test_an_audio_stream_with_no_language_tag_reports_it_as_absent(
+    monkeypatch, tmp_path
+):
     """The default fixture's own audio track carries no language or title
     tag at all -- the report must say so, never invent a substitute.
     """
@@ -432,7 +452,9 @@ def test_no_subtitle_chosen_reports_both_burned_fields_as_absent(monkeypatch, tm
     assert report["subtitle_burned_title"] is None
 
 
-def test_an_external_burn_reports_the_files_own_name_with_no_language(monkeypatch, tmp_path):
+def test_an_external_burn_reports_the_files_own_name_with_no_language(
+    monkeypatch, tmp_path
+):
     """An external file carries no language tag this converter could read
     -- the file's own name is the only thing worth reporting in its place.
     """
@@ -471,7 +493,9 @@ def test_the_reported_speed_is_the_source_duration_over_the_measured_wall_time(
     assert report["realtime_factor"] != 999.0
 
 
-def test_a_successful_conversion_uploads_and_reports_a_poster_key(monkeypatch, tmp_path):
+def test_a_successful_conversion_uploads_and_reports_a_poster_key(
+    monkeypatch, tmp_path
+):
     uploaded = []
 
     def spy_upload(client_arg, settings_arg, path, key, content_type="video/mp4"):
@@ -741,12 +765,16 @@ def test_a_protocol_mismatch_at_check_in_propagates_rather_than_being_swallowed(
 
     async def _run_it():
         with pytest.raises(ProtocolMismatch):
-            await worker_main._check_in(_MismatchClient(), asyncio.Event(), status="idle")
+            await worker_main._check_in(
+                _MismatchClient(), asyncio.Event(), status="idle"
+            )
 
     asyncio.run(_run_it())
 
 
-def test_a_protocol_mismatch_stops_the_run_loop_rather_than_retrying(monkeypatch, tmp_path):
+def test_a_protocol_mismatch_stops_the_run_loop_rather_than_retrying(
+    monkeypatch, tmp_path
+):
     """`_run`'s own `while` loop must not catch this and go around again
     -- it is the caller's (`main()`'s) job to end the process on it.
     """

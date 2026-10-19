@@ -6,6 +6,7 @@ test_queries.py: every test here either runs a real alembic migration or
 needs a real connection to observe cross-row behaviour a connection double
 cannot exhibit.
 """
+
 import os
 import subprocess
 import sys
@@ -15,13 +16,12 @@ from pathlib import Path
 import asyncpg
 import httpx
 import pytest
+from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
 from orchestrator.resolve import EDITION_PREPARING_STATUS
-
-from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -67,7 +67,9 @@ async def http_client(app_pool):
     no matching admin hostname is needed to reach them.
     """
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
         yield client
 
 
@@ -267,7 +269,9 @@ async def test_migration_dismiss_a_failed_title_completes_after_the_upgrade(raw_
     assert surviving_slug["episode_id"] is None
 
 
-async def test_migration_cancel_a_never_active_title_completes_after_the_upgrade(raw_conn):
+async def test_migration_cancel_a_never_active_title_completes_after_the_upgrade(
+    raw_conn,
+):
     other_edition_id = uuid.uuid4()
     other_title_id = await queries.create_title_with_edition(
         raw_conn,
@@ -346,7 +350,9 @@ async def _add_episode(
         edition_slug,
     )
     await conn.execute(
-        "UPDATE episodes SET default_edition_id = $1 WHERE id = $2", edition_id, episode_id
+        "UPDATE episodes SET default_edition_id = $1 WHERE id = $2",
+        edition_id,
+        episode_id,
     )
     await queries.claim_episode_number(conn, title_id, episode_id, number)
     return episode_id, edition_id
@@ -371,7 +377,9 @@ async def _seed_series(conn, tag: str, episode_count: int = 3) -> tuple:
 
 
 async def test_resolve_episode_slug_resolves_each_of_three_episodes_by_number(raw_conn):
-    _title_id, slug, episodes = await _seed_series(raw_conn, "three-eps", episode_count=3)
+    _title_id, slug, episodes = await _seed_series(
+        raw_conn, "three-eps", episode_count=3
+    )
 
     for number, episode_id in episodes.items():
         row = await queries.resolve_episode_slug(raw_conn, slug, number)
@@ -381,14 +389,18 @@ async def test_resolve_episode_slug_resolves_each_of_three_episodes_by_number(ra
         assert row["edition_id"] is not None
 
 
-async def test_resolve_episode_slug_resolves_every_leading_zero_form_of_its_number(raw_conn):
+async def test_resolve_episode_slug_resolves_every_leading_zero_form_of_its_number(
+    raw_conn,
+):
     """The number arrives at the query already parsed to an integer -- see
     orchestrator.resolve for where every leading-zero string form of a
     number collapses onto the identical int before this function ever
     runs. This proves that once collapsed, every form reaches the same
     episode.
     """
-    _title_id, slug, episodes = await _seed_series(raw_conn, "leading-zero", episode_count=1)
+    _title_id, slug, episodes = await _seed_series(
+        raw_conn, "leading-zero", episode_count=1
+    )
     episode_id = episodes[1]
 
     for form in ("1", "01", "001", "0001"):
@@ -398,7 +410,9 @@ async def test_resolve_episode_slug_resolves_every_leading_zero_form_of_its_numb
 
 
 async def test_resolve_episode_slug_unknown_number_resolves_to_nothing(raw_conn):
-    _title_id, slug, _episodes = await _seed_series(raw_conn, "unknown-number", episode_count=1)
+    _title_id, slug, _episodes = await _seed_series(
+        raw_conn, "unknown-number", episode_count=1
+    )
     row = await queries.resolve_episode_slug(raw_conn, slug, 999)
     assert row is None
 
@@ -406,7 +420,9 @@ async def test_resolve_episode_slug_unknown_number_resolves_to_nothing(raw_conn)
 async def test_resolve_episode_slug_resolves_a_named_edition_and_an_unknown_edition_resolves_to_nothing(
     raw_conn,
 ):
-    _title_id, slug, episodes = await _seed_series(raw_conn, "edition-slug", episode_count=1)
+    _title_id, slug, episodes = await _seed_series(
+        raw_conn, "edition-slug", episode_count=1
+    )
     episode_id = episodes[1]
 
     alt_edition_id = uuid.uuid4()
@@ -432,7 +448,9 @@ async def test_resolve_episode_slug_resolves_a_named_edition_and_an_unknown_edit
     assert row_unknown["edition_id"] is None
 
 
-async def test_resolve_title_edition_slug_resolves_an_edition_of_the_lowest_episode(raw_conn):
+async def test_resolve_title_edition_slug_resolves_an_edition_of_the_lowest_episode(
+    raw_conn,
+):
     edition_id = uuid.uuid4()
     slug = _slug("film")
     title_id = await queries.create_title_with_edition(
@@ -456,7 +474,9 @@ async def test_resolve_title_edition_slug_resolves_an_edition_of_the_lowest_epis
     assert row["episode_id"] == episode_id
     assert row["edition_id"] == alt_edition_id
 
-    row_unknown = await queries.resolve_title_edition_slug(raw_conn, slug, "no-such-edition")
+    row_unknown = await queries.resolve_title_edition_slug(
+        raw_conn, slug, "no-such-edition"
+    )
     assert row_unknown is None
 
 
@@ -501,10 +521,14 @@ async def test_renumber_episode_old_number_still_resolves_after_a_renumber(raw_c
     as promised -- proven here directly against `renumber_episode`
     itself, not the lower-level `claim_episode_number` the query wraps.
     """
-    title_id, slug, episodes = await _seed_series(raw_conn, "renumber-episode", episode_count=1)
+    title_id, slug, episodes = await _seed_series(
+        raw_conn, "renumber-episode", episode_count=1
+    )
     episode_id = episodes[1]
 
-    await queries.renumber_episode(raw_conn, episode_id=episode_id, title_id=title_id, number=7)
+    await queries.renumber_episode(
+        raw_conn, episode_id=episode_id, title_id=title_id, number=7
+    )
 
     row_new = await queries.resolve_episode_slug(raw_conn, slug, 7)
     assert row_new["episode_id"] == episode_id
@@ -512,12 +536,18 @@ async def test_renumber_episode_old_number_still_resolves_after_a_renumber(raw_c
     assert row_old["episode_id"] == episode_id
 
 
-async def test_renumber_episode_refuses_when_a_sibling_currently_holds_the_number(raw_conn):
-    title_id, _slug, episodes = await _seed_series(raw_conn, "renumber-refuse", episode_count=2)
+async def test_renumber_episode_refuses_when_a_sibling_currently_holds_the_number(
+    raw_conn,
+):
+    title_id, _slug, episodes = await _seed_series(
+        raw_conn, "renumber-refuse", episode_count=2
+    )
     episode_1, episode_2 = episodes[1], episodes[2]
 
     with pytest.raises(queries.EpisodeNumberTaken):
-        await queries.renumber_episode(raw_conn, episode_id=episode_1, title_id=title_id, number=2)
+        await queries.renumber_episode(
+            raw_conn, episode_id=episode_1, title_id=title_id, number=2
+        )
 
     # Refused -- episode_2 still holds 2, episode_1 is untouched at 1.
     assert await queries.taken_episode_numbers(raw_conn, title_id) == {1, 2}
@@ -533,30 +563,42 @@ async def test_renumber_episode_succeeds_onto_a_siblings_former_number_and_newes
     (`routes_episodes.renumber_confirm_route`), never this query's. Once
     claimed, the newest row wins, exactly as slug reuse already works.
     """
-    title_id, slug, episodes = await _seed_series(raw_conn, "renumber-history", episode_count=2)
+    title_id, slug, episodes = await _seed_series(
+        raw_conn, "renumber-history", episode_count=2
+    )
     episode_1, episode_2 = episodes[1], episodes[2]
 
     # episode_2 moves off 2 first, onto 20 -- 2 is now only its *former*
     # number, still resolving through history but no longer current.
-    await queries.renumber_episode(raw_conn, episode_id=episode_2, title_id=title_id, number=20)
+    await queries.renumber_episode(
+        raw_conn, episode_id=episode_2, title_id=title_id, number=20
+    )
 
     # episode_1 can now take 2 -- the query does not refuse a former
     # number the way it refuses a currently-held one.
-    await queries.renumber_episode(raw_conn, episode_id=episode_1, title_id=title_id, number=2)
+    await queries.renumber_episode(
+        raw_conn, episode_id=episode_1, title_id=title_id, number=2
+    )
 
     row = await queries.resolve_episode_slug(raw_conn, slug, 2)
     assert row["episode_id"] == episode_1
 
 
 async def test_renumber_episode_lets_an_episode_reclaim_its_own_former_number(raw_conn):
-    title_id, slug, episodes = await _seed_series(raw_conn, "renumber-reclaim", episode_count=1)
+    title_id, slug, episodes = await _seed_series(
+        raw_conn, "renumber-reclaim", episode_count=1
+    )
     episode_id = episodes[1]
 
-    await queries.renumber_episode(raw_conn, episode_id=episode_id, title_id=title_id, number=5)
+    await queries.renumber_episode(
+        raw_conn, episode_id=episode_id, title_id=title_id, number=5
+    )
     # Renumbering back onto a number this same episode held before hits
     # the ON CONFLICT upsert claim_episode_number already documents --
     # this must not raise.
-    await queries.renumber_episode(raw_conn, episode_id=episode_id, title_id=title_id, number=1)
+    await queries.renumber_episode(
+        raw_conn, episode_id=episode_id, title_id=title_id, number=1
+    )
 
     row = await queries.resolve_episode_slug(raw_conn, slug, 1)
     assert row["episode_id"] == episode_id
@@ -564,12 +606,20 @@ async def test_renumber_episode_lets_an_episode_reclaim_its_own_former_number(ra
     assert row_still_five["episode_id"] == episode_id
 
 
-async def test_renumber_episode_twice_in_a_row_and_every_old_number_still_resolves(raw_conn):
-    title_id, slug, episodes = await _seed_series(raw_conn, "renumber-twice", episode_count=1)
+async def test_renumber_episode_twice_in_a_row_and_every_old_number_still_resolves(
+    raw_conn,
+):
+    title_id, slug, episodes = await _seed_series(
+        raw_conn, "renumber-twice", episode_count=1
+    )
     episode_id = episodes[1]
 
-    await queries.renumber_episode(raw_conn, episode_id=episode_id, title_id=title_id, number=3)
-    await queries.renumber_episode(raw_conn, episode_id=episode_id, title_id=title_id, number=9)
+    await queries.renumber_episode(
+        raw_conn, episode_id=episode_id, title_id=title_id, number=3
+    )
+    await queries.renumber_episode(
+        raw_conn, episode_id=episode_id, title_id=title_id, number=9
+    )
 
     for number in (1, 3, 9):
         row = await queries.resolve_episode_slug(raw_conn, slug, number)
@@ -577,8 +627,12 @@ async def test_renumber_episode_twice_in_a_row_and_every_old_number_still_resolv
         assert row["episode_id"] == episode_id
 
 
-async def test_taken_episode_numbers_and_episode_for_number_read_the_current_history(raw_conn):
-    title_id, _slug_value, episodes = await _seed_series(raw_conn, "number-history", episode_count=2)
+async def test_taken_episode_numbers_and_episode_for_number_read_the_current_history(
+    raw_conn,
+):
+    title_id, _slug_value, episodes = await _seed_series(
+        raw_conn, "number-history", episode_count=2
+    )
     episode_1, episode_2 = episodes[1], episodes[2]
 
     assert await queries.taken_episode_numbers(raw_conn, title_id) == {1, 2}
@@ -619,8 +673,12 @@ async def test_resolve_slug_with_an_episode_pointer_resolves_to_that_episode_not
     assert row["episode_id"] == episode_2_id
 
 
-async def test_resolve_slug_with_a_null_pointer_still_resolves_to_the_lowest_episode(raw_conn):
-    _title_id, series_slug, episodes = await _seed_series(raw_conn, "pointer-null", episode_count=2)
+async def test_resolve_slug_with_a_null_pointer_still_resolves_to_the_lowest_episode(
+    raw_conn,
+):
+    _title_id, series_slug, episodes = await _seed_series(
+        raw_conn, "pointer-null", episode_count=2
+    )
     episode_1_id = episodes[1]
 
     row = await queries.resolve_slug(raw_conn, series_slug)
@@ -640,11 +698,18 @@ async def test_a_title_created_with_no_number_argument_resolves_at_number_one(ra
     assert row["status"] == "active"
 
 
-async def test_a_title_created_with_an_explicit_number_resolves_at_that_number(raw_conn):
+async def test_a_title_created_with_an_explicit_number_resolves_at_that_number(
+    raw_conn,
+):
     edition_id = uuid.uuid4()
     slug = _slug("created-explicit-number")
     await queries.create_title_with_edition(
-        raw_conn, "Created Explicit Number", slug, edition_id, f"{edition_id}.mp4", number=7
+        raw_conn,
+        "Created Explicit Number",
+        slug,
+        edition_id,
+        f"{edition_id}.mp4",
+        number=7,
     )
 
     row = await queries.resolve_episode_slug(raw_conn, slug, 7)
@@ -689,8 +754,12 @@ async def test_resolve_edition_reports_episode_and_edition_status_across_prepari
 # --- edition-slug rule, driven through the real application            ---
 
 
-async def test_http_numbered_address_redirects_with_a_signed_location(raw_conn, http_client):
-    _title_id, slug, episodes = await _seed_series(raw_conn, "http-numbered", episode_count=1)
+async def test_http_numbered_address_redirects_with_a_signed_location(
+    raw_conn, http_client
+):
+    _title_id, slug, episodes = await _seed_series(
+        raw_conn, "http-numbered", episode_count=1
+    )
 
     resp = await http_client.get(f"/v/{slug}/1", follow_redirects=False)
 
@@ -700,7 +769,9 @@ async def test_http_numbered_address_redirects_with_a_signed_location(raw_conn, 
 
 
 async def test_http_leading_zero_forms_reach_the_same_episode(raw_conn, http_client):
-    _title_id, slug, episodes = await _seed_series(raw_conn, "http-leading-zero", episode_count=1)
+    _title_id, slug, episodes = await _seed_series(
+        raw_conn, "http-leading-zero", episode_count=1
+    )
 
     locations = set()
     for form in ("1", "01", "001"):
@@ -711,7 +782,9 @@ async def test_http_leading_zero_forms_reach_the_same_episode(raw_conn, http_cli
     assert len(locations) == 1
 
 
-async def test_http_non_numeric_segment_reaches_the_film_edition_branch(raw_conn, http_client):
+async def test_http_non_numeric_segment_reaches_the_film_edition_branch(
+    raw_conn, http_client
+):
     edition_id = uuid.uuid4()
     slug = _slug("http-film")
     title_id = await queries.create_title_with_edition(
@@ -765,13 +838,22 @@ async def test_http_preparing_answers_the_preparing_status_from_all_four_routes(
     edition_id = uuid.uuid4()
     slug = _slug("http-preparing")
     title_id = await queries.create_title_with_edition(
-        raw_conn, "HTTP Preparing", slug, edition_id, f"{edition_id}.mp4", status="preparing"
+        raw_conn,
+        "HTTP Preparing",
+        slug,
+        edition_id,
+        f"{edition_id}.mp4",
+        status="preparing",
     )
-    await raw_conn.execute("UPDATE editions SET status = 'preparing' WHERE id = $1", edition_id)
+    await raw_conn.execute(
+        "UPDATE editions SET status = 'preparing' WHERE id = $1", edition_id
+    )
 
     bare_resp = await http_client.get(f"/v/{slug}", follow_redirects=False)
     numbered_resp = await http_client.get(f"/v/{slug}/1", follow_redirects=False)
-    refresh_resp = await http_client.get(f"/refresh/{edition_id}", follow_redirects=False)
+    refresh_resp = await http_client.get(
+        f"/refresh/{edition_id}", follow_redirects=False
+    )
 
     assert bare_resp.status_code == EDITION_PREPARING_STATUS
     assert numbered_resp.status_code == EDITION_PREPARING_STATUS
@@ -780,18 +862,24 @@ async def test_http_preparing_answers_the_preparing_status_from_all_four_routes(
         assert resp.status_code != 410
 
 
-async def test_http_deleted_episode_answers_gone_from_all_four_routes(raw_conn, http_client):
+async def test_http_deleted_episode_answers_gone_from_all_four_routes(
+    raw_conn, http_client
+):
     edition_id = uuid.uuid4()
     slug = _slug("http-deleted-episode")
     title_id = await queries.create_title_with_edition(
         raw_conn, "HTTP Deleted Episode", slug, edition_id, f"{edition_id}.mp4"
     )
     episode_id = await _episode_id_for_title(raw_conn, title_id)
-    await raw_conn.execute("UPDATE episodes SET status = 'deleted' WHERE id = $1", episode_id)
+    await raw_conn.execute(
+        "UPDATE episodes SET status = 'deleted' WHERE id = $1", episode_id
+    )
 
     bare_resp = await http_client.get(f"/v/{slug}", follow_redirects=False)
     numbered_resp = await http_client.get(f"/v/{slug}/1", follow_redirects=False)
-    refresh_resp = await http_client.get(f"/refresh/{edition_id}", follow_redirects=False)
+    refresh_resp = await http_client.get(
+        f"/refresh/{edition_id}", follow_redirects=False
+    )
 
     assert bare_resp.status_code == 410
     assert numbered_resp.status_code == 410
@@ -885,12 +973,16 @@ async def test_http_refresh_of_a_preparing_and_a_deleted_edition(raw_conn, http_
     await raw_conn.execute(
         "UPDATE editions SET status = 'preparing' WHERE id = $1", episode_1_edition
     )
-    await raw_conn.execute("UPDATE episodes SET status = 'deleted' WHERE id = $1", episodes[2])
+    await raw_conn.execute(
+        "UPDATE episodes SET status = 'deleted' WHERE id = $1", episodes[2]
+    )
 
     preparing_resp = await http_client.get(
         f"/refresh/{episode_1_edition}", follow_redirects=False
     )
-    deleted_resp = await http_client.get(f"/refresh/{episode_2_edition}", follow_redirects=False)
+    deleted_resp = await http_client.get(
+        f"/refresh/{episode_2_edition}", follow_redirects=False
+    )
 
     assert preparing_resp.status_code == EDITION_PREPARING_STATUS
     assert deleted_resp.status_code == 410
@@ -926,7 +1018,9 @@ async def test_a_tombstoned_episodes_own_number_answers_gone_while_its_title_sta
     never as though it had never existed, even while the *title* itself
     stays 'active' because a sibling episode is untouched.
     """
-    title_id, slug, episodes = await _seed_series(raw_conn, "tombstoned-episode", episode_count=2)
+    title_id, slug, episodes = await _seed_series(
+        raw_conn, "tombstoned-episode", episode_count=2
+    )
 
     await queries.mark_episode_for_delete(raw_conn, episodes[2], grace_seconds=0)
     await queries.finish_delete_episode(raw_conn, episodes[2])

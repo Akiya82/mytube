@@ -14,8 +14,8 @@ the constants, the two dataclasses (`TranscodePlan`, `SubtitleChoice`),
 the `FilterGraph` return type and the `TranscodeRefused` exception. Nothing
 may rename any of these without this file failing loudly.
 """
-import pytest
 
+import pytest
 
 # --- shared factories (import deferred to call time) ------------------------
 
@@ -199,7 +199,10 @@ def test_the_ceiling_is_a_parameter_rather_than_a_literal():
     from mytube_media.transcode import bitrate_for_output
 
     lower_ceiling = 4_000_000
-    assert bitrate_for_output(3840, 1080, "sbs_full", ceiling=lower_ceiling) == lower_ceiling
+    assert (
+        bitrate_for_output(3840, 1080, "sbs_full", ceiling=lower_ceiling)
+        == lower_ceiling
+    )
 
 
 def test_maxrate_and_bufsize_keep_their_ratio_to_the_target():
@@ -274,7 +277,9 @@ def test_scale_comes_before_subtitles_in_the_chain():
 
     graph = build_filter_chain(
         plan=_plan(),
-        subtitle=_subtitle(kind="embedded_text", stream_index=2, path="/share/movie.mkv"),
+        subtitle=_subtitle(
+            kind="embedded_text", stream_index=2, path="/share/movie.mkv"
+        ),
     )
     assert graph.value.index("scale") < graph.value.index("subtitles")
 
@@ -349,7 +354,9 @@ def test_an_embedded_text_track_no_longer_carries_a_stream_ordinal():
 
     graph = build_filter_chain(
         plan=_plan(),
-        subtitle=_subtitle(kind="embedded_text", stream_index=6, path="/share/movie.ass"),
+        subtitle=_subtitle(
+            kind="embedded_text", stream_index=6, path="/share/movie.ass"
+        ),
     )
 
     assert "si=" not in graph.value
@@ -378,7 +385,7 @@ def test_a_bracketed_release_filename_is_escaped_at_the_graph_level():
 
 
 def test_a_kind_this_builder_does_not_know_is_refused_not_dropped():
-    """"embedded" is the add form's own word for a choice that still has to
+    """ "embedded" is the add form's own word for a choice that still has to
     be read against the file as text or bitmap. Building a chain from it
     silently produces a conversion with no subtitle in it, which uploads
     and plays and is reported as a success -- so it raises instead.
@@ -388,7 +395,9 @@ def test_a_kind_this_builder_does_not_know_is_refused_not_dropped():
     with pytest.raises(ValueError):
         build_filter_chain(
             plan=_plan(),
-            subtitle=_subtitle(kind="embedded", stream_index=2, path="/share/movie.mkv"),
+            subtitle=_subtitle(
+                kind="embedded", stream_index=2, path="/share/movie.mkv"
+            ),
         )
 
 
@@ -408,19 +417,28 @@ def test_the_font_directory_is_a_filter_parameter_and_never_a_command_flag():
     so the burn-in only ever sees fonts when the value rides inside the
     filter term.
     """
-    from mytube_media.transcode import build_filter_chain, build_preview_command, build_transcode_command
+    from mytube_media.transcode import (
+        build_filter_chain,
+        build_preview_command,
+        build_transcode_command,
+    )
 
     with_dir = build_filter_chain(
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, path="/share/movie.mkv", font_dir="/fonts"
+            kind="embedded_text",
+            stream_index=2,
+            path="/share/movie.mkv",
+            font_dir="/fonts",
         ),
     )
     assert "fontsdir=/fonts" in with_dir.value
 
     without_dir = build_filter_chain(
         plan=_plan(),
-        subtitle=_subtitle(kind="embedded_text", stream_index=2, path="/share/movie.mkv"),
+        subtitle=_subtitle(
+            kind="embedded_text", stream_index=2, path="/share/movie.mkv"
+        ),
     )
     assert "fontsdir" not in without_dir.value
 
@@ -429,7 +447,10 @@ def test_the_font_directory_is_a_filter_parameter_and_never_a_command_flag():
         "/work/out.mp4",
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, path="/share/movie.mkv", font_dir="/fonts"
+            kind="embedded_text",
+            stream_index=2,
+            path="/share/movie.mkv",
+            font_dir="/fonts",
         ),
     )
     preview_cmd = build_preview_command(
@@ -437,7 +458,10 @@ def test_the_font_directory_is_a_filter_parameter_and_never_a_command_flag():
         "/work/preview.jpg",
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, path="/share/movie.mkv", font_dir="/fonts"
+            kind="embedded_text",
+            stream_index=2,
+            path="/share/movie.mkv",
+            font_dir="/fonts",
         ),
         at_seconds=90.0,
     )
@@ -457,21 +481,29 @@ def test_a_non_utf8_subtitle_file_is_burned_with_its_own_encoding():
     cyrillic = build_filter_chain(
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, path="/share/movie.mkv", charenc="windows-1251"
+            kind="embedded_text",
+            stream_index=2,
+            path="/share/movie.mkv",
+            charenc="windows-1251",
         ),
     )
     assert "charenc=windows-1251" in cyrillic.value
 
     default_unicode = build_filter_chain(
         plan=_plan(),
-        subtitle=_subtitle(kind="embedded_text", stream_index=2, path="/share/movie.mkv", charenc=None),
+        subtitle=_subtitle(
+            kind="embedded_text", stream_index=2, path="/share/movie.mkv", charenc=None
+        ),
     )
     assert "charenc" not in default_unicode.value
 
     explicit_utf8 = build_filter_chain(
         plan=_plan(),
         subtitle=_subtitle(
-            kind="embedded_text", stream_index=2, path="/share/movie.mkv", charenc="UTF-8"
+            kind="embedded_text",
+            stream_index=2,
+            path="/share/movie.mkv",
+            charenc="UTF-8",
         ),
     )
     assert "charenc" not in explicit_utf8.value
@@ -528,7 +560,9 @@ def test_an_aac_source_track_is_copied_rather_than_re_encoded():
 
 
 @pytest.mark.parametrize("channels", [2, 6])
-def test_a_re_encoded_track_keeps_its_channel_count_and_the_shared_audio_arguments(channels):
+def test_a_re_encoded_track_keeps_its_channel_count_and_the_shared_audio_arguments(
+    channels,
+):
     """A fixed stereo downmix was the older shape; the as-is branch's own
     audio arguments now serve both branches, so a stereo track comes out
     as AAC and a 5.1 track as AC-3 here exactly as they do there.
@@ -547,7 +581,9 @@ def test_a_re_encoded_track_keeps_its_channel_count_and_the_shared_audio_argumen
     assert "-ac" not in cmd
 
 
-@pytest.mark.parametrize("kind", ["none", "embedded_text", "external", "embedded_bitmap"])
+@pytest.mark.parametrize(
+    "kind", ["none", "embedded_text", "external", "embedded_bitmap"]
+)
 def test_only_the_chosen_audio_track_is_mapped(kind):
     from mytube_media.transcode import build_transcode_command
 
@@ -583,7 +619,9 @@ def test_only_the_chosen_audio_track_is_mapped(kind):
 
 @pytest.mark.parametrize("layout", ["sbs_full", "sbs_half", "ou_full", "ou_half"])
 @pytest.mark.parametrize("kind", ["embedded_text", "embedded_bitmap", "external"])
-def test_burning_subtitles_into_a_stereo_source_is_refused_with_a_catalog_key(layout, kind):
+def test_burning_subtitles_into_a_stereo_source_is_refused_with_a_catalog_key(
+    layout, kind
+):
     from mytube_media.transcode import TranscodeRefused, build_filter_chain
 
     subtitle_kwargs = {"kind": kind}
@@ -595,7 +633,9 @@ def test_burning_subtitles_into_a_stereo_source_is_refused_with_a_catalog_key(la
         subtitle_kwargs.update(stream_index=3)
 
     with pytest.raises(TranscodeRefused) as excinfo:
-        build_filter_chain(plan=_plan(stereo_layout=layout), subtitle=_subtitle(**subtitle_kwargs))
+        build_filter_chain(
+            plan=_plan(stereo_layout=layout), subtitle=_subtitle(**subtitle_kwargs)
+        )
 
     assert "." in excinfo.value.reason_key
     assert "ffmpeg" not in str(excinfo.value).lower()
@@ -605,7 +645,9 @@ def test_burning_subtitles_into_a_stereo_source_is_refused_with_a_catalog_key(la
 def test_no_subtitle_on_a_stereo_source_is_allowed(layout):
     from mytube_media.transcode import build_filter_chain
 
-    graph = build_filter_chain(plan=_plan(stereo_layout=layout), subtitle=_subtitle(kind="none"))
+    graph = build_filter_chain(
+        plan=_plan(stereo_layout=layout), subtitle=_subtitle(kind="none")
+    )
     assert graph is not None
 
 
@@ -616,7 +658,11 @@ def test_the_preview_command_renders_exactly_one_frame():
     from mytube_media.transcode import build_preview_command
 
     cmd = build_preview_command(
-        "/share/movie.mkv", "/work/preview.jpg", plan=_plan(), subtitle=_subtitle(), at_seconds=90.0
+        "/share/movie.mkv",
+        "/work/preview.jpg",
+        plan=_plan(),
+        subtitle=_subtitle(),
+        at_seconds=90.0,
     )
     idx = cmd.index("-frames:v")
     assert cmd[idx + 1] == "1"
@@ -631,7 +677,11 @@ def test_the_preview_seeks_to_the_requested_time_before_opening_the_input():
     from mytube_media.transcode import build_preview_command
 
     cmd = build_preview_command(
-        "/share/movie.mkv", "/work/preview.jpg", plan=_plan(), subtitle=_subtitle(), at_seconds=90.0
+        "/share/movie.mkv",
+        "/work/preview.jpg",
+        plan=_plan(),
+        subtitle=_subtitle(),
+        at_seconds=90.0,
     )
     idx_ss = cmd.index("-ss")
     assert cmd[idx_ss + 1] == "90.0"
@@ -653,7 +703,9 @@ def test_the_preview_never_asks_for_the_card():
     assert "-hwaccel" not in cmd
 
 
-@pytest.mark.parametrize("kind", ["none", "embedded_text", "external", "embedded_bitmap"])
+@pytest.mark.parametrize(
+    "kind", ["none", "embedded_text", "external", "embedded_bitmap"]
+)
 def test_the_preview_and_the_conversion_share_one_filter_chain(kind):
     """This is the assertion that makes the preview an honest preview,
     and parametrising it is what stops the bitmap branch from being
@@ -672,9 +724,15 @@ def test_the_preview_and_the_conversion_share_one_filter_chain(kind):
     plan = _plan()
     subtitle = _subtitle(**subtitle_kwargs)
 
-    convert_cmd = build_transcode_command("/share/movie.mkv", "/work/out.mp4", plan=plan, subtitle=subtitle)
+    convert_cmd = build_transcode_command(
+        "/share/movie.mkv", "/work/out.mp4", plan=plan, subtitle=subtitle
+    )
     preview_cmd = build_preview_command(
-        "/share/movie.mkv", "/work/preview.jpg", plan=plan, subtitle=subtitle, at_seconds=90.0
+        "/share/movie.mkv",
+        "/work/preview.jpg",
+        plan=plan,
+        subtitle=subtitle,
+        at_seconds=90.0,
     )
 
     expected_flag = "-filter_complex" if kind == "embedded_bitmap" else "-vf"
@@ -714,7 +772,11 @@ def test_the_subtitle_term_alone_is_identical_between_preview_and_conversion():
         "/share/movie.mkv", "/work/out.mp4", plan=plan, subtitle=subtitle
     )
     preview_cmd = build_preview_command(
-        "/share/movie.mkv", "/work/preview.jpg", plan=plan, subtitle=subtitle, at_seconds=90.0
+        "/share/movie.mkv",
+        "/work/preview.jpg",
+        plan=plan,
+        subtitle=subtitle,
+        at_seconds=90.0,
     )
 
     def _subtitle_portion(cmd):
@@ -755,7 +817,9 @@ def test_the_free_space_estimate_is_double_the_encoded_output():
     from mytube_media.transcode import required_free_bytes_for_transcode
 
     encoded_bytes = 6_000_000 * 1440.0 / 8
-    assert required_free_bytes_for_transcode(6_000_000, 1440.0) == pytest.approx(encoded_bytes * 2)
+    assert required_free_bytes_for_transcode(6_000_000, 1440.0) == pytest.approx(
+        encoded_bytes * 2
+    )
 
 
 # --- the two-pass filter escaper -----------------------------------------
@@ -804,7 +868,9 @@ def test_a_srt_choice_carries_force_style_with_the_bundled_family():
     )
 
     assert "force_style=" in graph.value
-    assert BUNDLED_FONT_FAMILY.replace(" ", "") in graph.value.replace("\\", "").replace(" ", "")
+    assert BUNDLED_FONT_FAMILY.replace(" ", "") in graph.value.replace(
+        "\\", ""
+    ).replace(" ", "")
 
 
 def test_a_vtt_choice_also_carries_force_style():
@@ -838,5 +904,3 @@ def test_a_ssa_choice_carries_no_force_style():
     )
 
     assert "force_style" not in graph.value
-
-

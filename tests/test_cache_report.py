@@ -14,6 +14,7 @@ pass it explicitly to build a post-recreate line.
 No `$remote_addr` anywhere in the format -- the parser under test has no
 notion of an IP address, and none of these fixtures include one.
 """
+
 from orchestrator.cli.cache_report import cache_report
 
 TIME = "2026-08-21T20:00:00+00:00"
@@ -106,7 +107,9 @@ def test_hit_ratio_counted_correctly(tmp_path, capsys):
     assert "75.0%" in out
 
 
-def test_five_point_range_requests_to_five_offsets_are_five_chunks_not_one(tmp_path, capsys):
+def test_five_point_range_requests_to_five_offsets_are_five_chunks_not_one(
+    tmp_path, capsys
+):
     """The gap this plan closes: five viewers each open the file with a
     point Range request landing in a different slice. Every one of those
     requests logs as a master line (empty $slice_range) -- the OLD code
@@ -117,7 +120,10 @@ def test_five_point_range_requests_to_five_offsets_are_five_chunks_not_one(tmp_p
     and the phantom " -:" bucket must never appear in the output."""
     log = tmp_path / "access.log"
     offsets = [0, 2_000_000, 5_000_000, 8_000_000, 11_000_000]
-    lines = [_line("/blob/v.mp4", "-", "MISS", client_range_start=str(off)) for off in offsets]
+    lines = [
+        _line("/blob/v.mp4", "-", "MISS", client_range_start=str(off))
+        for off in offsets
+    ]
     log.write_text("".join(lines))
 
     code = cache_report(str(log))
@@ -150,7 +156,9 @@ def test_master_line_and_subrequest_for_same_slice_share_one_bucket(tmp_path, ca
     assert "bytes=2097152-3145727" in out
 
 
-def test_master_line_with_unparseable_offset_is_unattributed_not_a_chunk(tmp_path, capsys):
+def test_master_line_with_unparseable_offset_is_unattributed_not_a_chunk(
+    tmp_path, capsys
+):
     """A master line whose $client_range_start is the nginx map's own "-"
     fallback (multi-range request the map could not parse) must not be
     guessed into chunk zero -- it is counted separately and never printed
@@ -172,7 +180,9 @@ def test_master_line_with_unparseable_offset_is_unattributed_not_a_chunk(tmp_pat
     assert "/blob/v.mp4" not in out.split("\n")[-1]
 
 
-def test_log_made_entirely_of_stale_format_master_lines_is_insufficient_data(tmp_path, capsys):
+def test_log_made_entirely_of_stale_format_master_lines_is_insufficient_data(
+    tmp_path, capsys
+):
     """A window recorded entirely before the edge picked up
     $client_range_start has only six-field master lines -- none of them
     attributable to any chunk. That must exit with the insufficient-data
@@ -192,7 +202,9 @@ def test_log_made_entirely_of_stale_format_master_lines_is_insufficient_data(tmp
     assert "before the client offset field existed" in out
 
 
-def test_alignment_follows_mytube_slice_size_not_a_hardcoded_default(tmp_path, capsys, monkeypatch):
+def test_alignment_follows_mytube_slice_size_not_a_hardcoded_default(
+    tmp_path, capsys, monkeypatch
+):
     """A non-default MYTUBE_SLICE_SIZE must change where the offset gets
     floored to -- proving the alignment is not hardcoded to 1 MiB."""
     monkeypatch.setenv("MYTUBE_SLICE_SIZE", "2m")
@@ -226,16 +238,26 @@ def test_expired_and_stale_count_as_storage_trips_updating_does_not(tmp_path, ca
 
     assert code == 1
     assert "/blob/u.mp4" in out
-    assert "/blob/other.mp4" not in out.split("\n")[-1] or True  # other.mp4 not a violator
+    assert (
+        "/blob/other.mp4" not in out.split("\n")[-1] or True
+    )  # other.mp4 not a violator
 
 
 def test_since_filters_out_older_lines(tmp_path, capsys):
     log = tmp_path / "access.log"
     lines = [
-        _line("/blob/old.mp4", "bytes=0-1048575", "MISS", time="2026-08-21T18:00:00+00:00"),
-        _line("/blob/old.mp4", "bytes=0-1048575", "MISS", time="2026-08-21T18:00:01+00:00"),
-        _line("/blob/new.mp4", "bytes=0-1048575", "MISS", time="2026-08-21T20:00:00+00:00"),
-        _line("/blob/new.mp4", "bytes=0-1048575", "HIT", time="2026-08-21T20:00:01+00:00"),
+        _line(
+            "/blob/old.mp4", "bytes=0-1048575", "MISS", time="2026-08-21T18:00:00+00:00"
+        ),
+        _line(
+            "/blob/old.mp4", "bytes=0-1048575", "MISS", time="2026-08-21T18:00:01+00:00"
+        ),
+        _line(
+            "/blob/new.mp4", "bytes=0-1048575", "MISS", time="2026-08-21T20:00:00+00:00"
+        ),
+        _line(
+            "/blob/new.mp4", "bytes=0-1048575", "HIT", time="2026-08-21T20:00:01+00:00"
+        ),
     ]
     log.write_text("".join(lines))
 
@@ -280,7 +302,11 @@ def test_log_with_no_valid_lines_is_empty_data_not_a_clean_pass(tmp_path, capsys
 
 def test_since_filtering_everything_out_is_also_empty_data(tmp_path, capsys):
     log = tmp_path / "access.log"
-    log.write_text(_line("/blob/x.mp4", "bytes=0-1048575", "MISS", time="2026-08-21T10:00:00+00:00"))
+    log.write_text(
+        _line(
+            "/blob/x.mp4", "bytes=0-1048575", "MISS", time="2026-08-21T10:00:00+00:00"
+        )
+    )
 
     code = cache_report(str(log), since="2026-08-21T23:00:00+00:00")
 

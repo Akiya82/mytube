@@ -17,6 +17,7 @@ therefore innermost, refuses a same-site-cookie-bearing mutating request
 whose `Origin` names a different site. Both carry their own docstrings
 with the threat model and the reasons for what they do not attempt.
 """
+
 import asyncio
 import contextlib
 import logging
@@ -124,7 +125,9 @@ async def lifespan(app: FastAPI):
     _clear_stale_scratch_files(Path(get_settings().work_dir))
 
     add_worker_task = asyncio.create_task(
-        run_add_consumer(app.state.db_pool, poll_interval=CONSUMER_POLL_INTERVAL_SECONDS)
+        run_add_consumer(
+            app.state.db_pool, poll_interval=CONSUMER_POLL_INTERVAL_SECONDS
+        )
     )
     playlist_worker_task = asyncio.create_task(
         run_playlist_consumer(

@@ -27,6 +27,7 @@ carries only what a filesystem walk can know about itself: its path, the
 raw dot-separated suffix in its own name if it has one, and the folder
 names between it and the source.
 """
+
 import json
 import os
 import re
@@ -119,14 +120,16 @@ MIN_EXTRACT_BYTES_PER_SECOND = 8 * 1024 * 1024
 #: a font whose container tags it at all uses one of these,
 # never a codec name alone. Consulted only when the attachment carries no
 # `codec_name` a probe can classify on its own.
-_FONT_MIMETYPES = frozenset({
-    "application/x-truetype-font",
-    "application/x-font-ttf",
-    "application/vnd.ms-opentype",
-    "font/ttf",
-    "font/otf",
-    "font/sfnt",
-})
+_FONT_MIMETYPES = frozenset(
+    {
+        "application/x-truetype-font",
+        "application/x-font-ttf",
+        "application/vnd.ms-opentype",
+        "font/ttf",
+        "font/otf",
+        "font/sfnt",
+    }
+)
 
 # The family both images install (`fonts-dejavu-core`) and one of the few Cyrillic-capable families available as a
 # plain package -- the fallback when a plain-text subtitle has no
@@ -243,7 +246,7 @@ def _match_sidecar(path: Path, stem: str):
     prefix = stem + "."
     if not path.name.startswith(prefix):
         return _NO_MATCH
-    remainder = path.name[len(prefix):]
+    remainder = path.name[len(prefix) :]
     parts = remainder.split(".")
     if len(parts) == 1:
         language, ext = None, parts[0]
@@ -333,7 +336,12 @@ class SidecarCandidate:
 
 
 def walk_sidecars(
-    source, share_root, *, extensions: frozenset[str], folder_names: tuple[str, ...], match
+    source,
+    share_root,
+    *,
+    extensions: frozenset[str],
+    folder_names: tuple[str, ...],
+    match,
 ) -> list[SidecarCandidate]:
     """The shared, hardened directory walk behind `external_tracks`
     and `external_audio_tracks`: the source's own folder, then each
@@ -465,7 +473,9 @@ def external_tracks(source, share_root) -> list[SubtitleTrack]:
     ]
 
 
-def external_audio_tracks(source, share_root, episode_number: int) -> list[SidecarCandidate]:
+def external_audio_tracks(
+    source, share_root, episode_number: int
+) -> list[SidecarCandidate]:
     """External dub candidates for one episode's `source` file, searched in
     the same order as `external_tracks` (the source's own folder, then `AUDIO_SIDECAR_FOLDER_NAMES`
     beside it, then a bounded recursive walk), matched by the episode
@@ -615,10 +625,15 @@ def _dump_container_font_attachments(source: Path, destination: Path) -> None:
     if not source.is_file():
         return
     probe_argv = [
-        "ffprobe", "-v", "quiet",
-        "-select_streams", "t",
-        "-show_entries", "stream=index,codec_name:stream_tags=mimetype",
-        "-print_format", "json",
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-select_streams",
+        "t",
+        "-show_entries",
+        "stream=index,codec_name:stream_tags=mimetype",
+        "-print_format",
+        "json",
         str(source),
     ]
     try:
@@ -791,7 +806,9 @@ def _extract_timeout_seconds(source) -> float:
     return max(_EXTRACT_TIMEOUT_SECONDS, size / MIN_EXTRACT_BYTES_PER_SECOND)
 
 
-def extract_embedded_track(source, stream_index: int, scratch_dir, *, extension: str = "ass"):
+def extract_embedded_track(
+    source, stream_index: int, scratch_dir, *, extension: str = "ass"
+):
     """Pull one embedded text subtitle stream out to its own file in
     `scratch_dir`, so the burn-in and `cue_times` both work against a real
     file rather than reaching back into the container a second time. A
@@ -803,10 +820,14 @@ def extract_embedded_track(source, stream_index: int, scratch_dir, *, extension:
     """
     destination = Path(scratch_dir) / f"track_{stream_index}.{extension}"
     argv = [
-        "ffmpeg", "-y",
-        "-i", str(source),
-        "-map", f"0:{stream_index}",
-        "-c:s", "copy",
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source),
+        "-map",
+        f"0:{stream_index}",
+        "-c:s",
+        "copy",
         str(destination),
     ]
     try:
@@ -891,11 +912,17 @@ def bitmap_cue_after(source, stream_index: int, offset_seconds: float) -> float 
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "quiet",
-                "-select_streams", str(stream_index),
-                "-read_intervals", f"{offset_seconds}%+{_CUE_SEARCH_WINDOW_SECONDS}",
-                "-show_entries", "packet=pts_time",
-                "-of", "csv=p=0",
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-select_streams",
+                str(stream_index),
+                "-read_intervals",
+                f"{offset_seconds}%+{_CUE_SEARCH_WINDOW_SECONDS}",
+                "-show_entries",
+                "packet=pts_time",
+                "-of",
+                "csv=p=0",
                 str(source),
             ],
             capture_output=True,

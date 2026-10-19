@@ -22,6 +22,7 @@ restated as a literal, and this phase's own
 `test_the_preparing_status_the_application_answers_is_mapped_to_a_clip`
 does the identical thing for `orchestrator.resolve.EDITION_PREPARING_STATUS`.
 """
+
 import hashlib
 import re
 from pathlib import Path

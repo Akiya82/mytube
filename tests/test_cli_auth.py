@@ -9,13 +9,13 @@ import until a later plan creates it, which is the expected Wave 0 shape --
 the module docstring in `test_auth.py` explains the same thing for the
 gate.
 """
+
 import pytest
 import typer
+from conftest import WORKER_TOKEN
 
 from orchestrator.cli import auth as cli_auth  # RED: created by a later plan
 from orchestrator.config import get_settings
-
-from conftest import WORKER_TOKEN
 
 pytestmark = pytest.mark.integration
 

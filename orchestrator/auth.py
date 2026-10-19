@@ -8,6 +8,7 @@ expensive -- that is the whole point of a password hash -- and therefore
 never run on the event loop this process shares with every viewer's
 `/v/{slug}` request.
 """
+
 import asyncio
 import hashlib
 import logging
@@ -249,7 +250,9 @@ async def verify_password(stored_hash: str, password: str) -> bool:
     """
     loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(_HASH_EXECUTOR, _hasher.verify, stored_hash, password)
+        await loop.run_in_executor(
+            _HASH_EXECUTOR, _hasher.verify, stored_hash, password
+        )
         return True
     except (argon2.exceptions.VerifyMismatchError, argon2.exceptions.InvalidHashError):
         return False
@@ -484,9 +487,7 @@ async def auth_gate(request, call_next):
     if host is not None and host != get_settings().admin_fqdn:
         logger.warning("refused a request to %r from a foreign host (%r)", path, host)
         lang = resolve_lang(request)
-        return PlainTextResponse(
-            translator(lang)("auth.foreign_host"), status_code=400
-        )
+        return PlainTextResponse(translator(lang)("auth.foreign_host"), status_code=400)
 
     if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)

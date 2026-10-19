@@ -17,6 +17,7 @@ answer ever reaches the operator.
 Nothing here touches the filesystem, and nothing raises for a name it
 cannot read.
 """
+
 import re
 from dataclasses import dataclass
 
@@ -84,7 +85,9 @@ def _roman_to_int(numeral: str) -> int | None:
     return total if 1 <= total <= MAX_SEASON_NUMBER else None
 
 
-def normalize_season(title: str, anime_season: str | None) -> tuple[str, int | None, str]:
+def normalize_season(
+    title: str, anime_season: str | None
+) -> tuple[str, int | None, str]:
     """`(name, season_number, provenance_key)` -- first match wins, in the
     order: the parser's own season tag, a trailing roman
     numeral, a trailing ordinal (defensive), a trailing one-or-two-digit
@@ -186,7 +189,9 @@ def recognize_filename(filename: str) -> Recognised:
         # stripped here so the name field never shows it.
         title = title.removesuffix(f" - {anime_type}")
 
-    name, season, season_provenance = normalize_season(title, parsed.get("anime_season"))
+    name, season, season_provenance = normalize_season(
+        title, parsed.get("anime_season")
+    )
     episode = parse_episode_number(parsed)
 
     raw_episode = parsed.get("episode_number")

@@ -12,6 +12,7 @@ languages, small enough that a maintained dependency would be the wrong
 rung of the ladder -- extended the same way this project's own interface
 languages are, by adding words.
 """
+
 import langcodes
 from langcodes import Language
 

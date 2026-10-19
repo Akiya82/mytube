@@ -17,6 +17,7 @@ else in memory. Warm immediately before the session: the promise
 ("storage restarting mid-session goes unnoticed") holds only for as long
 as `inactive`'s window, not indefinitely.
 """
+
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -56,7 +57,9 @@ def cache_warm(
     ranges at all.
     """
     chunk_size = chunk_size or _parse_size(os.environ.get("MYTUBE_SLICE_SIZE", "1m"))
-    warm_bytes = warm_bytes or int(os.environ.get("MYTUBE_WARM_BYTES", DEFAULT_WARM_BYTES))
+    warm_bytes = warm_bytes or int(
+        os.environ.get("MYTUBE_WARM_BYTES", DEFAULT_WARM_BYTES)
+    )
     cache_zone = os.environ.get("MYTUBE_CACHE_SIZE", "512m")
 
     started = time.monotonic()

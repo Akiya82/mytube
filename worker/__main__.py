@@ -11,6 +11,7 @@ sent as a command fragment -- only the operator's own choices (which
 audio track, which subtitle, which layout) cross the network; everything
 else is rebuilt from the file as it is right now.
 """
+
 import asyncio
 import contextlib
 import logging
@@ -45,7 +46,6 @@ from mytube_media.transcode import (
     output_dimensions,
     required_free_bytes_for_transcode,
 )
-
 from worker import gpu
 from worker import storage as worker_storage
 from worker.client import (
@@ -204,7 +204,9 @@ def _eta_seconds(
     return min(int(remaining_source_seconds / speed), MAX_ETA_SECONDS)
 
 
-async def _abort_upload_quietly(s3_client, settings: WorkerSettings, key: str, job_id) -> None:
+async def _abort_upload_quietly(
+    s3_client, settings: WorkerSettings, key: str, job_id
+) -> None:
     """The one way this program aborts a dangling upload -- every cleanup
     path goes through here rather than calling `abort_multipart` directly.
 
@@ -218,9 +220,13 @@ async def _abort_upload_quietly(s3_client, settings: WorkerSettings, key: str, j
     and the report the caller was about to send still goes out.
     """
     try:
-        await asyncio.to_thread(worker_storage.abort_multipart, s3_client, settings, key)
+        await asyncio.to_thread(
+            worker_storage.abort_multipart, s3_client, settings, key
+        )
     except Exception:
-        logger.exception("job %s: could not abort the dangling upload of %s", job_id, key)
+        logger.exception(
+            "job %s: could not abort the dangling upload of %s", job_id, key
+        )
 
 
 async def _process_job(
@@ -370,7 +376,9 @@ async def _process_job(
                 filename=Path(job["source_path"]).name,
             )
             selected_audio_channels = (
-                await asyncio.to_thread(compat.external_audio_track, external_audio_source)
+                await asyncio.to_thread(
+                    compat.external_audio_track, external_audio_source
+                )
             ).channels
         else:
             verdict = compat.analyze(
@@ -379,7 +387,8 @@ async def _process_job(
                 filename=Path(job["source_path"]).name,
             )
             selected_track = next(
-                (t for t in verdict.tracks if t.index == job["audio_stream_index"]), None
+                (t for t in verdict.tracks if t.index == job["audio_stream_index"]),
+                None,
             )
             if selected_track is None:
                 raise _ProbeMismatchError(
@@ -405,7 +414,9 @@ async def _process_job(
         )
         source_codec = video_stream.get("codec_name") if video_stream else None
         source_profile = video_stream.get("profile") if video_stream else None
-        sample_aspect_ratio = video_stream.get("sample_aspect_ratio") if video_stream else None
+        sample_aspect_ratio = (
+            video_stream.get("sample_aspect_ratio") if video_stream else None
+        )
 
         plan = TranscodePlan(
             width=out_width,
@@ -415,11 +426,15 @@ async def _process_job(
             maxrate_bps=round(video_bitrate_bps * transcode.MAXRATE_RATIO),
             bufsize_bps=round(video_bitrate_bps * transcode.BUFSIZE_RATIO),
             gop=gop,
-            hwaccel="cuda" if source_codec in transcode.NVDEC_SUPPORTED_CODECS else None,
+            hwaccel="cuda"
+            if source_codec in transcode.NVDEC_SUPPORTED_CODECS
+            else None,
             audio_stream_index=job["audio_stream_index"],
             audio_channels=selected_audio_channels,
             reencode_audio=(
-                True if external_audio_source is not None else verdict.audio_needs_reencode
+                True
+                if external_audio_source is not None
+                else verdict.audio_needs_reencode
             ),
             stereo_layout=stereo_layout,
         )
@@ -495,7 +510,9 @@ async def _process_job(
             destination,
             plan=plan,
             subtitle=subtitle,
-            external_audio=str(external_audio_source) if external_audio_source else None,
+            external_audio=str(external_audio_source)
+            if external_audio_source
+            else None,
         )
 
         # Not the source's size -- the source is read over the share and
@@ -505,7 +522,9 @@ async def _process_job(
         required = required_free_bytes_for_transcode(
             video_bitrate_bps, verdict.duration_seconds or 0.0
         )
-        free_bytes = await asyncio.to_thread(lambda: shutil.disk_usage(settings.work_dir).free)
+        free_bytes = await asyncio.to_thread(
+            lambda: shutil.disk_usage(settings.work_dir).free
+        )
         if free_bytes < required:
             raise _InsufficientSpaceError(
                 f"{free_bytes} free bytes < {required} required in {settings.work_dir}"
@@ -587,7 +606,9 @@ async def _process_job(
             poster_cmd = remux.build_poster_command(
                 destination, scratch_poster, at_seconds=at_seconds
             )
-            await asyncio.to_thread(remux.run_ffmpeg, poster_cmd, timeout=POSTER_TIMEOUT_SECONDS)
+            await asyncio.to_thread(
+                remux.run_ffmpeg, poster_cmd, timeout=POSTER_TIMEOUT_SECONDS
+            )
             candidate_poster_key = f"{job['edition_id']}.jpg"
             await asyncio.to_thread(
                 worker_storage.upload_file,
@@ -609,7 +630,11 @@ async def _process_job(
         progress_state["stage"] = "uploading"
         try:
             await asyncio.to_thread(
-                worker_storage.upload_file, s3_client, settings, str(destination), object_key
+                worker_storage.upload_file,
+                s3_client,
+                settings,
+                str(destination),
+                object_key,
             )
         except Exception as exc:
             raise _UploadError(str(exc)) from exc
@@ -662,7 +687,9 @@ async def _process_job(
                     audio_language=(
                         output_audio_track.language if output_audio_track else None
                     ),
-                    audio_title=output_audio_track.title if output_audio_track else None,
+                    audio_title=output_audio_track.title
+                    if output_audio_track
+                    else None,
                     audio_reencoded=verdict.audio_needs_reencode,
                     poster_key=poster_key,
                     realtime_factor=realtime_factor,
@@ -704,7 +731,9 @@ async def _process_job(
             try:
                 await client.cancelled(job_id, attempt=attempt)
             except ReportRejected:
-                logger.info("job %s: cancellation report refused (already superseded)", job_id)
+                logger.info(
+                    "job %s: cancellation report refused (already superseded)", job_id
+                )
             except Exception:
                 logger.exception("job %s: could not report the cancellation", job_id)
     except Exception as exc:
@@ -724,10 +753,14 @@ async def _process_job(
             try:
                 await client.failed(job_id, attempt=attempt, reason_key=reason_key)
             except ReportRejected:
-                logger.info("job %s: failure report refused (already superseded)", job_id)
+                logger.info(
+                    "job %s: failure report refused (already superseded)", job_id
+                )
             except Exception:
                 logger.exception(
-                    "job %s: could not report the failure (reason=%s)", job_id, reason_key
+                    "job %s: could not report the failure (reason=%s)",
+                    job_id,
+                    reason_key,
                 )
     finally:
         # A backstop only -- every path above already stops the loop
@@ -785,7 +818,10 @@ async def _sleep_or_wake(seconds: float, shutdown_event: asyncio.Event) -> None:
 
 
 async def _run(
-    client: WorkerClient, s3_client, settings: WorkerSettings, shutdown_event: asyncio.Event
+    client: WorkerClient,
+    s3_client,
+    settings: WorkerSettings,
+    shutdown_event: asyncio.Event,
 ) -> None:
     """One turn at a time, forever, until `shutdown_event` is set. One
     job at a time, by construction: one loop, one claim, nothing here
@@ -805,7 +841,9 @@ async def _run(
             logger.error("nvidia-smi could not be read: %s", exc)
             job = await _check_in(client, shutdown_event, status="idle")
             if job is not None:
-                await _process_job(client, s3_client, settings, job, scratch_root, shutdown_event)
+                await _process_job(
+                    client, s3_client, settings, job, scratch_root, shutdown_event
+                )
                 continue
             await _sleep_or_wake(settings.worker_poll_seconds, shutdown_event)
             continue
@@ -831,7 +869,9 @@ async def _run(
             await _sleep_or_wake(settings.worker_poll_seconds, shutdown_event)
             continue
 
-        await _process_job(client, s3_client, settings, job, scratch_root, shutdown_event)
+        await _process_job(
+            client, s3_client, settings, job, scratch_root, shutdown_event
+        )
 
 
 def _require_writable_scratch(scratch_root: Path) -> None:
@@ -901,7 +941,9 @@ async def main() -> None:
     shutdown_event = asyncio.Event()
 
     def _handle_sigterm() -> None:
-        logger.info("SIGTERM received -- stopping the current step, then exiting; not reporting")
+        logger.info(
+            "SIGTERM received -- stopping the current step, then exiting; not reporting"
+        )
         shutdown_event.set()
 
     loop = asyncio.get_running_loop()

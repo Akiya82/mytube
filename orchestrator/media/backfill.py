@@ -28,13 +28,14 @@ nothing at all is written for it: a null says truthfully that the
 measurement is missing, while a guessed value would make the refusal that
 reads it confidently wrong.
 """
+
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestrator.db import queries
 from mytube_media import compat
 from mytube_media.share import ShareEscape, safe_join
+from orchestrator.db import queries
 
 
 @dataclass(frozen=True)
@@ -101,13 +102,15 @@ def measure_edition(row, share_root: Path) -> Measurement:
     # added from now on come out of one reader. A second reader of the
     # probe output would drift from the first the day the first learns
     # something.
-    verdict = compat.analyze(
-        probe_json, selected_audio_index=row["audio_stream_index"]
-    )
+    verdict = compat.analyze(probe_json, selected_audio_index=row["audio_stream_index"])
 
     # A source with no video stream leaves every video field of the verdict
     # empty. There is nothing to record for it and nothing honest to guess.
-    if verdict.pix_fmt is None and verdict.fps is None and verdict.video_profile is None:
+    if (
+        verdict.pix_fmt is None
+        and verdict.fps is None
+        and verdict.video_profile is None
+    ):
         return unmeasured(f"this file carries no video to measure: {source_rel}")
 
     selected_track = next(

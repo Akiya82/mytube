@@ -5,16 +5,16 @@ interface will not come up. Same shape as `test_cli_add.py`: storage is
 mocked, `_add`/`_rename`/`_remove` are called directly against a real
 migrated Postgres, bypassing typer's own argument parsing.
 """
+
 import uuid
 
 import pytest
 import typer
+from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 from orchestrator.cli import __main__ as cli
 from orchestrator.config import get_settings
 from orchestrator.db import queries
-
-from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 pytestmark = pytest.mark.integration
 
@@ -104,7 +104,9 @@ async def test_add_episode_only_gives_the_new_titles_single_episode_that_number(
     assert any(line.startswith("/v/") and "/07" not in line for line in lines)
     assert any(line.endswith("/07 -- this episode's own address") for line in lines)
 
-    slug = next(l for l in lines if l.startswith("/v/") and " " not in l).removeprefix("/v/")
+    slug = next(l for l in lines if l.startswith("/v/") and " " not in l).removeprefix(
+        "/v/"
+    )
     row = await queries.resolve_episode_slug(raw_conn, slug, 7)
     assert row is not None
 
@@ -137,9 +139,13 @@ async def test_add_attach_creates_a_new_episode_of_an_existing_title(
     assert row["episode_status"] is None or row["episode_status"] == "active"
 
 
-async def test_add_attach_refuses_when_title_does_not_exist(source_file, uploaded_objects):
+async def test_add_attach_refuses_when_title_does_not_exist(
+    source_file, uploaded_objects
+):
     with pytest.raises(typer.Exit):
-        await cli._add(source_file, None, None, False, _unique("no-such-title"), 1, None, False)
+        await cli._add(
+            source_file, None, None, False, _unique("no-such-title"), 1, None, False
+        )
     assert len(uploaded_objects) == 0
 
 
@@ -170,14 +176,18 @@ async def test_add_edition_adds_an_alternate_edition_of_an_existing_episode(
     out = capsys.readouterr().out
     assert f"/v/{title_slug}/01/dub-ru" in "\n".join(out.splitlines())
 
-    row = await queries.resolve_episode_slug(raw_conn, title_slug, 1, edition_slug="dub-ru")
+    row = await queries.resolve_episode_slug(
+        raw_conn, title_slug, 1, edition_slug="dub-ru"
+    )
     assert row is not None
 
 
 async def test_add_edition_refuses_when_the_episode_does_not_exist(
     source_file, uploaded_objects, capsys
 ):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Edition No Episode"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Edition No Episode")
+    )
     before = len(uploaded_objects)
 
     with pytest.raises(typer.Exit):
@@ -189,7 +199,9 @@ async def test_add_edition_refuses_when_the_episode_does_not_exist(
 
 
 async def test_add_edition_refuses_a_taken_slug(source_file, uploaded_objects, capsys):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Edition Dup Slug"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Edition Dup Slug")
+    )
     await cli._add(source_file, None, None, False, title_slug, 1, "dub-ru", False)
     capsys.readouterr()
     before = len(uploaded_objects)
@@ -199,8 +211,12 @@ async def test_add_edition_refuses_a_taken_slug(source_file, uploaded_objects, c
     assert len(uploaded_objects) == before
 
 
-async def test_add_edition_refuses_an_all_digit_slug(source_file, uploaded_objects, capsys):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Edition Digit Slug"))
+async def test_add_edition_refuses_an_all_digit_slug(
+    source_file, uploaded_objects, capsys
+):
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Edition Digit Slug")
+    )
     before = len(uploaded_objects)
 
     with pytest.raises(typer.Exit):
@@ -211,7 +227,9 @@ async def test_add_edition_refuses_an_all_digit_slug(source_file, uploaded_objec
 async def test_add_edition_with_make_default_moves_the_pointer(
     source_file, uploaded_objects, raw_conn, capsys
 ):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Edition Default"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Edition Default")
+    )
     row = await queries.resolve_episode_slug(raw_conn, title_slug, 1)
     episode_id = row["episode_id"]
     original_default = row["edition_id"]
@@ -228,7 +246,9 @@ async def test_add_edition_with_make_default_moves_the_pointer(
 async def test_add_edition_without_make_default_leaves_the_old_default(
     source_file, uploaded_objects, raw_conn, capsys
 ):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Edition No Default"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Edition No Default")
+    )
     row = await queries.resolve_episode_slug(raw_conn, title_slug, 1)
     episode_id = row["episode_id"]
     original_default = row["edition_id"]
@@ -245,12 +265,18 @@ async def test_add_edition_without_make_default_leaves_the_old_default(
 # --- Every option combination that cannot mean anything is refused --------
 
 
-async def test_add_refuses_edition_with_no_episode(source_file, uploaded_objects, capsys):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Refuse Edition No Ep"))
+async def test_add_refuses_edition_with_no_episode(
+    source_file, uploaded_objects, capsys
+):
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Refuse Edition No Ep")
+    )
     before = len(uploaded_objects)
 
     with pytest.raises(typer.Exit):
-        await cli._add(source_file, None, None, False, title_slug, None, "dub-ru", False)
+        await cli._add(
+            source_file, None, None, False, title_slug, None, "dub-ru", False
+        )
 
     err = capsys.readouterr().err
     assert "--episode" in err
@@ -266,8 +292,12 @@ async def test_add_refuses_edition_with_no_title(source_file, uploaded_objects, 
     assert len(uploaded_objects) == 0
 
 
-async def test_add_refuses_make_default_with_no_edition(source_file, uploaded_objects, capsys):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Refuse Make Default"))
+async def test_add_refuses_make_default_with_no_edition(
+    source_file, uploaded_objects, capsys
+):
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Refuse Make Default")
+    )
     before = len(uploaded_objects)
 
     with pytest.raises(typer.Exit):
@@ -279,7 +309,9 @@ async def test_add_refuses_make_default_with_no_edition(source_file, uploaded_ob
 
 
 async def test_add_refuses_title_with_no_episode(source_file, uploaded_objects, capsys):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Refuse Title No Ep"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Refuse Title No Ep")
+    )
     before = len(uploaded_objects)
 
     with pytest.raises(typer.Exit):
@@ -290,7 +322,9 @@ async def test_add_refuses_title_with_no_episode(source_file, uploaded_objects, 
     assert len(uploaded_objects) == before
 
 
-async def test_add_refuses_a_new_title_with_no_name(source_file, uploaded_objects, capsys):
+async def test_add_refuses_a_new_title_with_no_name(
+    source_file, uploaded_objects, capsys
+):
     with pytest.raises(typer.Exit):
         await cli._add(source_file, None, None, False, None, None, None, False)
 
@@ -317,7 +351,9 @@ async def test_rename_still_renames_a_bare_title_address(
 
 
 async def test_rename_refuses_a_numbered_address(source_file, uploaded_objects, capsys):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Rename Numbered"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Rename Numbered")
+    )
     capsys.readouterr()
 
     with pytest.raises(typer.Exit):
@@ -362,7 +398,9 @@ async def test_remove_bare_title_address_is_unchanged(
 async def test_remove_numbered_address_removes_that_episode_only(
     source_file, uploaded_objects, capsys, raw_conn
 ):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Numbered"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Remove Numbered")
+    )
     capsys.readouterr()
     await cli._add(source_file, None, None, False, title_slug, 2, None, False)
     capsys.readouterr()
@@ -384,7 +422,9 @@ async def test_remove_numbered_address_removes_that_episode_only(
 async def test_remove_episode_accepts_a_leading_zero_numbered_address(
     source_file, uploaded_objects, capsys, raw_conn
 ):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Leading Zero"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Remove Leading Zero")
+    )
     capsys.readouterr()
     await cli._add(source_file, None, None, False, title_slug, 9, None, False)
     capsys.readouterr()
@@ -400,7 +440,9 @@ async def test_remove_episode_accepts_a_leading_zero_numbered_address(
 async def test_remove_episode_uses_the_same_countdown_as_title_level_remove(
     source_file, uploaded_objects, capsys, raw_conn
 ):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Countdown"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Remove Countdown")
+    )
     capsys.readouterr()
     await cli._add(source_file, None, None, False, title_slug, 4, None, False)
     capsys.readouterr()
@@ -423,7 +465,9 @@ async def test_remove_episode_uses_the_same_countdown_as_title_level_remove(
 async def test_remove_edition_refuses_when_it_is_the_default_and_a_sibling_exists(
     source_file, uploaded_objects, capsys, raw_conn
 ):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Real Default"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Remove Real Default")
+    )
     capsys.readouterr()
     await cli._add(source_file, None, None, False, title_slug, 1, "dub-ru", True)
     capsys.readouterr()
@@ -449,7 +493,9 @@ async def test_remove_edition_refuses_when_it_is_the_default_and_a_sibling_exist
 async def test_remove_edition_deletes_a_non_default_edition_with_a_sibling(
     source_file, uploaded_objects, capsys, raw_conn
 ):
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Sibling Edition"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Remove Sibling Edition")
+    )
     capsys.readouterr()
     await cli._add(source_file, None, None, False, title_slug, 1, "dub-ru", False)
     capsys.readouterr()
@@ -458,7 +504,9 @@ async def test_remove_edition_deletes_a_non_default_edition_with_a_sibling(
     out = capsys.readouterr().out
     assert "deleted" in out
 
-    row = await queries.resolve_episode_slug(raw_conn, title_slug, 1, edition_slug="dub-ru")
+    row = await queries.resolve_episode_slug(
+        raw_conn, title_slug, 1, edition_slug="dub-ru"
+    )
     assert row is None or row["edition_id"] is None
     # The episode itself is unaffected.
     still_there = await queries.resolve_slug(raw_conn, title_slug)
@@ -476,7 +524,9 @@ async def test_remove_edition_last_edition_removes_the_episode_too(
     last-edition branch is exercised end to end through the real
     CLI entry point.
     """
-    title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Last Edition"))
+    title_slug = await _add_standalone_title(
+        source_file, _unique("CLI Remove Last Edition")
+    )
     capsys.readouterr()
     await cli._add(source_file, None, None, False, title_slug, 1, "dub-ru", False)
     capsys.readouterr()
@@ -493,7 +543,9 @@ async def test_remove_edition_last_edition_removes_the_episode_too(
         """,
         episode_id,
     )
-    await raw_conn.execute("DELETE FROM editions WHERE id = $1", original_default_edition_id)
+    await raw_conn.execute(
+        "DELETE FROM editions WHERE id = $1", original_default_edition_id
+    )
 
     await cli._remove(f"{title_slug}/1/dub-ru")
     out = capsys.readouterr().out

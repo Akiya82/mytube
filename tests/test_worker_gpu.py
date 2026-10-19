@@ -3,6 +3,7 @@ card, no real subprocess. What is under test is the parse: the vendor's
 own query tool prints one line per card, and a host with two cards must
 not be misread as a host whose reading could not be parsed at all.
 """
+
 import subprocess
 
 from worker import gpu
@@ -36,7 +37,9 @@ def test_a_single_card_reading_still_works(monkeypatch):
     assert gpu.free_vram_bytes() == 5000 * gpu._BYTES_PER_MIB
 
 
-def test_a_reading_that_cannot_be_parsed_raises_rather_than_claiming_blindly(monkeypatch):
+def test_a_reading_that_cannot_be_parsed_raises_rather_than_claiming_blindly(
+    monkeypatch,
+):
     def fake_run(*args, **kwargs):
         return _FakeCompletedProcess("not a number\n")
 

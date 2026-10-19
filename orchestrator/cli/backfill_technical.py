@@ -11,6 +11,7 @@ measured is named with a reason in words rather than counted, because an
 operator who is only told a number will later be told, confusingly, that
 two of their clips cannot be played together.
 """
+
 import asyncio
 from pathlib import Path
 
@@ -29,9 +30,7 @@ async def backfill_technical() -> int:
     settings = get_settings()
     conn = await asyncpg.connect(settings.database_url)
     try:
-        measured, unmeasured = await backfill_editions(
-            conn, Path(settings.share_root)
-        )
+        measured, unmeasured = await backfill_editions(conn, Path(settings.share_root))
     finally:
         await conn.close()
 

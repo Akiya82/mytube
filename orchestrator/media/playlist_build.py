@@ -51,6 +51,7 @@ the manifest, never by their filename. The upload states the real type
 (`video/mp2t`) so the response a player receives is honest about what it
 holds; only the key spelling is fixed by the edge.
 """
+
 import math
 from dataclasses import dataclass
 
@@ -119,10 +120,17 @@ def stream_parameters(probe_json: dict) -> StreamParameters:
     stream happens to come first in the file. The frame rate goes through
     `compat`'s own fraction parser rather than a second copy of it here.
     """
-    video = next(
-        (s for s in probe_json.get("streams", []) if s.get("codec_type") == "video"),
-        None,
-    ) or {}
+    video = (
+        next(
+            (
+                s
+                for s in probe_json.get("streams", [])
+                if s.get("codec_type") == "video"
+            ),
+            None,
+        )
+        or {}
+    )
 
     tracks = audio_tracks(probe_json)
     track = next((t for t in tracks if t.codec == "aac"), tracks[0] if tracks else None)
@@ -414,7 +422,9 @@ def render_manifest(sections) -> str:
     return "\n".join(lines) + "\n"
 
 
-def validate_manifest(sections, known_segment_keys, *, document=None) -> ManifestVerdict:
+def validate_manifest(
+    sections, known_segment_keys, *, document=None
+) -> ManifestVerdict:
     """What stands between a malformed document and every player in a
     VRChat instance. Not defence in depth, not optional: a player handed a
     document naming a segment that is not there stalls, and it stalls for
@@ -445,7 +455,9 @@ def validate_manifest(sections, known_segment_keys, *, document=None) -> Manifes
             },
         )
 
-    missing = [seg.object_key for seg in segments if seg.object_key not in known_segment_keys]
+    missing = [
+        seg.object_key for seg in segments if seg.object_key not in known_segment_keys
+    ]
     if missing:
         return ManifestVerdict(
             ok=False,

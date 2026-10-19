@@ -8,16 +8,16 @@ shape, the exit code, and the two extra requirements the plan calls out --
 naming a missing object by the `/v/{slug}` address it breaks, and never
 calling anything that deletes or aborts.
 """
+
 import uuid
 
 import asyncpg
 import pytest
+from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 from orchestrator.cli import storage_audit
 from orchestrator.db import queries
 from orchestrator.storage import StorageUsage, reconcile
-
-from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 
 class _DummyConn:
@@ -102,7 +102,9 @@ async def test_unreferenced_object_reports_key_size_and_total(monkeypatch, capsy
     assert "total unreferenced: 250" in out
 
 
-async def test_unreferenced_object_prints_a_removal_command_but_deletes_nothing(monkeypatch, capsys):
+async def test_unreferenced_object_prints_a_removal_command_but_deletes_nothing(
+    monkeypatch, capsys
+):
     referenced = []
     _stub(monkeypatch, referenced, {"orphan.mp4": 100})
 
@@ -113,9 +115,16 @@ async def test_unreferenced_object_prints_a_removal_command_but_deletes_nothing(
     assert "orphan.mp4" in out
 
 
-async def test_missing_object_reports_the_address_it_breaks_not_only_the_key(monkeypatch, capsys):
+async def test_missing_object_reports_the_address_it_breaks_not_only_the_key(
+    monkeypatch, capsys
+):
     referenced = [
-        {"key": "gone.mp4", "kind": "video", "title_name": "Gone Title", "slug": "gone-slug"}
+        {
+            "key": "gone.mp4",
+            "kind": "video",
+            "title_name": "Gone Title",
+            "slug": "gone-slug",
+        }
     ]
     _stub(monkeypatch, referenced, {})
 
@@ -142,7 +151,9 @@ async def test_both_kinds_reported_together(monkeypatch, capsys):
     assert "/v/gone-slug" in out
 
 
-async def test_poster_key_referenced_prevents_it_being_reported_unreferenced(monkeypatch, capsys):
+async def test_poster_key_referenced_prevents_it_being_reported_unreferenced(
+    monkeypatch, capsys
+):
     referenced = [
         {"key": "abc.mp4", "kind": "video", "title_name": "A", "slug": "a"},
         {"key": "abc.jpg", "kind": "poster", "title_name": "A", "slug": "a"},
@@ -178,7 +189,12 @@ async def test_a_moved_editions_object_counts_present_exactly_once(monkeypatch, 
     and not zero times.
     """
     referenced = [
-        {"key": "moved.mp4", "kind": "video", "title_name": "Target Series", "slug": "target-series"},
+        {
+            "key": "moved.mp4",
+            "kind": "video",
+            "title_name": "Target Series",
+            "slug": "target-series",
+        },
     ]
     _stub(monkeypatch, referenced, {"moved.mp4": 1234})
 
@@ -190,8 +206,12 @@ async def test_a_moved_editions_object_counts_present_exactly_once(monkeypatch, 
     assert out.count("moved.mp4") == 0  # never printed as unreferenced or missing
 
 
-async def test_no_slug_reports_address_unknown_instead_of_a_bare_key(monkeypatch, capsys):
-    referenced = [{"key": "gone.mp4", "kind": "video", "title_name": "Gone", "slug": None}]
+async def test_no_slug_reports_address_unknown_instead_of_a_bare_key(
+    monkeypatch, capsys
+):
+    referenced = [
+        {"key": "gone.mp4", "kind": "video", "title_name": "Gone", "slug": None}
+    ]
     _stub(monkeypatch, referenced, {})
 
     code = await storage_audit.storage_audit()
@@ -242,7 +262,12 @@ async def test_a_missing_playlist_artifact_names_the_playlist_address_not_a_vide
     """
     referenced = [
         {"key": "gone-video.mp4", "kind": "video", "title_name": "V", "slug": "v-slug"},
-        {"key": "gone-artifact.mp4", "kind": "playlist", "title_name": "P", "slug": "p-slug"},
+        {
+            "key": "gone-artifact.mp4",
+            "kind": "playlist",
+            "title_name": "P",
+            "slug": "p-slug",
+        },
     ]
     _stub(monkeypatch, referenced, {})
 
@@ -267,23 +292,33 @@ async def _seed_three_episode_title(conn, tag: str) -> tuple:
         conn, f"Storage Audit {tag}", slug, edition1, f"{edition1}.mp4"
     )
     edition2 = uuid.uuid4()
-    await queries.attach_episode_to_title(conn, title_id, 2, edition2, f"{edition2}.mp4")
+    await queries.attach_episode_to_title(
+        conn, title_id, 2, edition2, f"{edition2}.mp4"
+    )
     edition3 = uuid.uuid4()
-    await queries.attach_episode_to_title(conn, title_id, 3, edition3, f"{edition3}.mp4")
+    await queries.attach_episode_to_title(
+        conn, title_id, 3, edition3, f"{edition3}.mp4"
+    )
     return title_id, edition1, edition2, edition3
 
 
 @pytest.mark.integration
-async def test_a_reaped_episodes_object_is_counted_zero_times_and_its_siblings_once(raw_conn):
+async def test_a_reaped_episodes_object_is_counted_zero_times_and_its_siblings_once(
+    raw_conn,
+):
     """`referenced_objects` excludes only the reaped episode's own edition
     (`ep.status = 'deleted'`), leaving its two untouched siblings counted
     exactly once each -- the exact false positive the function's own
     docstring says the title-level exclusion exists to prevent, one level
     down.
     """
-    title_id, edition1, edition2, edition3 = await _seed_three_episode_title(raw_conn, "reaped")
+    title_id, edition1, edition2, edition3 = await _seed_three_episode_title(
+        raw_conn, "reaped"
+    )
     episode2 = await queries.episode_by_number(raw_conn, title_id, 2)
-    await queries.mark_episode_for_delete(raw_conn, episode2["episode_id"], grace_seconds=0)
+    await queries.mark_episode_for_delete(
+        raw_conn, episode2["episode_id"], grace_seconds=0
+    )
     await queries.finish_delete_episode(raw_conn, episode2["episode_id"])
 
     referenced = await queries.referenced_objects(raw_conn)
@@ -295,7 +330,9 @@ async def test_a_reaped_episodes_object_is_counted_zero_times_and_its_siblings_o
 
 
 @pytest.mark.integration
-async def test_an_episode_still_inside_its_countdown_is_still_counted_referenced(raw_conn):
+async def test_an_episode_still_inside_its_countdown_is_still_counted_referenced(
+    raw_conn,
+):
     """A `pending_delete` episode's objects are untouched while the
     deletion can still be undone -- a bucket genuinely missing them
     during that window is still a broken address, so it must not be
@@ -305,7 +342,9 @@ async def test_an_episode_still_inside_its_countdown_is_still_counted_referenced
         raw_conn, "countdown"
     )
     episode2 = await queries.episode_by_number(raw_conn, title_id, 2)
-    await queries.mark_episode_for_delete(raw_conn, episode2["episode_id"], grace_seconds=3600)
+    await queries.mark_episode_for_delete(
+        raw_conn, episode2["episode_id"], grace_seconds=3600
+    )
 
     referenced = await queries.referenced_objects(raw_conn)
     keys = [row["key"] for row in referenced]
@@ -401,7 +440,9 @@ async def test_a_preparing_edition_is_a_broken_address_once_active_and_still_mis
 
 
 @pytest.mark.integration
-async def test_a_preparing_title_contributes_nothing_until_the_title_is_active(raw_conn):
+async def test_a_preparing_title_contributes_nothing_until_the_title_is_active(
+    raw_conn,
+):
     """The single-file add's own shape (`create_title_with_edition`):
     `status` lands on the *title* row while the edition insert takes the
     schema's own default (`active`), so a fresh add is one nominally-
@@ -431,7 +472,9 @@ async def test_a_preparing_title_contributes_nothing_until_the_title_is_active(r
 
 
 @pytest.mark.integration
-async def test_an_edition_inside_its_delete_countdown_is_still_counted_referenced(raw_conn):
+async def test_an_edition_inside_its_delete_countdown_is_still_counted_referenced(
+    raw_conn,
+):
     """A `pending_delete` edition's object is untouched while the
     deletion can still be undone -- a bucket genuinely missing it
     during that window is still a broken address, so the new `preparing`
@@ -444,7 +487,9 @@ async def test_an_edition_inside_its_delete_countdown_is_still_counted_reference
         raw_conn, "Storage Audit Edition Countdown", slug, edition1, f"{edition1}.mp4"
     )
     edition2 = uuid.uuid4()
-    await queries.attach_episode_to_title(raw_conn, title_id, 2, edition2, f"{edition2}.mp4")
+    await queries.attach_episode_to_title(
+        raw_conn, title_id, 2, edition2, f"{edition2}.mp4"
+    )
     await queries.mark_edition_for_delete(raw_conn, edition2, grace_seconds=3600)
 
     referenced = await queries.referenced_objects(raw_conn)
@@ -474,7 +519,9 @@ async def test_a_failed_editions_object_still_in_the_bucket_is_reported_present_
         raw_conn, "Storage Audit Failed Present", slug, edition1, f"{edition1}.mp4"
     )
     edition2 = uuid.uuid4()
-    await queries.attach_episode_to_title(raw_conn, title_id, 2, edition2, f"{edition2}.mp4")
+    await queries.attach_episode_to_title(
+        raw_conn, title_id, 2, edition2, f"{edition2}.mp4"
+    )
     await queries.mark_edition_failed(raw_conn, edition2, "failed.reason.upload")
 
     referenced = await queries.referenced_objects(raw_conn)

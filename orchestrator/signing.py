@@ -31,6 +31,7 @@ only when the value does not already carry it, so a bare id and an
 already-extensioned key both reach the edge as the exact same key the
 object was stored under, never doubled and never missing.
 """
+
 import base64
 import hashlib
 import time

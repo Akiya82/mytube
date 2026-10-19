@@ -8,6 +8,7 @@ link is" or "this link is no longer valid" -- keyed on nothing but
 whether an operator already exists (see setup_form_route's own
 docstring).
 """
+
 import asyncio
 import logging
 import secrets
@@ -128,9 +129,9 @@ async def login_form_route(request: Request):
     # own "keep the query string" behaviour, exercised with no operator
     # present by this suite's own no_operator-fixtured tests), and this
     # branch leaves that alone rather than redirecting it away.
-    if request.query_params.get("next") is None and not await auth.operator_exists_cached(
-        request
-    ):
+    if request.query_params.get(
+        "next"
+    ) is None and not await auth.operator_exists_cached(request):
         return RedirectResponse("/setup", status_code=302)
 
     next_url = auth.safe_next(request.query_params.get("next"))
@@ -226,7 +227,11 @@ async def login_submit_route(
     raw, token_hash = auth.new_session_token()
     async with pool.acquire(timeout=auth.ACQUIRE_TIMEOUT_SECONDS) as conn:
         created = await queries.create_session(
-            conn, token_hash, row["id"], auth.SESSION_LIFETIME_SECONDS, row["password_hash"]
+            conn,
+            token_hash,
+            row["id"],
+            auth.SESSION_LIFETIME_SECONDS,
+            row["password_hash"],
         )
     if not created:
         # The credential changed between the read above and this
@@ -341,14 +346,20 @@ async def setup_form_route(request: Request):
     # whatever query string this exact request carried.
     if await auth.operator_exists_cached(request):
         return render(
-            request, "setup.html", minimal_header=True, setup_state="spent",
+            request,
+            "setup.html",
+            minimal_header=True,
+            setup_state="spent",
             current_url="/setup",
         )
 
     token = request.query_params.get("token") or ""
     if not _setup_token_valid(request, token):
         return render(
-            request, "setup.html", minimal_header=True, setup_state="needed",
+            request,
+            "setup.html",
+            minimal_header=True,
+            setup_state="needed",
             current_url="/setup",
         )
 
@@ -383,16 +394,24 @@ async def setup_submit_route(
         await asyncio.sleep(auth.FAILED_ATTEMPT_DELAY_SECONDS)
         logger.warning("setup submission refused: an operator already exists")
         return render(
-            request, "setup.html", status_code=200, minimal_header=True,
-            setup_state="spent", current_url="/setup",
+            request,
+            "setup.html",
+            status_code=200,
+            minimal_header=True,
+            setup_state="spent",
+            current_url="/setup",
         )
 
     if not _setup_token_valid(request, token):
         await asyncio.sleep(auth.FAILED_ATTEMPT_DELAY_SECONDS)
         logger.warning("setup submission refused: invalid or missing token")
         return render(
-            request, "setup.html", status_code=200, minimal_header=True,
-            setup_state="needed", current_url="/setup",
+            request,
+            "setup.html",
+            status_code=200,
+            minimal_header=True,
+            setup_state="needed",
+            current_url="/setup",
         )
 
     # A POST's state lives in the body, not the query string -- see
@@ -464,7 +483,11 @@ async def setup_submit_route(
         async with pool.acquire(timeout=auth.ACQUIRE_TIMEOUT_SECONDS) as conn:
             await queries.create_operator(conn, operator_id, username, password_hash)
             await queries.create_session(
-                conn, token_hash, operator_id, auth.SESSION_LIFETIME_SECONDS, password_hash
+                conn,
+                token_hash,
+                operator_id,
+                auth.SESSION_LIFETIME_SECONDS,
+                password_hash,
             )
     except asyncpg.exceptions.UniqueViolationError:
         # Two submissions at once, or a credential created from the
@@ -475,10 +498,16 @@ async def setup_submit_route(
         # approximates.
         request.app.state.operator_exists = True
         request.app.state.setup_token = None
-        logger.warning("setup submission lost a race: an operator was created concurrently")
+        logger.warning(
+            "setup submission lost a race: an operator was created concurrently"
+        )
         return render(
-            request, "setup.html", status_code=200, minimal_header=True,
-            setup_state="spent", current_url="/setup",
+            request,
+            "setup.html",
+            status_code=200,
+            minimal_header=True,
+            setup_state="spent",
+            current_url="/setup",
         )
 
     # Consumed the instant it works, in process, with no extra query on

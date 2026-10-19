@@ -20,6 +20,7 @@ third-party at module level (see its own docstring).
 Usage: check_faststart.py <mp4_path>
 Exit code: 0 if moov comes before mdat, 1 otherwise (or on a read error).
 """
+
 import sys
 from pathlib import Path
 

@@ -13,6 +13,7 @@ half (anamorphic) frame from a full one, and geometry alone cannot either
 film). Half is reachable only through a filename token or the operator's
 own correction in the form.
 """
+
 import re
 from pathlib import Path
 

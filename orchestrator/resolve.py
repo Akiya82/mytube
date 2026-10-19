@@ -7,6 +7,7 @@ extensionless address with the right Content-Type plays directly, direct
 serving is not implemented -- there is nowhere to put the signature without
 dirtying the short link.
 """
+
 import asyncio
 import uuid
 
@@ -58,7 +59,9 @@ def external_base_url(request: Request) -> str:
     return f"{proto}://{host}"
 
 
-def _sign_redirect(request: Request, edition_id, extra_query: str = "") -> RedirectResponse:
+def _sign_redirect(
+    request: Request, edition_id, extra_query: str = ""
+) -> RedirectResponse:
     settings = get_settings()
     sig, exp = sign_blob_url(
         str(edition_id), settings.secure_link_secret, settings.sign_ttl_seconds
@@ -199,7 +202,9 @@ async def resolve_episode_or_edition_route(slug: str, segment: str, request: Req
         return Response(status_code=404)
 
     if address.number is not None:
-        resolver = lambda conn: queries.resolve_episode_slug(conn, address.slug, address.number)
+        resolver = lambda conn: queries.resolve_episode_slug(
+            conn, address.slug, address.number
+        )
     else:
         resolver = lambda conn: queries.resolve_title_edition_slug(
             conn, address.slug, address.edition_slug
@@ -243,7 +248,10 @@ async def resolve_episode_edition_route(
             _acquire_and(
                 pool,
                 lambda conn: queries.resolve_episode_slug(
-                    conn, address.slug, address.number, edition_slug=address.edition_slug
+                    conn,
+                    address.slug,
+                    address.number,
+                    edition_slug=address.edition_slug,
                 ),
             ),
             timeout=auth.ACQUIRE_TIMEOUT_SECONDS,

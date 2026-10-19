@@ -1,5 +1,6 @@
 """Tests for orchestrator.signing — including the golden vector and the live
 nginx cross-check for Pitfall C (Python/secure_link_md5 formula drift)."""
+
 import subprocess
 import textwrap
 import time
@@ -103,19 +104,29 @@ def test_nginx_accepts_python_signature(tmp_path: Path, signing_secret: str):
     subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
     run = subprocess.run(
         [
-            "docker", "run", "-d", "--rm", "--name", container_name,
-            "-p", "0:80",
-            "-v", f"{conf_path}:/etc/nginx/nginx.conf:ro",
+            "docker",
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            container_name,
+            "-p",
+            "0:80",
+            "-v",
+            f"{conf_path}:/etc/nginx/nginx.conf:ro",
             "nginx:1.27-alpine",
         ],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert run.returncode == 0, f"docker run failed: {run.stderr}"
 
     try:
         port_out = subprocess.run(
             ["docker", "port", container_name, "80/tcp"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         host_port = port_out.stdout.strip().split(":")[-1]
         base_url = f"http://127.0.0.1:{host_port}"
@@ -130,7 +141,9 @@ def test_nginx_accepts_python_signature(tmp_path: Path, signing_secret: str):
 
         good_url = f"{base_url}/blob/{edition_id}.mp4?sig={sig}&exp={expires}"
         resp = httpx.get(good_url, timeout=5)
-        assert resp.status_code == 200, f"valid signature rejected: {resp.status_code} {resp.text}"
+        assert resp.status_code == 200, (
+            f"valid signature rejected: {resp.status_code} {resp.text}"
+        )
 
         # Corrupt the FIRST character, not the last. The signature is 22
         # base64url characters encoding a 128-bit MD5 digest with no
@@ -143,6 +156,8 @@ def test_nginx_accepts_python_signature(tmp_path: Path, signing_secret: str):
         tampered_sig = ("A" if sig[0] != "A" else "B") + sig[1:]
         bad_url = f"{base_url}/blob/{edition_id}.mp4?sig={tampered_sig}&exp={expires}"
         resp_bad = httpx.get(bad_url, timeout=5)
-        assert resp_bad.status_code == 403, f"tampered signature accepted: {resp_bad.status_code}"
+        assert resp_bad.status_code == 403, (
+            f"tampered signature accepted: {resp_bad.status_code}"
+        )
     finally:
         subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)

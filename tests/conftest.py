@@ -30,9 +30,7 @@ def _docker_daemon_reachable() -> bool:
     no daemon is listening, without needing an image pulled first.
     """
     try:
-        subprocess.run(
-            ["docker", "info"], capture_output=True, timeout=5, check=True
-        )
+        subprocess.run(["docker", "info"], capture_output=True, timeout=5, check=True)
         return True
     except Exception:
         return False

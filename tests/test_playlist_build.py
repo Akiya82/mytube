@@ -14,6 +14,7 @@ that stands in front of the generated document, which had no
 specification anywhere and is the one failure in this project that
 reaches every viewer in an instance at once rather than one of them.
 """
+
 import json
 import pathlib
 
@@ -159,7 +160,9 @@ def test_parity_verdict_ignores_a_member_whose_video_was_deleted():
 
     verdict = parity_verdict(members)
 
-    assert verdict.ok is True, "a member that will never be part of the artifact must not be counted"
+    assert verdict.ok is True, (
+        "a member that will never be part of the artifact must not be counted"
+    )
 
 
 def test_required_build_bytes_accounts_for_the_members_living_in_scratch():

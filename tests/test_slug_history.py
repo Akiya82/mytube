@@ -2,6 +2,7 @@
 via the `db_conn` fixture in conftest.py). Marked `integration` -- these need
 Docker.
 """
+
 import os
 import subprocess
 import sys
@@ -9,10 +10,9 @@ import uuid
 from pathlib import Path
 
 import pytest
+from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 from orchestrator.db import queries
-
-from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -77,7 +77,9 @@ async def test_move_into_series_keeps_the_old_address_resolving(db_conn):
     query test_add_folder.py already exercises for the folder screen's
     own batch move.
     """
-    target_title_id = await _create_title(db_conn, "Move Target Series", "move-target-series-slug")
+    target_title_id = await _create_title(
+        db_conn, "Move Target Series", "move-target-series-slug"
+    )
     edition_id = uuid.uuid4()
     source_title_id = await queries.create_title_with_edition(
         db_conn,
@@ -143,7 +145,9 @@ async def test_reuse_slug_after_tombstone_new_title_wins_old_row_survives(db_con
     assert title_ids == {old_title_id, new_title_id}
 
 
-async def test_reuse_slug_direct_call_is_a_pure_insert_that_does_not_touch_other_rows(db_conn):
+async def test_reuse_slug_direct_call_is_a_pure_insert_that_does_not_touch_other_rows(
+    db_conn,
+):
     """reuse_slug in isolation, on a title with no slug_history row yet at
     all (bypassing create_title_with_edition) -- proves it really is just
     "insert a current row for this title_id", nothing more.
@@ -216,9 +220,17 @@ async def test_migration_downgrade_and_upgrade_round_trip(migrated_db_url):
 
     subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],
-        cwd=REPO_ROOT, env=env, check=True, capture_output=True, text=True,
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=REPO_ROOT, env=env, check=True, capture_output=True, text=True,
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
     )

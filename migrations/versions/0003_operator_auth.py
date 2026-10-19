@@ -94,7 +94,7 @@ def upgrade() -> None:
     # removing an operator removes their sessions without a second
     # statement. `expires_at` moves forward on every renewed request,
     # which is what makes the 30-day window sliding rather than absolute
-    #.
+    # .
     op.execute(
         "CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions (expires_at)"
     )

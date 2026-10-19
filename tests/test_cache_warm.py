@@ -3,6 +3,7 @@
 of Range requests. The two cases that matter are the ones the loop
 condition used to get wrong.
 """
+
 import httpx
 import pytest
 
@@ -57,7 +58,9 @@ def fake_http(monkeypatch):
     return _FakeClient
 
 
-def test_an_origin_that_ignores_range_stops_instead_of_looping_forever(fake_http, capsys):
+def test_an_origin_that_ignores_range_stops_instead_of_looping_forever(
+    fake_http, capsys
+):
     """A misconfigured edge answers 200 with the whole body and no
     Content-Range. The total size then stays unknown -- which used to keep
     the loop condition permanently true and the byte limit never consulted,
@@ -97,8 +100,12 @@ def test_the_byte_limit_is_honoured_when_the_origin_serves_ranges(fake_http, cap
 def test_a_file_shorter_than_the_limit_ends_on_the_short_read(fake_http, capsys):
     total = CHUNK + 10
     fake_http.script = [
-        _FakeResponse(206, b"x" * CHUNK, {"content-range": f"bytes 0-{CHUNK - 1}/{total}"}),
-        _FakeResponse(206, b"x" * 10, {"content-range": f"bytes {CHUNK}-{total - 1}/{total}"}),
+        _FakeResponse(
+            206, b"x" * CHUNK, {"content-range": f"bytes 0-{CHUNK - 1}/{total}"}
+        ),
+        _FakeResponse(
+            206, b"x" * 10, {"content-range": f"bytes {CHUNK}-{total - 1}/{total}"}
+        ),
     ]
 
     code = cw.cache_warm(

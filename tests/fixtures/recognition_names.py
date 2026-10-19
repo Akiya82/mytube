@@ -13,6 +13,7 @@ files. `KNOWN_LIMITS` records a shape the recogniser genuinely cannot get
 right, with the plain-English reason why -- empty until a real attempt
 proves one belongs here.
 """
+
 from typing import NamedTuple
 
 

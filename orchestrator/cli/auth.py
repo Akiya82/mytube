@@ -11,6 +11,7 @@ source word on every mutating call, through `_audit` below, so a captured
 transcript or log line is distinguishable from an interface line even
 when both end up in the same place.
 """
+
 import logging
 import uuid
 

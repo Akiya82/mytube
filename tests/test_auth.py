@@ -26,6 +26,7 @@ satisfy:
   `conftest.py` fixture does it for every other screen's tests.
 - `safe_next(value, fallback="/library") -> str`.
 """
+
 import re
 import time
 import urllib.parse
@@ -33,13 +34,12 @@ import uuid
 
 import httpx
 import pytest
+from conftest import ADMIN_FQDN
 
 from orchestrator import auth  # RED: orchestrator/auth.py does not exist yet.
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
-
-from conftest import ADMIN_FQDN
 
 # A same-site browser POST carries this pair; the edge's admin block sets
 # X-Forwarded-Host on every request it proxies, and a browser attaches
@@ -138,7 +138,9 @@ def _active_row():
 async def test_public_paths_reach_their_route_without_a_session(
     monkeypatch, client, operator_present, path
 ):
-    monkeypatch.setattr(queries, "resolve_slug", lambda conn, slug: _future(_active_row()))
+    monkeypatch.setattr(
+        queries, "resolve_slug", lambda conn, slug: _future(_active_row())
+    )
     monkeypatch.setattr(
         queries, "resolve_edition", lambda conn, edition_id: _future(_active_row())
     )
@@ -197,7 +199,9 @@ async def test_a_foreign_forwarded_host_is_refused_in_plain_text(
         assert "set-cookie" not in resp.headers
 
 
-async def test_a_request_with_no_forwarded_host_is_not_refused(client, operator_present):
+async def test_a_request_with_no_forwarded_host_is_not_refused(
+    client, operator_present
+):
     async with client:
         resp = await client.get("/healthz", follow_redirects=False)
 
@@ -225,7 +229,9 @@ async def test_a_matching_forwarded_host_is_accepted(
 async def test_a_delivery_request_carrying_the_delivery_hostname_is_not_refused(
     monkeypatch, client, path
 ):
-    monkeypatch.setattr(queries, "resolve_slug", lambda conn, slug: _future(_active_row()))
+    monkeypatch.setattr(
+        queries, "resolve_slug", lambda conn, slug: _future(_active_row())
+    )
     monkeypatch.setattr(
         queries, "resolve_edition", lambda conn, edition_id: _future(_active_row())
     )
@@ -240,14 +246,18 @@ async def test_a_delivery_request_carrying_the_delivery_hostname_is_not_refused(
     assert resp.status_code != 400
 
 
-async def test_cookie_attributes_on_a_successful_login(monkeypatch, client, operator_present):
+async def test_cookie_attributes_on_a_successful_login(
+    monkeypatch, client, operator_present
+):
     async def _fake_credential(conn, username):
         return {"id": uuid.uuid4(), "password_hash": "$argon2id$fake"}
 
     async def _fake_verify(stored_hash, password):
         return True
 
-    async def _fake_create_session(conn, token_hash, operator_id, lifetime_seconds, expected_password_hash):
+    async def _fake_create_session(
+        conn, token_hash, operator_id, lifetime_seconds, expected_password_hash
+    ):
         return True
 
     monkeypatch.setattr(queries, "credential_by_username", _fake_credential)
@@ -314,7 +324,9 @@ async def _raise(exc):
     raise exc
 
 
-async def test_a_browser_post_from_another_site_is_still_refused(client, operator_present):
+async def test_a_browser_post_from_another_site_is_still_refused(
+    client, operator_present
+):
     async with client:
         resp = await client.post(
             "/login",
@@ -357,7 +369,9 @@ async def test_a_next_value_that_leaves_the_site_is_replaced_by_the_library(
 async def test_an_authenticated_page_is_not_stored_by_the_browser(
     monkeypatch, signed_in_client
 ):
-    monkeypatch.setattr(queries, "resolve_slug", lambda conn, slug: _future(_active_row()))
+    monkeypatch.setattr(
+        queries, "resolve_slug", lambda conn, slug: _future(_active_row())
+    )
     monkeypatch.setattr(
         queries,
         "library_row",
@@ -383,10 +397,14 @@ async def test_a_poster_keeps_its_own_cache_header_through_the_gate(
 ):
     import orchestrator.web.routes_titles as routes_titles
 
-    monkeypatch.setattr(routes_titles, "get_object_bytes", lambda key: b"fake-jpeg-bytes")
+    monkeypatch.setattr(
+        routes_titles, "get_object_bytes", lambda key: b"fake-jpeg-bytes"
+    )
 
     async with signed_in_client:
-        resp = await signed_in_client.get(f"/poster/{uuid.uuid4()}", follow_redirects=False)
+        resp = await signed_in_client.get(
+            f"/poster/{uuid.uuid4()}", follow_redirects=False
+        )
 
     assert resp.headers.get("cache-control") == "public, max-age=31536000, immutable"
 
@@ -402,7 +420,9 @@ async def test_a_stale_post_redirects_to_the_login_form_without_a_next_value(
     assert resp.headers["location"] == "/login"
 
 
-async def test_a_dead_session_cookie_says_the_session_ended(monkeypatch, client, operator_present):
+async def test_a_dead_session_cookie_says_the_session_ended(
+    monkeypatch, client, operator_present
+):
     async def _fake_session_operator_id_none(request):
         return None, False
 
@@ -472,9 +492,7 @@ async def test_a_failed_login_survives_a_language_switch(
     monkeypatch.setattr(
         queries, "credential_by_username", lambda conn, username: _future(None)
     )
-    monkeypatch.setattr(
-        auth, "verify_absent_credential", lambda: _future(None)
-    )
+    monkeypatch.setattr(auth, "verify_absent_credential", lambda: _future(None))
     monkeypatch.setattr(auth, "FAILED_ATTEMPT_DELAY_SECONDS", 0)
 
     async with client:
@@ -495,9 +513,7 @@ async def test_a_failed_login_survives_a_language_switch(
     assert "someone" not in switched.text
 
 
-async def test_a_failed_password_setup_survives_a_language_switch(
-    client, no_operator
-):
+async def test_a_failed_password_setup_survives_a_language_switch(client, no_operator):
     async with client:
         failure = await client.post(
             "/setup",
@@ -555,7 +571,9 @@ async def test_an_error_flag_cannot_cross_between_the_two_screens(
 
 
 @pytest.mark.integration
-async def _signed_up_operator(raw_conn, username="op", password="correct horse battery"):
+async def _signed_up_operator(
+    raw_conn, username="op", password="correct horse battery"
+):
     """Not a fixture -- a helper the integration tests below call directly
     once orchestrator.auth/db.queries exist, to seed a real operator row
     without going through the CLI or the setup route.
@@ -656,16 +674,23 @@ async def test_signing_out_leaves_another_device_signed_in(
     _, username, password = await _signed_up_operator(raw_conn)
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="https://testserver"
-    ) as device_a, httpx.AsyncClient(
-        transport=transport, base_url="https://testserver"
-    ) as device_b:
+    async with (
+        httpx.AsyncClient(
+            transport=transport, base_url="https://testserver"
+        ) as device_a,
+        httpx.AsyncClient(
+            transport=transport, base_url="https://testserver"
+        ) as device_b,
+    ):
         await device_a.post(
-            "/login", data={"username": username, "password": password}, follow_redirects=False
+            "/login",
+            data={"username": username, "password": password},
+            follow_redirects=False,
         )
         await device_b.post(
-            "/login", data={"username": username, "password": password}, follow_redirects=False
+            "/login",
+            data={"username": username, "password": password},
+            follow_redirects=False,
         )
 
         await device_a.post("/logout", follow_redirects=False)
@@ -683,7 +708,9 @@ async def test_the_sliding_window_extends_a_live_session(
 
     async with integration_client:
         await integration_client.post(
-            "/login", data={"username": username, "password": password}, follow_redirects=False
+            "/login",
+            data={"username": username, "password": password},
+            follow_redirects=False,
         )
 
         row = await raw_conn.fetchrow("SELECT token_hash, expires_at FROM sessions")
@@ -705,7 +732,9 @@ async def test_the_sliding_window_extends_a_live_session(
 
 
 @pytest.mark.integration
-async def test_the_expiry_sweep_removes_a_timed_out_session(app_pool, auth_tables, raw_conn):
+async def test_the_expiry_sweep_removes_a_timed_out_session(
+    app_pool, auth_tables, raw_conn
+):
     from orchestrator.reaper import sweep_sessions_once
 
     _, username, _ = await _signed_up_operator(raw_conn, username="expiry-op")
@@ -744,9 +773,13 @@ async def test_first_run_with_an_empty_credential_table_routes_to_the_setup_page
 
 
 @pytest.mark.integration
-async def test_the_setup_page_refuses_a_wrong_token(app_pool, auth_tables, integration_client):
+async def test_the_setup_page_refuses_a_wrong_token(
+    app_pool, auth_tables, integration_client
+):
     async with integration_client:
-        resp = await integration_client.get("/setup?token=definitely-wrong", follow_redirects=False)
+        resp = await integration_client.get(
+            "/setup?token=definitely-wrong", follow_redirects=False
+        )
 
     assert resp.status_code == 200
     assert "<form" not in resp.text or 'type="password"' not in resp.text
@@ -764,7 +797,9 @@ async def test_creating_the_password_signs_the_operator_in(app_pool, auth_tables
         pytest.skip("app.state.setup_token is not wired yet")
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="https://testserver") as c:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="https://testserver"
+    ) as c:
         resp = await c.post(
             "/setup",
             data={
@@ -807,7 +842,10 @@ async def test_the_setup_page_tells_a_first_arrival_where_the_link_is(
     assert resp.status_code == 200
     # Opposite state from the once-an-account-exists case above: this must
     # not render whatever that one renders when no token is supplied.
-    assert "docker compose logs" in resp.text.lower() or "container log" in resp.text.lower()
+    assert (
+        "docker compose logs" in resp.text.lower()
+        or "container log" in resp.text.lower()
+    )
 
 
 @pytest.mark.integration
@@ -893,7 +931,9 @@ async def test_the_cookie_lifetime_moves_when_the_window_does(
 
     async with integration_client:
         await integration_client.post(
-            "/login", data={"username": username, "password": password}, follow_redirects=False
+            "/login",
+            data={"username": username, "password": password},
+            follow_redirects=False,
         )
 
         row = await raw_conn.fetchrow("SELECT token_hash FROM sessions")
@@ -971,7 +1011,9 @@ async def test_signing_out_clears_the_cookie_even_when_the_database_is_unreachab
     async with integration_client:
         resp = await integration_client.post(
             "/logout",
-            headers={"Cookie": f"{auth.SESSION_COOKIE_NAME}=a-cookie-the-browser-still-holds"},
+            headers={
+                "Cookie": f"{auth.SESSION_COOKIE_NAME}=a-cookie-the-browser-still-holds"
+            },
             follow_redirects=False,
         )
 

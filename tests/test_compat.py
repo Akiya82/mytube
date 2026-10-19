@@ -39,6 +39,7 @@ by ten. compatible.json (built as High 4.1) was captured from a real
 below rather than assumed, matching tools/make_control_clip.sh's own
 `check_field level 41` assertion against a clip built the same way.
 """
+
 import json
 from pathlib import Path
 
@@ -189,7 +190,9 @@ def test_a_video_reason_still_wins_over_the_missing_audio_track():
     absent audio track is not the thing to lead with.
     """
     data = _load("no_audio.json")
-    next(s for s in data["streams"] if s["codec_type"] == "video")["codec_name"] = "hevc"
+    next(s for s in data["streams"] if s["codec_type"] == "video")["codec_name"] = (
+        "hevc"
+    )
 
     verdict = analyze(data)
 
@@ -241,10 +244,14 @@ def test_audio_tracks_language_and_title_absent_when_tags_dict_is_missing_entire
     above follow.
     """
     probe_json = {
-        "streams": [{"index": 0, "codec_type": "audio", "codec_name": "aac", "channels": 2}]
+        "streams": [
+            {"index": 0, "codec_type": "audio", "codec_name": "aac", "channels": 2}
+        ]
     }
     tracks = audio_tracks(probe_json)
-    assert tracks == [AudioTrack(index=0, codec="aac", channels=2, language=None, title=None)]
+    assert tracks == [
+        AudioTrack(index=0, codec="aac", channels=2, language=None, title=None)
+    ]
 
 
 def test_default_track_is_first_aac_when_one_exists_among_mixed_codecs():
@@ -462,7 +469,9 @@ def test_a_compatible_source_over_the_bitrate_ceiling_still_plans_a_passthrough(
     """
     data = _load("compatible.json")
     below_the_fixture_s_own_bitrate = 500_000
-    verdict = analyze(data, moov_first=True, bitrate_ceiling_bps=below_the_fixture_s_own_bitrate)
+    verdict = analyze(
+        data, moov_first=True, bitrate_ceiling_bps=below_the_fixture_s_own_bitrate
+    )
 
     assert verdict.plan == "passthrough"
     assert verdict.over_bitrate_ceiling is True

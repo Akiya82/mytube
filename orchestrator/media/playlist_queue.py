@@ -66,6 +66,7 @@ had already uploaded before the interruption are still orphaned, since no
 artifact row names them until the whole build finishes and swaps; the
 storage audit lists them and the operator removes them.
 """
+
 import asyncio
 import logging
 import shutil
@@ -356,7 +357,11 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
         live = [m for m in members if not m["dropped"] and m["object_key"]]
         if not live:
             await _finish(
-                pool, job, outcome="failed", reason_key=REASON_KEY_EMPTY, reason_params={}
+                pool,
+                job,
+                outcome="failed",
+                reason_key=REASON_KEY_EMPTY,
+                reason_params={},
             )
             return
 
@@ -374,7 +379,9 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
             )
 
         required = playlist_build.required_build_bytes(live)
-        free = await asyncio.to_thread(lambda: shutil.disk_usage(settings.work_dir).free)
+        free = await asyncio.to_thread(
+            lambda: shutil.disk_usage(settings.work_dir).free
+        )
         if free < required:
             raise _InsufficientSpaceError(
                 f"{free} free bytes < {required} required in {settings.work_dir}"
@@ -474,9 +481,7 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
 
         await _finish(pool, job, outcome="done")
 
-        logger.info(
-            "playlist %s built: %d segment(s)", job.playlist_id, len(artifacts)
-        )
+        logger.info("playlist %s built: %d segment(s)", job.playlist_id, len(artifacts))
     except _JobCancelled:
         logger.info("playlist build %s cancelled", job.playlist_id)
         await _discard(uploaded)

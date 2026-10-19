@@ -4,6 +4,7 @@ monkeypatched at the `orchestrator.db.queries` module boundary, the same
 shape test_resolve.py and test_share.py already use -- no real Postgres or
 subprocess in this file, quick-loop only.
 """
+
 import json
 import threading
 from pathlib import Path
@@ -11,6 +12,7 @@ from urllib.parse import quote
 
 import httpx
 import pytest
+from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 from mytube_media.compat import AudioTrack, ProbeError
 from orchestrator.config import get_settings
@@ -18,8 +20,6 @@ from orchestrator.db import queries
 from orchestrator.main import app
 from orchestrator.media.add import required_free_bytes
 from orchestrator.web import routes_share, routes_titles
-
-from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "probe"
 
@@ -129,9 +129,17 @@ def db_stub(monkeypatch):
     async def _median_realtime_factor(conn, kind="transcode", last_n=20):
         return stub.median_realtime_factor_result
 
-    async def _create_title_with_edition(conn, name, slug, edition_id, object_key, **kwargs):
+    async def _create_title_with_edition(
+        conn, name, slug, edition_id, object_key, **kwargs
+    ):
         stub.create_title_calls.append(
-            {"name": name, "slug": slug, "edition_id": edition_id, "object_key": object_key, **kwargs}
+            {
+                "name": name,
+                "slug": slug,
+                "edition_id": edition_id,
+                "object_key": object_key,
+                **kwargs,
+            }
         )
         return stub.create_title_id
 
@@ -161,7 +169,9 @@ def db_stub(monkeypatch):
     monkeypatch.setattr(queries, "taken_slugs", _taken_slugs)
     monkeypatch.setattr(queries, "editions_by_source_paths", _editions_by_source_paths)
     monkeypatch.setattr(queries, "median_realtime_factor", _median_realtime_factor)
-    monkeypatch.setattr(queries, "create_title_with_edition", _create_title_with_edition)
+    monkeypatch.setattr(
+        queries, "create_title_with_edition", _create_title_with_edition
+    )
     monkeypatch.setattr(queries, "enqueue_job", _enqueue_job)
     monkeypatch.setattr(
         queries, "set_edition_subtitle_signs_only", _set_edition_subtitle_signs_only
@@ -169,8 +179,12 @@ def db_stub(monkeypatch):
     monkeypatch.setattr(queries, "title_by_current_slug", _title_by_current_slug)
     monkeypatch.setattr(queries, "episode_by_number", _episode_by_number)
     monkeypatch.setattr(queries, "episode_with_title", _episode_with_title)
-    monkeypatch.setattr(queries, "default_edition_technical", _default_edition_technical)
-    monkeypatch.setattr(queries, "audio_languages_on_episode", _audio_languages_on_episode)
+    monkeypatch.setattr(
+        queries, "default_edition_technical", _default_edition_technical
+    )
+    monkeypatch.setattr(
+        queries, "audio_languages_on_episode", _audio_languages_on_episode
+    )
     return stub
 
 
@@ -417,7 +431,9 @@ async def test_slug_field_shows_the_planned_slug(web_client, monkeypatch):
     assert 'value="a-video"' in resp.text
 
 
-async def test_similar_slug_warning_names_the_taken_slug(web_client, monkeypatch, db_stub):
+async def test_similar_slug_warning_names_the_taken_slug(
+    web_client, monkeypatch, db_stub
+):
     monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
     # "a-video.mp4" recognises as "a-video", candidate slug "a-video";
     # "a-vi-deo" is a different, already-taken slug with the same
@@ -436,7 +452,11 @@ async def test_tombstoned_slug_shows_reuse_warning_and_disables_submit(
     web_client, monkeypatch, db_stub
 ):
     monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
-    db_stub.resolve_slug_result = {"title_id": "x", "status": "deleted", "default_edition_id": None}
+    db_stub.resolve_slug_result = {
+        "title_id": "x",
+        "status": "deleted",
+        "default_edition_id": None,
+    }
 
     async with web_client:
         resp = await web_client.get("/add/a-video.mp4")
@@ -452,7 +472,11 @@ async def test_tombstoned_slug_with_reuse_confirmed_enables_submit(
     web_client, monkeypatch, db_stub
 ):
     monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
-    db_stub.resolve_slug_result = {"title_id": "x", "status": "deleted", "default_edition_id": None}
+    db_stub.resolve_slug_result = {
+        "title_id": "x",
+        "status": "deleted",
+        "default_edition_id": None,
+    }
 
     async with web_client:
         resp = await web_client.get("/add/a-video.mp4?confirm_reuse=1")
@@ -520,7 +544,9 @@ async def test_accepting_the_edition_offer_enters_edition_mode_with_no_gate(
     }
 
     async with web_client:
-        resp = await web_client.get("/add/a-video.mp4?target_episode_id=33333333-3333-3333-3333-333333333333")
+        resp = await web_client.get(
+            "/add/a-video.mp4?target_episode_id=33333333-3333-3333-3333-333333333333"
+        )
 
     assert "Adding an edition of episode 3 of Existing Title" in resp.text
     assert 'id="add-edition-slug"' in resp.text
@@ -552,7 +578,9 @@ async def test_opened_from_library_add_edition_link_enters_edition_mode_with_no_
     }
 
     async with web_client:
-        resp = await web_client.get("/add/a-video.mp4?target_episode_id=33333333-3333-3333-3333-333333333333")
+        resp = await web_client.get(
+            "/add/a-video.mp4?target_episode_id=33333333-3333-3333-3333-333333333333"
+        )
 
     assert "Adding an edition of episode 3 of Existing Title" in resp.text
     add_tag = resp.text.split('name="add"')[1].split(">")[0]
@@ -565,7 +593,7 @@ async def test_opened_from_library_add_edition_link_enters_edition_mode_with_no_
 async def test_title_match_with_a_free_number_offers_to_attach_not_a_gate(
     web_client, monkeypatch, db_stub, share_root
 ):
-    """"Horimiya - 12.mkv" recognises as name "Horimiya", episode 12 --
+    """ "Horimiya - 12.mkv" recognises as name "Horimiya", episode 12 --
     when a catalog title's own current slug is "horimiya" and this exact
     path was never added, the offer is an info-tint suggestion, never a
     gate: both primary actions stay enabled either way.
@@ -645,7 +673,9 @@ async def test_no_recognised_episode_number_never_offers_a_title_match(
     assert "target_title_id=44444444" not in resp.text
 
 
-async def test_retired_second_title_gate_keys_render_nowhere(web_client, monkeypatch, db_stub):
+async def test_retired_second_title_gate_keys_render_nowhere(
+    web_client, monkeypatch, db_stub
+):
     monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
     db_stub.already_added_rows = [_already_added_row()]
 
@@ -702,7 +732,9 @@ async def test_subtitle_group_lists_embedded_tracks_and_defaults_to_none(
     assert "English" in resp.text
 
 
-async def test_manual_path_field_is_always_present_with_no_inline_script(web_client, monkeypatch):
+async def test_manual_path_field_is_always_present_with_no_inline_script(
+    web_client, monkeypatch
+):
     """The manual field is a permanent fallback now, not a state
     revealed by picking a radio option -- it renders every time, and its
     own hidden radio carries no static "manual" value in the markup at all
@@ -746,7 +778,9 @@ def test_preview_button_disabled_state_is_wired_to_the_subtitle_choice_in_the_sc
     the listener that keeps the preview control's disabled state in sync
     with the current subtitle choice.
     """
-    script = (Path(__file__).parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+    script = (Path(__file__).parent.parent / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
     assert "_updatePreviewGate" in script
     assert "subtitle_choice" in script
     assert "button.disabled" in script
@@ -774,7 +808,9 @@ async def test_sidecar_picker_route_lists_real_audio_candidates_for_a_real_sourc
     _make_sidecar(share_root, ("RUS Sound", "AniStar"), "Show - 05.mka")
 
     async with web_client:
-        resp = await web_client.get(f"/sidecar-picker/{_encoded('Show - 05.mp4')}?kind=audio")
+        resp = await web_client.get(
+            f"/sidecar-picker/{_encoded('Show - 05.mp4')}?kind=audio"
+        )
 
     assert resp.status_code == 200
     assert "Show - 05.mka" in resp.text
@@ -795,7 +831,9 @@ async def test_sidecar_picker_route_refuses_an_unknown_candidate_kind(web_client
     assert resp.status_code == 400
 
 
-async def test_sidecar_picker_route_empty_state_renders_when_nothing_is_found(web_client):
+async def test_sidecar_picker_route_empty_state_renders_when_nothing_is_found(
+    web_client,
+):
     async with web_client:
         resp = await web_client.get("/sidecar-picker/a-video.mp4?kind=subtitle")
 
@@ -816,7 +854,9 @@ async def test_sidecar_picker_route_offers_a_value_relative_to_the_share_root_no
     assert str(share_root) not in resp.text
 
 
-async def test_subtitle_group_is_disabled_under_a_stereo_layout(web_client, monkeypatch):
+async def test_subtitle_group_is_disabled_under_a_stereo_layout(
+    web_client, monkeypatch
+):
     monkeypatch.setattr(routes_share, "probe", _probe_returning("stereo_sbs_tag.json"))
 
     async with web_client:
@@ -865,7 +905,9 @@ async def test_merged_audio_list_contains_embedded_then_external_in_order(
     monkeypatch.setattr(routes_share, "probe", _probe_returning("compatible.json"))
     (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
     _make_sidecar(share_root, ("RUS Sound", "AniStar"), "Show - 05.mka")
-    monkeypatch.setattr(routes_share, "external_audio_track", _stub_external_audio_track())
+    monkeypatch.setattr(
+        routes_share, "external_audio_track", _stub_external_audio_track()
+    )
 
     async with web_client:
         resp = await web_client.get(f"/add/{_encoded('Show - 05.mp4')}")
@@ -1087,9 +1129,7 @@ async def test_not_enough_space_banner_when_disk_usage_is_low(web_client, monkey
     class _Usage:
         free = 0
 
-    monkeypatch.setattr(
-        routes_share.shutil, "disk_usage", lambda path: _Usage()
-    )
+    monkeypatch.setattr(routes_share.shutil, "disk_usage", lambda path: _Usage())
 
     async with web_client:
         resp = await web_client.get("/add/a-video.mp4")
@@ -1113,9 +1153,7 @@ async def test_convert_only_source_shows_neither_as_is_estimate_nor_space_banner
     class _Usage:
         free = 0
 
-    monkeypatch.setattr(
-        routes_share.shutil, "disk_usage", lambda path: _Usage()
-    )
+    monkeypatch.setattr(routes_share.shutil, "disk_usage", lambda path: _Usage())
 
     async with web_client:
         resp = await web_client.get("/add/a-video.mp4")
@@ -1136,7 +1174,9 @@ def post_client(web_client, monkeypatch):
     `_probe_returning` doubles as GET's, applied to `routes_titles.probe`
     rather than `routes_share.probe`.
     """
-    monkeypatch.setattr(routes_titles, "probe", _probe_returning("subtitles_mixed.json"))
+    monkeypatch.setattr(
+        routes_titles, "probe", _probe_returning("subtitles_mixed.json")
+    )
     return web_client
 
 
@@ -1242,7 +1282,9 @@ async def test_second_edition_gate_refuses_a_convert_post_with_no_confirmation(
     ]
 
     async with post_client:
-        resp = await _post_add(post_client, add=None, convert="1", subtitle_choice="none")
+        resp = await _post_add(
+            post_client, add=None, convert="1", subtitle_choice="none"
+        )
 
     assert resp.status_code == 400
     assert db_stub.create_title_calls == []
@@ -1369,7 +1411,9 @@ async def test_an_external_audio_choice_refuses_a_path_that_does_not_exist(
     post_client, db_stub
 ):
     async with post_client:
-        resp = await _post_add(post_client, audio_choice="external:RUS Sound/no-such.mka")
+        resp = await _post_add(
+            post_client, audio_choice="external:RUS Sound/no-such.mka"
+        )
 
     assert resp.status_code == 400
     assert db_stub.create_title_calls == []
@@ -1385,7 +1429,9 @@ async def test_an_embedded_index_the_probe_never_reported_is_refused_via_audio_c
     assert db_stub.create_title_calls == []
 
 
-async def test_a_malformed_audio_choice_bypassing_the_page_is_refused(post_client, db_stub):
+async def test_a_malformed_audio_choice_bypassing_the_page_is_refused(
+    post_client, db_stub
+):
     """A submission with no page's own controls behind it -- an
     unrecognised `audio_choice` value -- is refused the same way a
     tampered one would be.

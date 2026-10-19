@@ -33,6 +33,7 @@ database pairing is exactly the kind of command this phase's own history
 argues against (the active storage endpoint changed once already, mid
 phase).
 """
+
 import asyncio
 
 import asyncpg
@@ -107,11 +108,17 @@ async def storage_audit() -> int:
         typer.echo("addresses whose object is missing from storage:")
         for obj in result.missing:
             address = format_address(obj.kind, obj.slug)
-            typer.echo(f"  {address} is broken -- {obj.title_name} ({obj.kind}), key {obj.key}")
+            typer.echo(
+                f"  {address} is broken -- {obj.title_name} ({obj.kind}), key {obj.key}"
+            )
     else:
         typer.echo("no broken addresses")
 
-    return DISCREPANCY_EXIT_CODE if (result.unreferenced or result.missing) else OK_EXIT_CODE
+    return (
+        DISCREPANCY_EXIT_CODE
+        if (result.unreferenced or result.missing)
+        else OK_EXIT_CODE
+    )
 
 
 def run_storage_audit() -> int:

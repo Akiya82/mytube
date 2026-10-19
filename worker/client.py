@@ -20,6 +20,7 @@ other changes the answer.
 
 Nothing here ever logs the credential or the authorization header.
 """
+
 import asyncio
 
 import httpx

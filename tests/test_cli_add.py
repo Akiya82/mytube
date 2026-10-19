@@ -3,17 +3,17 @@ put), a real Postgres runs behind the CLI's own connection -- `_add`,
 `_rename`, `_remove` are called directly (bypassing typer's argument
 parsing, which has nothing to do with the behavior under test here).
 """
+
 import asyncio
 import uuid
 
 import pytest
 import typer
+from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 from orchestrator.cli import __main__ as cli
 from orchestrator.config import get_settings
 from orchestrator.db import queries
-
-from conftest import ADMIN_FQDN, WORKER_TOKEN
 
 pytestmark = pytest.mark.integration
 
@@ -51,7 +51,9 @@ def source_file(tmp_path):
     return path
 
 
-async def test_add_creates_title_and_prints_v_address(source_file, uploaded_objects, capsys):
+async def test_add_creates_title_and_prints_v_address(
+    source_file, uploaded_objects, capsys
+):
     await cli._add(source_file, "CLI Атака Титанов", None, False)
 
     out = capsys.readouterr().out
@@ -59,7 +61,9 @@ async def test_add_creates_title_and_prints_v_address(source_file, uploaded_obje
     assert len(uploaded_objects) == 1
 
 
-async def test_add_twice_same_file_gives_different_object_keys(source_file, uploaded_objects):
+async def test_add_twice_same_file_gives_different_object_keys(
+    source_file, uploaded_objects
+):
     await cli._add(source_file, "CLI Dup Source A", None, False)
     await cli._add(source_file, "CLI Dup Source B", None, False)
 
@@ -69,7 +73,9 @@ async def test_add_twice_same_file_gives_different_object_keys(source_file, uplo
     assert all(key.endswith(".mp4") for key in uploaded_objects)
 
 
-async def test_add_collision_gets_deterministic_numeric_suffix(source_file, uploaded_objects, capsys):
+async def test_add_collision_gets_deterministic_numeric_suffix(
+    source_file, uploaded_objects, capsys
+):
     await cli._add(source_file, "CLI Дубликат Слага", None, False)
     capsys.readouterr()
 
@@ -79,7 +85,9 @@ async def test_add_collision_gets_deterministic_numeric_suffix(source_file, uplo
     assert "cli-dublikat-slaga-2" in out
 
 
-async def test_add_similar_slug_warns_before_saving(source_file, uploaded_objects, capsys):
+async def test_add_similar_slug_warns_before_saving(
+    source_file, uploaded_objects, capsys
+):
     await cli._add(source_file, "CliRezeroWarnCase", None, False)
     capsys.readouterr()
 
@@ -90,8 +98,12 @@ async def test_add_similar_slug_warns_before_saving(source_file, uploaded_object
     assert "clirezerowarncase" in out
 
 
-async def test_add_explicit_slug_overrides_name_derived_slug(source_file, uploaded_objects, capsys):
-    await cli._add(source_file, "Some Long Title Nobody Reads", "cli-custom-slug", False)
+async def test_add_explicit_slug_overrides_name_derived_slug(
+    source_file, uploaded_objects, capsys
+):
+    await cli._add(
+        source_file, "Some Long Title Nobody Reads", "cli-custom-slug", False
+    )
 
     out = capsys.readouterr().out
     assert "/v/cli-custom-slug" in out
@@ -102,7 +114,10 @@ async def test_add_on_tombstoned_slug_without_flag_refuses(
 ):
     edition_id = uuid.uuid4()
     old_title_id = await queries.create_title_with_edition(
-        raw_conn, "CLI Old Tombstone", "cli-tombstone-slug", edition_id,
+        raw_conn,
+        "CLI Old Tombstone",
+        "cli-tombstone-slug",
+        edition_id,
         f"{edition_id}.mp4",
     )
     await queries.mark_for_delete(raw_conn, old_title_id, grace_seconds=0)
@@ -121,7 +136,10 @@ async def test_add_on_tombstoned_slug_with_flag_reuses_and_keeps_history(
 ):
     edition_id = uuid.uuid4()
     old_title_id = await queries.create_title_with_edition(
-        raw_conn, "CLI Old Tombstone Reuse", "cli-tombstone-reuse-slug", edition_id,
+        raw_conn,
+        "CLI Old Tombstone Reuse",
+        "cli-tombstone-reuse-slug",
+        edition_id,
         f"{edition_id}.mp4",
     )
     await queries.mark_for_delete(raw_conn, old_title_id, grace_seconds=0)
@@ -150,7 +168,9 @@ async def test_add_on_tombstoned_slug_with_flag_reuses_and_keeps_history(
     assert len(history_rows) == 2
 
 
-async def test_rename_keeps_old_address_working(source_file, uploaded_objects, capsys, raw_conn):
+async def test_rename_keeps_old_address_working(
+    source_file, uploaded_objects, capsys, raw_conn
+):
     await cli._add(source_file, "CLI Rename Source", "cli-rename-a", False)
     capsys.readouterr()
 

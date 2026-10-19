@@ -7,6 +7,7 @@ Client parameters (signature_version, addressing_style) are the ones
 confirmed working against chrislusf/seaweedfs:3.97 in
 src/docs/experiments/07-object-storage.md.
 """
+
 import logging
 import time
 from dataclasses import dataclass
@@ -170,9 +171,9 @@ def ensure_multipart_lifecycle_rule() -> None:
             "cleanup path; apply the rule manually if this backend supports "
             "it, via 'aws --endpoint-url %s s3api put-bucket-lifecycle-"
             "configuration --bucket %s --lifecycle-configuration "
-            "'{\"Rules\":[{\"ID\":\"abort-incomplete-multipart\",\"Status\":"
-            "\"Enabled\",\"Filter\":{\"Prefix\":\"\"},\"AbortIncompleteMultipart"
-            "Upload\":{\"DaysAfterInitiation\":1}}]}''",
+            '\'{"Rules":[{"ID":"abort-incomplete-multipart","Status":'
+            '"Enabled","Filter":{"Prefix":""},"AbortIncompleteMultipart'
+            'Upload":{"DaysAfterInitiation":1}}]}\'\'',
             settings.s3_bucket,
             exc,
             settings.s3_endpoint,

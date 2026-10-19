@@ -9,6 +9,7 @@ under test is what the routine decides -- which values it derives, what it
 asks the writer to store, and what it does when the source is not there --
 not ffprobe's own behaviour, which `tests/test_compat.py` already covers.
 """
+
 from pathlib import Path
 
 import asyncpg
@@ -117,7 +118,9 @@ def _stub_rows(monkeypatch, rows):
     async def _editions_missing_technical(_conn):
         return rows
 
-    monkeypatch.setattr(queries, "editions_missing_technical", _editions_missing_technical)
+    monkeypatch.setattr(
+        queries, "editions_missing_technical", _editions_missing_technical
+    )
 
 
 # --- measure_edition ---------------------------------------------------
@@ -203,7 +206,9 @@ def test_a_file_with_no_video_stream_comes_back_unmeasured(monkeypatch, share):
     assert result.reason
 
 
-def test_an_audio_index_that_no_longer_matches_comes_back_unmeasured(monkeypatch, share):
+def test_an_audio_index_that_no_longer_matches_comes_back_unmeasured(
+    monkeypatch, share
+):
     _stub_probe(monkeypatch, _probe_json(audio_index=1))
 
     result = backfill.measure_edition(_row(audio_stream_index=7), share)
@@ -284,9 +289,9 @@ def _no_real_connect(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
-    from orchestrator.config import get_settings
-
     from conftest import ADMIN_FQDN, WORKER_TOKEN
+
+    from orchestrator.config import get_settings
 
     monkeypatch.setenv("MYTUBE_SECURE_LINK_SECRET", "test-secret-do-not-use-in-prod")
     monkeypatch.setenv("MYTUBE_DATABASE_URL", "postgresql://test:test@localhost/test")

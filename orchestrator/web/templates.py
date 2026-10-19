@@ -2,6 +2,7 @@
 render() helper every route in this package uses instead of calling
 Jinja2Templates directly.
 """
+
 import json
 from pathlib import Path
 from urllib.parse import quote
@@ -210,4 +211,6 @@ def render(request: Request, template_name: str, status_code: int = 200, **conte
         "current_url": current_url,
         **context,
     }
-    return _templates.TemplateResponse(request, template_name, ctx, status_code=status_code)
+    return _templates.TemplateResponse(
+        request, template_name, ctx, status_code=status_code
+    )

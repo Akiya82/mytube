@@ -5,6 +5,7 @@ acquire-and-sign shape as the video address, with two deliberate divergences
 pinned by this module -- a playlist address is never tombstoned, and it
 answers a generated document rather than a redirect to one file.
 """
+
 import uuid
 
 import httpx
@@ -92,15 +93,28 @@ async def test_an_unknown_playlist_slug_is_a_plain_404(monkeypatch, client):
     "row",
     [
         None,
-        {"id": PLAYLIST_ID, "status": "deleted", "mode": "hls",
-         "built_object_key": None, "built_at": None, "name": "x", "slug": "gone"},
+        {
+            "id": PLAYLIST_ID,
+            "status": "deleted",
+            "mode": "hls",
+            "built_object_key": None,
+            "built_at": None,
+            "name": "x",
+            "slug": "gone",
+        },
         # The grace window: the playlist still exists and its bytes are
         # still in the bucket. A reader would otherwise assume this falls
         # through to the built branch and starts serving a playlist the
         # operator has already deleted.
-        {"id": PLAYLIST_ID, "status": "pending_delete", "mode": "hls",
-         "built_object_key": None,
-         "built_at": "2026-08-27T12:00:00Z", "name": "x", "slug": "gone"},
+        {
+            "id": PLAYLIST_ID,
+            "status": "pending_delete",
+            "mode": "hls",
+            "built_object_key": None,
+            "built_at": "2026-08-27T12:00:00Z",
+            "name": "x",
+            "slug": "gone",
+        },
     ],
     ids=["unknown", "deleted", "pending_delete"],
 )
@@ -258,7 +272,9 @@ async def test_a_generated_list_is_answered_with_signed_addresses_and_marked_uns
 
     async with client:
         resp = await client.get(
-            "/p/vecher-klipov", headers={"host": "mytube.example"}, follow_redirects=False
+            "/p/vecher-klipov",
+            headers={"host": "mytube.example"},
+            follow_redirects=False,
         )
 
     assert resp.status_code == 200
@@ -285,7 +301,9 @@ async def test_a_generated_list_is_answered_with_signed_addresses_and_marked_uns
     assert f"sig={sig}" in body
 
 
-async def test_a_generated_list_with_nothing_left_in_it_is_never_sent(monkeypatch, client):
+async def test_a_generated_list_with_nothing_left_in_it_is_never_sent(
+    monkeypatch, client
+):
     """The playlist is built, but every member has since dropped out. An
     empty list is malformed, and a malformed one does not fail for one
     viewer -- it hangs every player in the instance. So it is not sent at

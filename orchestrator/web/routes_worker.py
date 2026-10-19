@@ -17,6 +17,7 @@ redirect to a sign-in form it cannot read. This prefix is instead named in
 no session and authorizes nothing; the refusing is done here, by the
 dependency below.
 """
+
 import asyncio
 import logging
 import secrets
@@ -63,7 +64,6 @@ ALLOWED_FAILURE_REASONS: frozenset[str] = frozenset(
         "failed.reason.unknown",
     }
 )
-
 
 
 async def require_worker_token(
@@ -127,7 +127,9 @@ class HeartbeatBody(_WorkerRequest):
     # `derive_job_ui`'s own `int(round(progress))` cannot survive.
     progress_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
     eta_seconds: int | None = Field(default=None, ge=0, le=7 * 24 * 3600)
-    realtime_factor: float | None = Field(default=None, gt=0, le=1000, allow_inf_nan=False)
+    realtime_factor: float | None = Field(
+        default=None, gt=0, le=1000, allow_inf_nan=False
+    )
 
 
 class DoneBody(_WorkerRequest):
@@ -262,7 +264,9 @@ async def claim_route(request: Request, body: ClaimBody):
     object_key = None
     try:
         async with pool.acquire() as conn:
-            await queries.record_worker_seen(conn, worker_name=body.worker, status=body.status)
+            await queries.record_worker_seen(
+                conn, worker_name=body.worker, status=body.status
+            )
             if body.status != "waiting_for_gpu":
                 async with conn.transaction():
                     claimed = await queries.claim_job(
@@ -341,7 +345,9 @@ async def heartbeat_route(job_id: uuid.UUID, request: Request, body: HeartbeatBo
                 # a crafted body can carry a value the check-in's own
                 # CHECK constraint would reject, and this route accepts
                 # no status from the converter at all.
-                await queries.record_worker_seen(conn, worker_name=body.worker, status="working")
+                await queries.record_worker_seen(
+                    conn, worker_name=body.worker, status="working"
+                )
     except Exception:
         logger.exception("heartbeat: could not write progress for job %s", job_id)
         row = None
@@ -351,7 +357,9 @@ async def heartbeat_route(job_id: uuid.UUID, request: Request, body: HeartbeatBo
     return {"cancel_requested": row["cancel_requested"]}
 
 
-async def _reject_superseded(pool, job_id: uuid.UUID, *, delete_key: bool) -> JSONResponse:
+async def _reject_superseded(
+    pool, job_id: uuid.UUID, *, delete_key: bool
+) -> JSONResponse:
     """The shared conflict answer for done/failed/cancelled: a report from
     an attempt that no longer owns this job.
 
@@ -383,7 +391,9 @@ async def _reject_superseded(pool, job_id: uuid.UUID, *, delete_key: bool) -> JS
                 )
             if key:
                 await asyncio.to_thread(delete_object, key)
-                logger.info("deleted orphaned object %r for superseded job %s", key, job_id)
+                logger.info(
+                    "deleted orphaned object %r for superseded job %s", key, job_id
+                )
             elif already_done:
                 logger.info(
                     "job %s is already done -- its object is live, not deleting it",
@@ -442,7 +452,9 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
                     # last heartbeat and its next claim poll -- a
                     # converter that just finished and is about to ask
                     # for work again is idle, not still "working".
-                    await queries.record_worker_seen(conn, worker_name=body.worker, status="idle")
+                    await queries.record_worker_seen(
+                        conn, worker_name=body.worker, status="idle"
+                    )
                 if wrote and job_row is not None and job_row["title_id"] is not None:
                     await queries.set_edition_conversion_detail(
                         conn,
@@ -544,7 +556,9 @@ async def failed_route(job_id: uuid.UUID, request: Request, body: FailedBody):
                 if wrote:
                     # Same placement and reasoning as done_route's own
                     # call above.
-                    await queries.record_worker_seen(conn, worker_name=body.worker, status="idle")
+                    await queries.record_worker_seen(
+                        conn, worker_name=body.worker, status="idle"
+                    )
                 if wrote and job_row is not None and job_row["title_id"] is not None:
                     # The edition this job would have produced is
                     # what actually fails; the title's own aggregate
@@ -608,10 +622,14 @@ async def cancelled_route(job_id: uuid.UUID, request: Request, body: CancelledBo
                 if wrote:
                     # Same placement and reasoning as done_route's own
                     # call above.
-                    await queries.record_worker_seen(conn, worker_name=body.worker, status="idle")
+                    await queries.record_worker_seen(
+                        conn, worker_name=body.worker, status="idle"
+                    )
                 if wrote and job_row is not None and job_row["title_id"] is not None:
                     try:
-                        await queries.delete_never_active_title(conn, job_row["title_id"])
+                        await queries.delete_never_active_title(
+                            conn, job_row["title_id"]
+                        )
                     except (LookupError, ValueError):
                         pass
     except Exception:

@@ -16,6 +16,7 @@ under `side_data_type` ("Stereo 3D"), with the actual orientation as a
 human string in its own `type` field ("side by side" / "top and bottom") --
 also not what the research document's untested code sketch guessed.
 """
+
 import copy
 import json
 from pathlib import Path

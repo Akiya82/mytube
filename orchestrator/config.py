@@ -2,6 +2,7 @@
 
 See src/.env.example for every field this class expects.
 """
+
 from functools import lru_cache
 from urllib.parse import urlsplit
 

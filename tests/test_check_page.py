@@ -7,17 +7,17 @@ what /v/{slug} itself would answer (title id + status); `library_row`
 supplies the title name the same way the Library screen already reads it,
 so this page needs no new query.
 """
+
 import uuid
 from dataclasses import dataclass, field
 
 import httpx
 import pytest
+from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
-
-from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 
 class _DummyConn:
@@ -61,10 +61,16 @@ class _QueriesStub:
     row_by_title_id: dict = field(default_factory=dict)
     # The episode/edition check routes' own reads, keyed exactly
     # the way routes_episodes.py calls each function.
-    episode_resolved: dict = field(default_factory=dict)  # (slug, number, edition_slug) -> row
-    title_edition_resolved: dict = field(default_factory=dict)  # (slug, edition_slug) -> row
+    episode_resolved: dict = field(
+        default_factory=dict
+    )  # (slug, number, edition_slug) -> row
+    title_edition_resolved: dict = field(
+        default_factory=dict
+    )  # (slug, edition_slug) -> row
     episode_with_title_by_id: dict = field(default_factory=dict)  # episode_id -> row
-    neighbours_by_key: dict = field(default_factory=dict)  # (title_id, number, edition_slug) -> row
+    neighbours_by_key: dict = field(
+        default_factory=dict
+    )  # (title_id, number, edition_slug) -> row
 
 
 @pytest.fixture
@@ -92,7 +98,9 @@ def queries_stub(monkeypatch):
     monkeypatch.setattr(queries, "resolve_slug", _resolve_slug)
     monkeypatch.setattr(queries, "library_row", _library_row)
     monkeypatch.setattr(queries, "resolve_episode_slug", _resolve_episode_slug)
-    monkeypatch.setattr(queries, "resolve_title_edition_slug", _resolve_title_edition_slug)
+    monkeypatch.setattr(
+        queries, "resolve_title_edition_slug", _resolve_title_edition_slug
+    )
     monkeypatch.setattr(queries, "episode_with_title", _episode_with_title)
     monkeypatch.setattr(queries, "episode_neighbours", _episode_neighbours)
     return stub
@@ -120,7 +128,11 @@ def anon_client(_web_env, queries_stub, operator_present):
 
 
 def _resolved(**over) -> dict:
-    row = {"title_id": uuid.uuid4(), "status": "active", "default_edition_id": uuid.uuid4()}
+    row = {
+        "title_id": uuid.uuid4(),
+        "status": "active",
+        "default_edition_id": uuid.uuid4(),
+    }
     row.update(over)
     return row
 
@@ -160,16 +172,25 @@ def _neighbours(**over) -> dict:
     return row
 
 
-async def test_video_source_is_exactly_the_public_address_for_the_slug(client, queries_stub):
+async def test_video_source_is_exactly_the_public_address_for_the_slug(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.resolved_by_slug["kontrolnyi-rolik"] = _resolved(title_id=title_id, status="active")
-    queries_stub.row_by_title_id[title_id] = _row(title_id=title_id, title_name="Kontrolnyi Rolik")
+    queries_stub.resolved_by_slug["kontrolnyi-rolik"] = _resolved(
+        title_id=title_id, status="active"
+    )
+    queries_stub.row_by_title_id[title_id] = _row(
+        title_id=title_id, title_name="Kontrolnyi Rolik"
+    )
 
     async with client:
         resp = await client.get("/check/kontrolnyi-rolik")
 
     assert resp.status_code == 200
-    assert '<video class="check-page__video" controls src="https://mytube.example/v/kontrolnyi-rolik">' in resp.text
+    assert (
+        '<video class="check-page__video" controls src="https://mytube.example/v/kontrolnyi-rolik">'
+        in resp.text
+    )
     assert "/blob/" not in resp.text
     assert "sig=" not in resp.text
 
@@ -183,8 +204,12 @@ async def test_unknown_slug_is_404(client, queries_stub):
 
 async def test_pending_deletion_title_renders_no_video_element(client, queries_stub):
     title_id = uuid.uuid4()
-    queries_stub.resolved_by_slug["going-away"] = _resolved(title_id=title_id, status="pending_delete")
-    queries_stub.row_by_title_id[title_id] = _row(title_id=title_id, title_name="Going Away")
+    queries_stub.resolved_by_slug["going-away"] = _resolved(
+        title_id=title_id, status="pending_delete"
+    )
+    queries_stub.row_by_title_id[title_id] = _row(
+        title_id=title_id, title_name="Going Away"
+    )
 
     async with client:
         resp = await client.get("/check/going-away")
@@ -196,8 +221,12 @@ async def test_pending_deletion_title_renders_no_video_element(client, queries_s
 
 async def test_no_related_or_other_title_list_on_the_page(client, queries_stub):
     title_id = uuid.uuid4()
-    queries_stub.resolved_by_slug["solo-clip"] = _resolved(title_id=title_id, status="active")
-    queries_stub.row_by_title_id[title_id] = _row(title_id=title_id, title_name="Solo Clip")
+    queries_stub.resolved_by_slug["solo-clip"] = _resolved(
+        title_id=title_id, status="active"
+    )
+    queries_stub.row_by_title_id[title_id] = _row(
+        title_id=title_id, title_name="Solo Clip"
+    )
 
     async with client:
         resp = await client.get("/check/solo-clip")
@@ -207,10 +236,16 @@ async def test_no_related_or_other_title_list_on_the_page(client, queries_stub):
     assert "library-list" not in resp.text
 
 
-async def test_hairpin_note_names_the_same_address_and_is_always_present(client, queries_stub):
+async def test_hairpin_note_names_the_same_address_and_is_always_present(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.resolved_by_slug["hairpin-clip"] = _resolved(title_id=title_id, status="active")
-    queries_stub.row_by_title_id[title_id] = _row(title_id=title_id, title_name="Hairpin Clip")
+    queries_stub.resolved_by_slug["hairpin-clip"] = _resolved(
+        title_id=title_id, status="active"
+    )
+    queries_stub.row_by_title_id[title_id] = _row(
+        title_id=title_id, title_name="Hairpin Clip"
+    )
 
     async with client:
         resp = await client.get("/check/hairpin-clip")
@@ -227,7 +262,9 @@ async def test_hairpin_note_names_the_same_address_and_is_always_present(client,
 
 async def test_layout_hint_sbs_names_the_side_by_side_mode(client, queries_stub):
     title_id = uuid.uuid4()
-    queries_stub.resolved_by_slug["sbs-clip"] = _resolved(title_id=title_id, status="active")
+    queries_stub.resolved_by_slug["sbs-clip"] = _resolved(
+        title_id=title_id, status="active"
+    )
     queries_stub.row_by_title_id[title_id] = _row(
         title_id=title_id, title_name="SBS Clip", stereo_layout="sbs_half"
     )
@@ -240,7 +277,9 @@ async def test_layout_hint_sbs_names_the_side_by_side_mode(client, queries_stub)
 
 async def test_layout_hint_ou_names_the_over_under_mode(client, queries_stub):
     title_id = uuid.uuid4()
-    queries_stub.resolved_by_slug["ou-clip"] = _resolved(title_id=title_id, status="active")
+    queries_stub.resolved_by_slug["ou-clip"] = _resolved(
+        title_id=title_id, status="active"
+    )
     queries_stub.row_by_title_id[title_id] = _row(
         title_id=title_id, title_name="OU Clip", stereo_layout="ou_full"
     )
@@ -253,7 +292,9 @@ async def test_layout_hint_ou_names_the_over_under_mode(client, queries_stub):
 
 async def test_layout_hint_says_nothing_for_a_flat_edition(client, queries_stub):
     title_id = uuid.uuid4()
-    queries_stub.resolved_by_slug["flat-clip"] = _resolved(title_id=title_id, status="active")
+    queries_stub.resolved_by_slug["flat-clip"] = _resolved(
+        title_id=title_id, status="active"
+    )
     queries_stub.row_by_title_id[title_id] = _row(
         title_id=title_id, title_name="Flat Clip", stereo_layout="2d"
     )
@@ -267,7 +308,9 @@ async def test_layout_hint_says_nothing_for_a_flat_edition(client, queries_stub)
 
 async def test_layout_hint_sits_below_the_video_not_above_it(client, queries_stub):
     title_id = uuid.uuid4()
-    queries_stub.resolved_by_slug["order-clip"] = _resolved(title_id=title_id, status="active")
+    queries_stub.resolved_by_slug["order-clip"] = _resolved(
+        title_id=title_id, status="active"
+    )
     queries_stub.row_by_title_id[title_id] = _row(
         title_id=title_id, title_name="Order Clip", stereo_layout="sbs_full"
     )
@@ -280,7 +323,9 @@ async def test_layout_hint_sits_below_the_video_not_above_it(client, queries_stu
     )
 
 
-async def test_layout_hint_sits_below_the_inactive_note_when_not_active(client, queries_stub):
+async def test_layout_hint_sits_below_the_inactive_note_when_not_active(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     queries_stub.resolved_by_slug["inactive-3d-clip"] = _resolved(
         title_id=title_id, status="pending_delete"
@@ -293,14 +338,20 @@ async def test_layout_hint_sits_below_the_inactive_note_when_not_active(client, 
         resp = await client.get("/check/inactive-3d-clip")
 
     assert "<video" not in resp.text
-    assert resp.text.index("check-page__inactive") < resp.text.index("check-page__layout-hint")
+    assert resp.text.index("check-page__inactive") < resp.text.index(
+        "check-page__layout-hint"
+    )
 
 
-async def test_copy_control_still_copies_only_the_address_on_a_3d_title(client, queries_stub):
+async def test_copy_control_still_copies_only_the_address_on_a_3d_title(
+    client, queries_stub
+):
     """The copy control's own copied value is unchanged by this plan --
     it copies the address and nothing else, never an instruction."""
     title_id = uuid.uuid4()
-    queries_stub.resolved_by_slug["copy-3d-clip"] = _resolved(title_id=title_id, status="active")
+    queries_stub.resolved_by_slug["copy-3d-clip"] = _resolved(
+        title_id=title_id, status="active"
+    )
     queries_stub.row_by_title_id[title_id] = _row(
         title_id=title_id, title_name="Copy 3D Clip", stereo_layout="sbs_full"
     )
@@ -338,11 +389,16 @@ async def test_episode_check_page_renders_its_own_heading_address_player_and_det
 
     assert resp.status_code == 200
     assert "Horimiya 5" in resp.text
-    assert '<video class="check-page__video" controls src="https://mytube.example/v/horimiya/5">' in resp.text
+    assert (
+        '<video class="check-page__video" controls src="https://mytube.example/v/horimiya/5">'
+        in resp.text
+    )
     assert "https://mytube.example/v/horimiya/5" in resp.text
 
 
-async def test_edition_check_page_renders_its_own_heading_and_address(client, queries_stub):
+async def test_edition_check_page_renders_its_own_heading_and_address(
+    client, queries_stub
+):
     title_id = uuid.uuid4()
     episode_id = uuid.uuid4()
     queries_stub.episode_resolved[("horimiya", 5, "dub-en")] = _episode_row(
@@ -376,8 +432,8 @@ async def test_film_check_page_unaffected_for_a_one_episode_title(client, querie
     """
     title_id = uuid.uuid4()
     episode_id = uuid.uuid4()
-    queries_stub.title_edition_resolved[("mushoku-tensei-movie", "dub-en")] = _episode_row(
-        title_id=title_id, episode_id=episode_id, number=1
+    queries_stub.title_edition_resolved[("mushoku-tensei-movie", "dub-en")] = (
+        _episode_row(title_id=title_id, episode_id=episode_id, number=1)
     )
     queries_stub.episode_with_title_by_id[episode_id] = {
         "episode_id": episode_id,
@@ -412,7 +468,9 @@ async def test_unknown_episode_answers_the_same_way_the_title_check_page_answers
 
 async def test_unknown_edition_slug_answers_not_found(client, queries_stub):
     title_id = uuid.uuid4()
-    queries_stub.episode_resolved[("horimiya", 5, None)] = _episode_row(title_id=title_id)
+    queries_stub.episode_resolved[("horimiya", 5, None)] = _episode_row(
+        title_id=title_id
+    )
 
     async with client:
         resp = await client.get("/check/horimiya/5/does-not-exist")
@@ -423,7 +481,9 @@ async def test_unknown_edition_slug_answers_not_found(client, queries_stub):
 # --- The previous/next navigation ------------------------------------------
 
 
-def _seed_episode_page(queries_stub, *, slug, number, title_id, episode_id, episode_count, **over):
+def _seed_episode_page(
+    queries_stub, *, slug, number, title_id, episode_id, episode_count, **over
+):
     queries_stub.episode_resolved[(slug, number, None)] = _episode_row(
         title_id=title_id, episode_id=episode_id, **over
     )
@@ -442,8 +502,12 @@ def _seed_episode_page(queries_stub, *, slug, number, title_id, episode_id, epis
 async def test_check_nav_absent_for_a_one_episode_title(client, queries_stub):
     title_id = uuid.uuid4()
     _seed_episode_page(
-        queries_stub, slug="one-ep", number=1, title_id=title_id,
-        episode_id=uuid.uuid4(), episode_count=1,
+        queries_stub,
+        slug="one-ep",
+        number=1,
+        title_id=title_id,
+        episode_id=uuid.uuid4(),
+        episode_count=1,
     )
 
     async with client:
@@ -456,8 +520,12 @@ async def test_check_nav_absent_for_a_one_episode_title(client, queries_stub):
 async def test_check_nav_appears_only_for_a_multi_episode_title(client, queries_stub):
     title_id = uuid.uuid4()
     _seed_episode_page(
-        queries_stub, slug="multi-ep", number=1, title_id=title_id,
-        episode_id=uuid.uuid4(), episode_count=2,
+        queries_stub,
+        slug="multi-ep",
+        number=1,
+        title_id=title_id,
+        episode_id=uuid.uuid4(),
+        episode_count=2,
     )
     queries_stub.neighbours_by_key[(title_id, 1, None)] = _neighbours(next_number=2)
 
@@ -472,8 +540,12 @@ async def test_check_nav_previous_and_next_reach_the_right_neighbours_in_number_
 ):
     title_id = uuid.uuid4()
     _seed_episode_page(
-        queries_stub, slug="ordered-series", number=5, title_id=title_id,
-        episode_id=uuid.uuid4(), episode_count=10,
+        queries_stub,
+        slug="ordered-series",
+        number=5,
+        title_id=title_id,
+        episode_id=uuid.uuid4(),
+        episode_count=10,
     )
     queries_stub.neighbours_by_key[(title_id, 5, None)] = _neighbours(
         previous_number=4, next_number=6
@@ -497,14 +569,19 @@ async def test_check_nav_reaches_a_not_ready_neighbour_and_renders_its_own_state
     title_id = uuid.uuid4()
     ready_episode_id = uuid.uuid4()
     _seed_episode_page(
-        queries_stub, slug="mixed-readiness", number=1, title_id=title_id,
-        episode_id=ready_episode_id, episode_count=2,
+        queries_stub,
+        slug="mixed-readiness",
+        number=1,
+        title_id=title_id,
+        episode_id=ready_episode_id,
+        episode_count=2,
     )
     queries_stub.neighbours_by_key[(title_id, 1, None)] = _neighbours(next_number=2)
 
     not_ready_episode_id = uuid.uuid4()
     queries_stub.episode_resolved[("mixed-readiness", 2, None)] = _episode_row(
-        title_id=title_id, episode_id=not_ready_episode_id,
+        title_id=title_id,
+        episode_id=not_ready_episode_id,
         edition_status="preparing",
     )
     queries_stub.episode_with_title_by_id[not_ready_episode_id] = {
@@ -534,15 +611,20 @@ async def test_check_nav_keeps_the_edition_slug_when_the_neighbour_has_a_matchin
         title_id=title_id, episode_id=episode_id
     )
     queries_stub.episode_with_title_by_id[episode_id] = {
-        "episode_id": episode_id, "episode_status": "active",
-        "title_id": title_id, "title_name": "Dubbed Series", "number": 3,
+        "episode_id": episode_id,
+        "episode_status": "active",
+        "title_id": title_id,
+        "title_name": "Dubbed Series",
+        "number": 3,
     }
     queries_stub.row_by_title_id[title_id] = _row(
         title_id=title_id, title_name="Dubbed Series", episode_count=5
     )
     queries_stub.neighbours_by_key[(title_id, 3, "dub-en")] = _neighbours(
-        previous_number=2, next_number=4,
-        previous_has_edition_slug=True, next_has_edition_slug=True,
+        previous_number=2,
+        next_number=4,
+        previous_has_edition_slug=True,
+        next_has_edition_slug=True,
     )
 
     async with client:
@@ -561,15 +643,20 @@ async def test_check_nav_falls_back_to_default_edition_when_the_neighbour_lacks_
         title_id=title_id, episode_id=episode_id
     )
     queries_stub.episode_with_title_by_id[episode_id] = {
-        "episode_id": episode_id, "episode_status": "active",
-        "title_id": title_id, "title_name": "Dubbed Series 2", "number": 3,
+        "episode_id": episode_id,
+        "episode_status": "active",
+        "title_id": title_id,
+        "title_name": "Dubbed Series 2",
+        "number": 3,
     }
     queries_stub.row_by_title_id[title_id] = _row(
         title_id=title_id, title_name="Dubbed Series 2", episode_count=5
     )
     queries_stub.neighbours_by_key[(title_id, 3, "dub-en")] = _neighbours(
-        previous_number=2, next_number=4,
-        previous_has_edition_slug=False, next_has_edition_slug=False,
+        previous_number=2,
+        next_number=4,
+        previous_has_edition_slug=False,
+        next_has_edition_slug=False,
     )
 
     async with client:
@@ -586,8 +673,12 @@ async def test_check_nav_first_boundary_renders_disabled_link_with_its_reason(
 ):
     title_id = uuid.uuid4()
     _seed_episode_page(
-        queries_stub, slug="boundary-series", number=1, title_id=title_id,
-        episode_id=uuid.uuid4(), episode_count=3,
+        queries_stub,
+        slug="boundary-series",
+        number=1,
+        title_id=title_id,
+        episode_id=uuid.uuid4(),
+        episode_count=3,
     )
     queries_stub.neighbours_by_key[(title_id, 1, None)] = _neighbours(next_number=2)
 
@@ -604,8 +695,12 @@ async def test_check_nav_last_boundary_renders_disabled_link_with_its_reason(
 ):
     title_id = uuid.uuid4()
     _seed_episode_page(
-        queries_stub, slug="boundary-series-2", number=3, title_id=title_id,
-        episode_id=uuid.uuid4(), episode_count=3,
+        queries_stub,
+        slug="boundary-series-2",
+        number=3,
+        title_id=title_id,
+        episode_id=uuid.uuid4(),
+        episode_count=3,
     )
     queries_stub.neighbours_by_key[(title_id, 3, None)] = _neighbours(previous_number=2)
 
@@ -620,9 +715,13 @@ async def test_check_nav_last_boundary_renders_disabled_link_with_its_reason(
 # --- Both new routes stay behind the session gate --------------------------
 
 
-async def test_episode_check_page_gate_redirects_when_unauthenticated(anon_client, queries_stub):
+async def test_episode_check_page_gate_redirects_when_unauthenticated(
+    anon_client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.episode_resolved[("gated-series", 1, None)] = _episode_row(title_id=title_id)
+    queries_stub.episode_resolved[("gated-series", 1, None)] = _episode_row(
+        title_id=title_id
+    )
 
     async with anon_client:
         resp = await anon_client.get("/check/gated-series/1", follow_redirects=False)
@@ -631,12 +730,18 @@ async def test_episode_check_page_gate_redirects_when_unauthenticated(anon_clien
     assert resp.headers["location"].startswith("/login")
 
 
-async def test_edition_check_page_gate_redirects_when_unauthenticated(anon_client, queries_stub):
+async def test_edition_check_page_gate_redirects_when_unauthenticated(
+    anon_client, queries_stub
+):
     title_id = uuid.uuid4()
-    queries_stub.episode_resolved[("gated-series", 1, "dub-en")] = _episode_row(title_id=title_id)
+    queries_stub.episode_resolved[("gated-series", 1, "dub-en")] = _episode_row(
+        title_id=title_id
+    )
 
     async with anon_client:
-        resp = await anon_client.get("/check/gated-series/1/dub-en", follow_redirects=False)
+        resp = await anon_client.get(
+            "/check/gated-series/1/dub-en", follow_redirects=False
+        )
 
     assert resp.status_code == 302
     assert resp.headers["location"].startswith("/login")

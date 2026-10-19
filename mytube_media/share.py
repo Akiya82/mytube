@@ -18,6 +18,7 @@ instantly with names and sizes only, not a verdict on every file). Names are ret
 has them -- this module sanitizes nothing; the template that renders them
 is what escapes.
 """
+
 import os
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath

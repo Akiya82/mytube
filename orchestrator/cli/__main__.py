@@ -9,6 +9,7 @@ VRChat worlds go through normalize_slug and get a slug_history
 row -- skip this and the first links are the ones a hand-rolled
 INSERT would get wrong.
 """
+
 import asyncio
 import logging
 import uuid
@@ -22,7 +23,8 @@ from orchestrator.cli.backfill_technical import (
     run_backfill_technical as _backfill_technical,
 )
 from orchestrator.cli.cache_report import cache_report as _cache_report
-from orchestrator.cli.cache_warm import DEFAULT_BASE_URL, cache_warm as _cache_warm
+from orchestrator.cli.cache_warm import DEFAULT_BASE_URL
+from orchestrator.cli.cache_warm import cache_warm as _cache_warm
 from orchestrator.cli.storage_audit import run_storage_audit as _storage_audit
 from orchestrator.config import get_settings
 from orchestrator.db import queries
@@ -60,33 +62,45 @@ def _candidate_slug(explicit: str | None, name: str) -> str:
 @app.command()
 def add(
     file: Path = typer.Option(
-        ..., "--file", exists=True, dir_okay=False, readable=True,
+        ...,
+        "--file",
+        exists=True,
+        dir_okay=False,
+        readable=True,
         help="Path to a file inside the mounted /ingest",
     ),
     name: str = typer.Option(
-        None, "--name",
+        None,
+        "--name",
         help="Human-readable title name; required when this file creates a new title",
     ),
-    slug: str = typer.Option(None, "--slug", help="Explicit slug instead of one derived from the name"),
+    slug: str = typer.Option(
+        None, "--slug", help="Explicit slug instead of one derived from the name"
+    ),
     reuse_slug: bool = typer.Option(
-        False, "--reuse-slug",
+        False,
+        "--reuse-slug",
         help="Confirm reusing a deleted title's slug",
     ),
     title: str = typer.Option(
-        None, "--title",
+        None,
+        "--title",
         help="Address of an already-added title to add this file to, instead of creating a new one",
     ),
     episode: int = typer.Option(
-        None, "--episode",
+        None,
+        "--episode",
         help="Episode number: this new title's own single episode, a new episode of "
         "--title, or the number of the episode --edition belongs to",
     ),
     edition: str = typer.Option(
-        None, "--edition",
+        None,
+        "--edition",
         help="Slug for a new alternative edition of the episode named by --title and --episode",
     ),
     make_default: bool = typer.Option(
-        False, "--make-default",
+        False,
+        "--make-default",
         help="Make the new edition the episode's default address once it exists",
     ),
 ) -> None:
@@ -98,7 +112,9 @@ def add(
     already-added title. --title, --episode and --edition add a new
     alternative edition of an episode that already exists.
     """
-    asyncio.run(_add(file, name, slug, reuse_slug, title, episode, edition, make_default))
+    asyncio.run(
+        _add(file, name, slug, reuse_slug, title, episode, edition, make_default)
+    )
 
 
 def _refuse_impossible_option_combination(
@@ -155,7 +171,11 @@ async def _add(
                 typer.echo("--name is required when creating a new title.", err=True)
                 raise typer.Exit(1)
             await _add_new_title(
-                conn, file, name, explicit_slug, reuse,
+                conn,
+                file,
+                name,
+                explicit_slug,
+                reuse,
                 number=episode if episode is not None else 1,
             )
     finally:
@@ -175,6 +195,7 @@ async def _add_new_title(
     (`--episode` alone gives this new title's own single episode a
     real number, so its numbered address works from the first day).
     """
+
     # plan_slug (orchestrator/media/add.py) is the extracted version of
     # what this function used to compute inline -- the web add form
     # calls the exact same sequence, in the exact same order, so the
@@ -240,7 +261,9 @@ async def _add_new_title(
             "may have spread across worlds pointing at different video."
         )
     elif slug_plan.chosen != slug_plan.candidate:
-        typer.echo(f"Slug {slug_plan.candidate!r} taken, used {slug_plan.chosen!r} instead")
+        typer.echo(
+            f"Slug {slug_plan.candidate!r} taken, used {slug_plan.chosen!r} instead"
+        )
 
     if slug_plan.similar:
         typer.echo(
@@ -323,7 +346,9 @@ async def _add_edition_to_existing_episode(
         typer.echo(f"No active title currently at /v/{title_slug}", err=True)
         raise typer.Exit(1)
 
-    episode_row = await queries.episode_by_number(conn, title_row["title_id"], episode_number)
+    episode_row = await queries.episode_by_number(
+        conn, title_row["title_id"], episode_number
+    )
     if episode_row is None:
         typer.echo(
             f"No episode numbered {episode_number} exists yet for /v/{title_slug} -- "
@@ -430,7 +455,9 @@ async def _rename(address_text: str, new_name: str) -> None:
         _audit("rename", f"renamed {old_slug!r} to {chosen!r}")
 
         if similar:
-            typer.echo(f"Warning: a similar slug is already taken: {', '.join(similar)}")
+            typer.echo(
+                f"Warning: a similar slug is already taken: {', '.join(similar)}"
+            )
 
         typer.echo(f"/v/{old_slug} still works")
         typer.echo(f"/v/{chosen} -- new address")
@@ -442,7 +469,7 @@ async def _rename(address_text: str, new_name: str) -> None:
 def remove(
     slug: str = typer.Argument(
         ..., help="Address to remove: a bare title, a numbered episode, or an edition"
-    )
+    ),
 ) -> None:
     """Delete an already-published title, episode or edition after its
     grace window.
@@ -568,7 +595,9 @@ async def _remove_edition(conn: asyncpg.Connection, settings, address) -> None:
         conn, episode_row["episode_id"], address.edition_slug
     )
     if edition_row is None:
-        typer.echo(f"No edition {address.edition_slug!r} found on that episode", err=True)
+        typer.echo(
+            f"No edition {address.edition_slug!r} found on that episode", err=True
+        )
         raise typer.Exit(1)
 
     canonical = _canonical_address(address)
@@ -590,7 +619,10 @@ async def _remove_edition(conn: asyncpg.Connection, settings, address) -> None:
         await queries.mark_episode_for_delete(
             conn, episode_row["episode_id"], settings.delete_grace_seconds
         )
-        _audit("remove", f"marked the only edition at {canonical} for delete, with its episode")
+        _audit(
+            "remove",
+            f"marked the only edition at {canonical} for delete, with its episode",
+        )
         typer.echo(
             f"{canonical} was the only edition -- its episode is now scheduled for "
             f"delete too. In {settings.delete_grace_seconds} seconds its objects "
@@ -614,15 +646,20 @@ async def _remove_edition(conn: asyncpg.Connection, settings, address) -> None:
 
 @app.command("cache-warm")
 def cache_warm_command(
-    slug: str = typer.Argument(..., help="Slug of the title to warm before a viewing session"),
+    slug: str = typer.Argument(
+        ..., help="Slug of the title to warm before a viewing session"
+    ),
     base_url: str = typer.Option(
-        DEFAULT_BASE_URL, "--base-url", help="Edge address; usually the internal one from inside the container"
+        DEFAULT_BASE_URL,
+        "--base-url",
+        help="Edge address; usually the internal one from inside the container",
     ),
     chunk_size: int = typer.Option(
         None, "--chunk-size", help="Step size in bytes; defaults to MYTUBE_SLICE_SIZE"
     ),
     bytes: int = typer.Option(
-        None, "--bytes",
+        None,
+        "--bytes",
         help="Warm-up limit in bytes; defaults to MYTUBE_WARM_BYTES "
         "or half of the cache zone",
     ),
@@ -635,7 +672,8 @@ def cache_warm_command(
 @app.command("cache-report")
 def cache_report_command(
     log_path: str = typer.Argument(
-        None, help="Path to blob_access.log; defaults to MYTUBE_BLOB_ACCESS_LOG from settings"
+        None,
+        help="Path to blob_access.log; defaults to MYTUBE_BLOB_ACCESS_LOG from settings",
     ),
     since: str = typer.Option(
         None, "--since", help="Only count lines no older than this moment (ISO 8601)"
@@ -668,7 +706,9 @@ def backfill_technical_command() -> None:
 
 @app.command("create-operator")
 def create_operator_command(
-    username: str = typer.Option(..., "--username", help="Username for the new operator"),
+    username: str = typer.Option(
+        ..., "--username", help="Username for the new operator"
+    ),
 ) -> None:
     """Create the one operator account this interface will accept."""
     # Prompted, never a command-line argument and never an environment
@@ -681,7 +721,9 @@ def create_operator_command(
 @app.command("reset-password")
 def reset_password_command(
     username: str = typer.Option(
-        None, "--username", help="Operator to reset; defaults to the single existing one"
+        None,
+        "--username",
+        help="Operator to reset; defaults to the single existing one",
     ),
 ) -> None:
     """Change the operator's password and sign every device out."""
@@ -692,5 +734,7 @@ def reset_password_command(
 if __name__ == "__main__":
     # Nothing configured logging for this process before now -- an INFO
     # line from _audit would go nowhere without this.
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
     app()

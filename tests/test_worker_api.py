@@ -10,18 +10,18 @@ in this file. `ALLOWED_FAILURE_REASONS` is still imported inline, in the
 one test that needs it -- everything else is driven through the
 application, never a second, independent route import.
 """
+
 import asyncio
 import json
 import uuid
 
 import httpx
 import pytest
+from conftest import WORKER_TOKEN
 
 from orchestrator.config import get_settings
 from orchestrator.main import app
 from orchestrator.web.routes_worker import WORKER_PROTOCOL_VERSION
-
-from conftest import WORKER_TOKEN
 
 STUB_JOB_ID = uuid.uuid4()
 
@@ -318,7 +318,10 @@ async def test_a_worker_route_refuses_rather_than_redirects_before_any_operator_
     with something it can log, not with a page.
     """
     async with client:
-        resp = await client.post("/worker/claim", json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"})
+        resp = await client.post(
+            "/worker/claim",
+            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"},
+        )
     assert resp.status_code == 401
     assert resp.status_code != 302
 
@@ -453,9 +456,13 @@ async def test_a_claim_carries_only_the_operator_s_choices(monkeypatch, client):
     async def _fake_edition_object_key(conn, edition_id):
         return "x.mp4"
 
-    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+    monkeypatch.setattr(
+        queries, "record_worker_seen", _fake_record_worker_seen, raising=False
+    )
     monkeypatch.setattr(queries, "claim_job", _fake_claim_job, raising=False)
-    monkeypatch.setattr(queries, "edition_object_key", _fake_edition_object_key, raising=False)
+    monkeypatch.setattr(
+        queries, "edition_object_key", _fake_edition_object_key, raising=False
+    )
 
     async with client:
         resp = await client.post(
@@ -483,7 +490,9 @@ async def test_a_claim_carries_only_the_operator_s_choices(monkeypatch, client):
     assert set(payload.keys()) == expected_keys
 
 
-async def test_a_claim_records_the_check_in_even_when_it_finds_nothing(monkeypatch, client):
+async def test_a_claim_records_the_check_in_even_when_it_finds_nothing(
+    monkeypatch, client
+):
     """This is the data the waiting-for-a-converter state reads, and it
     must not depend on there being work.
     """
@@ -494,7 +503,9 @@ async def test_a_claim_records_the_check_in_even_when_it_finds_nothing(monkeypat
     async def _fake_record_worker_seen(conn, *, worker_name, status):
         seen.append((worker_name, status))
 
-    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+    monkeypatch.setattr(
+        queries, "record_worker_seen", _fake_record_worker_seen, raising=False
+    )
 
     async with client:
         await client.post(
@@ -545,13 +556,19 @@ async def test_a_superseded_report_refuses_with_a_status_the_worker_can_act_on(
 
     monkeypatch.setattr(queries, "job_by_id", fake_job_by_id, raising=False)
     monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
-    monkeypatch.setattr(queries, "edition_object_key", fake_edition_object_key, raising=False)
+    monkeypatch.setattr(
+        queries, "edition_object_key", fake_edition_object_key, raising=False
+    )
     monkeypatch.setattr(routes_worker, "delete_object", deleted.append, raising=False)
 
     if outcome == "done":
         body = _valid_done_body()
     else:
-        body = {"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server", "attempt": 1}
+        body = {
+            "protocol": WORKER_PROTOCOL_VERSION,
+            "worker": "ml-server",
+            "attempt": 1,
+        }
         if outcome == "failed":
             body["reason_key"] = "failed.reason.upload"
 
@@ -565,12 +582,16 @@ async def test_a_superseded_report_refuses_with_a_status_the_worker_can_act_on(
     payload = resp.json()
     assert payload
     if outcome == "done":
-        assert deleted == ["x.mp4"], "a conflict on a job that is not done still deletes"
+        assert deleted == ["x.mp4"], (
+            "a conflict on a job that is not done still deletes"
+        )
     else:
         assert deleted == []
 
 
-async def test_a_conflict_on_a_job_that_is_already_done_deletes_nothing(monkeypatch, client):
+async def test_a_conflict_on_a_job_that_is_already_done_deletes_nothing(
+    monkeypatch, client
+):
     """Both attempts of a job write the same object key, so a
     late report against a job a different attempt already finished points
     at the object an active title is serving right now -- the delete must
@@ -603,7 +624,9 @@ async def test_a_conflict_on_a_job_that_is_already_done_deletes_nothing(monkeypa
 
     monkeypatch.setattr(queries, "job_by_id", fake_job_by_id, raising=False)
     monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
-    monkeypatch.setattr(queries, "edition_object_key", fake_edition_object_key, raising=False)
+    monkeypatch.setattr(
+        queries, "edition_object_key", fake_edition_object_key, raising=False
+    )
     monkeypatch.setattr(routes_worker, "delete_object", deleted.append, raising=False)
 
     async with client:
@@ -614,7 +637,9 @@ async def test_a_conflict_on_a_job_that_is_already_done_deletes_nothing(monkeypa
         )
     assert resp.status_code == 409
     assert deleted == []
-    assert edition_object_key_called == [], "the key is never even looked up for a done job"
+    assert edition_object_key_called == [], (
+        "the key is never even looked up for a done job"
+    )
 
 
 # --- The check-in stops freezing at the moment of the claim -------------
@@ -645,12 +670,18 @@ async def test_an_accepted_terminal_report_refreshes_the_check_in_with_the_idle_
     async def _fake_record_worker_seen(conn, *, worker_name, status):
         seen.append((worker_name, status))
 
-    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+    monkeypatch.setattr(
+        queries, "record_worker_seen", _fake_record_worker_seen, raising=False
+    )
 
     if outcome == "done":
         body = _valid_done_body()
     else:
-        body = {"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server", "attempt": 1}
+        body = {
+            "protocol": WORKER_PROTOCOL_VERSION,
+            "worker": "ml-server",
+            "attempt": 1,
+        }
         if outcome == "failed":
             body["reason_key"] = "failed.reason.upload"
 
@@ -665,7 +696,9 @@ async def test_an_accepted_terminal_report_refreshes_the_check_in_with_the_idle_
 
 
 @pytest.mark.parametrize("outcome", ["done", "failed", "cancelled"])
-async def test_a_superseded_terminal_report_refreshes_no_check_in(monkeypatch, client, outcome):
+async def test_a_superseded_terminal_report_refreshes_no_check_in(
+    monkeypatch, client, outcome
+):
     from orchestrator.db import queries
     from orchestrator.web import routes_worker
 
@@ -693,14 +726,24 @@ async def test_a_superseded_terminal_report_refreshes_no_check_in(monkeypatch, c
 
     monkeypatch.setattr(queries, "job_by_id", fake_job_by_id, raising=False)
     monkeypatch.setattr(queries, "finish_job", fake_finish_job, raising=False)
-    monkeypatch.setattr(queries, "edition_object_key", fake_edition_object_key, raising=False)
-    monkeypatch.setattr(routes_worker, "delete_object", lambda *a, **k: None, raising=False)
-    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+    monkeypatch.setattr(
+        queries, "edition_object_key", fake_edition_object_key, raising=False
+    )
+    monkeypatch.setattr(
+        routes_worker, "delete_object", lambda *a, **k: None, raising=False
+    )
+    monkeypatch.setattr(
+        queries, "record_worker_seen", _fake_record_worker_seen, raising=False
+    )
 
     if outcome == "done":
         body = _valid_done_body()
     else:
-        body = {"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server", "attempt": 1}
+        body = {
+            "protocol": WORKER_PROTOCOL_VERSION,
+            "worker": "ml-server",
+            "attempt": 1,
+        }
         if outcome == "failed":
             body["reason_key"] = "failed.reason.upload"
 
@@ -745,9 +788,11 @@ async def _fake_job_by_id(conn, job_id):
     return _accepted_job_row()
 
 
-async def test_a_successful_done_report_clears_the_cached_storage_listing(monkeypatch, client):
-    from orchestrator.db import queries
+async def test_a_successful_done_report_clears_the_cached_storage_listing(
+    monkeypatch, client
+):
     import orchestrator.storage as storage
+    from orchestrator.db import queries
 
     monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
 
@@ -769,7 +814,9 @@ async def test_a_successful_done_report_clears_the_cached_storage_listing(monkey
     assert storage._usage_cache["usage"] is None
 
 
-async def test_a_done_report_with_no_audio_channel_layout_is_accepted(monkeypatch, client):
+async def test_a_done_report_with_no_audio_channel_layout_is_accepted(
+    monkeypatch, client
+):
     """ffprobe reports a channel count for every multichannel AAC track
     the converter makes but names the order of a 5.1 one "unknown", so
     the report arrives with a null layout. Refusing it threw away a
@@ -795,14 +842,16 @@ async def test_a_done_report_with_no_audio_channel_layout_is_accepted(monkeypatc
     assert resp.status_code == 204, resp.text
 
 
-async def test_a_failed_report_clears_the_cached_storage_listing_too(monkeypatch, client):
+async def test_a_failed_report_clears_the_cached_storage_listing_too(
+    monkeypatch, client
+):
     """The poster case: the converter uploads the poster before the
     video, so a failed conversion can have already left an
     object in the bucket. The failed report is the only announcement of
     it, so it clears the cache exactly like the done report does.
     """
-    from orchestrator.db import queries
     import orchestrator.storage as storage
+    from orchestrator.db import queries
 
     monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
 
@@ -837,8 +886,8 @@ async def test_a_failed_report_never_deletes_the_jobs_object(monkeypatch, client
     cleaning up, keeping `failed` out of that exclusion list becomes
     unsafe and that decision has to be reopened.
     """
-    from orchestrator.db import queries
     import orchestrator.web.routes_worker as routes_worker
+    from orchestrator.db import queries
 
     monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
 
@@ -865,9 +914,11 @@ async def test_a_failed_report_never_deletes_the_jobs_object(monkeypatch, client
     assert deleted == []
 
 
-async def test_a_cancelled_report_clears_the_cached_storage_listing_too(monkeypatch, client):
-    from orchestrator.db import queries
+async def test_a_cancelled_report_clears_the_cached_storage_listing_too(
+    monkeypatch, client
+):
     import orchestrator.storage as storage
+    from orchestrator.db import queries
 
     monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
 
@@ -900,8 +951,8 @@ async def test_a_raise_during_a_done_report_leaves_the_cached_storage_listing_un
     correct -- the raise path answers 503 (retryable) and never reaches
     the accepted branch that clears the cache.
     """
-    from orchestrator.db import queries
     import orchestrator.storage as storage
+    from orchestrator.db import queries
 
     monkeypatch.setattr(queries, "job_by_id", _fake_job_by_id, raising=False)
 
@@ -946,7 +997,9 @@ async def test_the_route_refuses_a_failure_reason_outside_the_allowed_set(client
 
 
 @pytest.mark.parametrize("cancel_requested", [True, False])
-async def test_a_heartbeat_returns_the_cancel_flag(monkeypatch, client, cancel_requested):
+async def test_a_heartbeat_returns_the_cancel_flag(
+    monkeypatch, client, cancel_requested
+):
     from orchestrator.db import queries
 
     async def _fake_heartbeat_job(conn, job_id, **kwargs):
@@ -996,7 +1049,9 @@ async def test_an_accepted_heartbeat_refreshes_the_check_in_with_the_working_sta
         seen.append((worker_name, status))
 
     monkeypatch.setattr(queries, "heartbeat_job", _fake_heartbeat_job, raising=False)
-    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+    monkeypatch.setattr(
+        queries, "record_worker_seen", _fake_record_worker_seen, raising=False
+    )
 
     async with client:
         resp = await client.post(
@@ -1029,7 +1084,9 @@ async def test_a_superseded_heartbeat_refreshes_no_check_in(monkeypatch, client)
         seen.append((worker_name, status))
 
     monkeypatch.setattr(queries, "heartbeat_job", _fake_heartbeat_job, raising=False)
-    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+    monkeypatch.setattr(
+        queries, "record_worker_seen", _fake_record_worker_seen, raising=False
+    )
 
     async with client:
         resp = await client.post(
@@ -1060,7 +1117,9 @@ async def test_a_heartbeat_whose_write_raises_is_refused_and_refreshes_no_check_
         seen.append((worker_name, status))
 
     monkeypatch.setattr(queries, "heartbeat_job", _failing_heartbeat_job, raising=False)
-    monkeypatch.setattr(queries, "record_worker_seen", _fake_record_worker_seen, raising=False)
+    monkeypatch.setattr(
+        queries, "record_worker_seen", _fake_record_worker_seen, raising=False
+    )
 
     async with client:
         resp = await client.post(
@@ -1162,13 +1221,16 @@ async def test_a_negative_estimate_a_non_positive_speed_and_an_attempt_below_one
     body[field] = value
     async with client:
         resp = await client.post(
-            f"/worker/jobs/{STUB_JOB_ID}/heartbeat", json=body,
+            f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
+            json=body,
             headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
         )
     assert resp.status_code == 422
 
 
-async def test_a_heartbeat_with_an_unknown_stage_word_is_refused_naming_the_field(client):
+async def test_a_heartbeat_with_an_unknown_stage_word_is_refused_naming_the_field(
+    client,
+):
     async with client:
         resp = await client.post(
             f"/worker/jobs/{STUB_JOB_ID}/heartbeat",
@@ -1188,7 +1250,11 @@ async def test_a_claim_with_an_unknown_check_in_status_is_refused(client):
     async with client:
         resp = await client.post(
             "/worker/claim",
-            json={"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server", "status": "not-a-real-status"},
+            json={
+                "protocol": WORKER_PROTOCOL_VERSION,
+                "worker": "ml-server",
+                "status": "not-a-real-status",
+            },
             headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
         )
     assert resp.status_code == 422
@@ -1330,7 +1396,9 @@ async def test_a_raise_after_the_terminal_write_leaves_the_job_running_and_delet
     job_id = await queries.enqueue_job(
         raw_conn, kind="transcode", title_id=title_id, edition_id=edition_id
     )
-    claimed = await queries.claim_job(raw_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        raw_conn, kind="transcode", worker_name="ml-server"
+    )
     assert claimed["id"] == job_id
 
     deleted = []
@@ -1386,7 +1454,9 @@ async def test_a_raise_between_the_claim_and_the_object_key_lookup_leaves_no_job
             headers={"Authorization": f"Bearer {WORKER_TOKEN}"},
         )
 
-    assert resp.status_code == 204, "the existing tolerance: a hiccup reads as an empty queue"
+    assert resp.status_code == 204, (
+        "the existing tolerance: a hiccup reads as an empty queue"
+    )
 
     row = await raw_conn.fetchrow(
         "SELECT status, worker_name, attempts FROM jobs WHERE title_id = $1", title_id
@@ -1402,7 +1472,12 @@ async def _title_and_edition_for_claim(conn) -> tuple:
     edition_id = uuid.uuid4()
     slug = f"claim-atomic-{uuid.uuid4().hex[:8]}"
     title_id = await queries.create_title_with_edition(
-        conn, "Atomic Claim Route", slug, edition_id, f"{edition_id}.mp4", status="preparing"
+        conn,
+        "Atomic Claim Route",
+        slug,
+        edition_id,
+        f"{edition_id}.mp4",
+        status="preparing",
     )
     return title_id, edition_id
 
@@ -1425,13 +1500,23 @@ def _external_audio_job_probe_json():
     return {
         "streams": [
             {
-                "index": 0, "codec_type": "video", "codec_name": "h264",
-                "profile": "High", "level": 40, "pix_fmt": "yuv420p",
-                "width": 1920, "height": 1080, "avg_frame_rate": "24/1",
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "profile": "High",
+                "level": 40,
+                "pix_fmt": "yuv420p",
+                "width": 1920,
+                "height": 1080,
+                "avg_frame_rate": "24/1",
             },
             {
-                "index": 1, "codec_type": "audio", "codec_name": "aac",
-                "channels": 2, "sample_rate": "48000", "channel_layout": "stereo",
+                "index": 1,
+                "codec_type": "audio",
+                "codec_name": "aac",
+                "channels": 2,
+                "sample_rate": "48000",
+                "channel_layout": "stereo",
                 "tags": {"language": "jpn"},
             },
         ],
@@ -1447,8 +1532,12 @@ def _external_audio_dub_probe_json():
     return {
         "streams": [
             {
-                "index": 0, "codec_type": "audio", "codec_name": "flac",
-                "channels": 6, "sample_rate": "48000", "channel_layout": "5.1",
+                "index": 0,
+                "codec_type": "audio",
+                "codec_name": "flac",
+                "channels": 6,
+                "sample_rate": "48000",
+                "channel_layout": "5.1",
                 "tags": {"language": "rus"},
             },
         ],
@@ -1520,7 +1609,9 @@ def _run_converter_job(monkeypatch, tmp_path, job) -> _FakeConverterClient:
     monkeypatch.setattr(worker_main.compat, "moov_before_mdat", lambda path: True)
     monkeypatch.setattr(worker_main, "run_ffmpeg_with_progress", fake_run)
     monkeypatch.setattr(worker_main.worker_storage, "upload_file", lambda *a, **k: None)
-    monkeypatch.setattr(worker_main.worker_storage, "abort_multipart", lambda *a, **k: None)
+    monkeypatch.setattr(
+        worker_main.worker_storage, "abort_multipart", lambda *a, **k: None
+    )
     monkeypatch.setattr(worker_main.remux, "run_ffmpeg", lambda *a, **k: None)
 
     share = tmp_path / "share"

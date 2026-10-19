@@ -40,6 +40,7 @@ the same `probe()` output this module already has -- never a second
 only: importing them here does not weaken the bare-python guarantee
 `check_faststart.py` depends on.
 """
+
 import json
 import struct
 import subprocess
@@ -239,8 +240,10 @@ def probe(path) -> dict:
         result = subprocess.run(
             [
                 "ffprobe",
-                "-v", "quiet",
-                "-print_format", "json",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
                 "-show_streams",
                 "-show_format",
                 str(path),
@@ -348,7 +351,9 @@ def external_audio_track(path, *, folder_label: str | None = None) -> AudioTrack
         channel_layout=stream.get("channel_layout"),
         external_path=str(path),
         folder_label=folder_label,
-        duration_seconds=_maybe_number(probe_json.get("format", {}).get("duration"), float),
+        duration_seconds=_maybe_number(
+            probe_json.get("format", {}).get("duration"), float
+        ),
     )
 
 
@@ -527,7 +532,9 @@ def analyze(
         eligible
         and is_mp4
         and selected_track is not None
-        and audio_is_safe({"codec_name": selected_track.codec, "channels": selected_track.channels})
+        and audio_is_safe(
+            {"codec_name": selected_track.codec, "channels": selected_track.channels}
+        )
         and len(tracks) == 1
         and moov_first
     )

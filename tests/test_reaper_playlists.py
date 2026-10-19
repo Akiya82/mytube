@@ -7,6 +7,7 @@ decisions: how many objects it removes, when it is allowed to record the
 work as done, and whether a failure in one of the three sweeps stops the
 other two.
 """
+
 import asyncio
 
 import pytest
@@ -42,7 +43,12 @@ def sweep(monkeypatch):
     arranges; `calls` is what the sweep did.
     """
     state = {"due": [], "keys": {}, "reclaimable": [], "delete_fails": set()}
-    calls = {"deleted_objects": [], "finished": [], "dropped_rows": [], "reclaim_age": []}
+    calls = {
+        "deleted_objects": [],
+        "finished": [],
+        "dropped_rows": [],
+        "reclaim_age": [],
+    }
 
     async def due_for_reaping_playlists(conn):
         return [{"playlist_id": pid} for pid in state["due"]]
@@ -94,7 +100,9 @@ async def test_every_artifact_goes_not_just_the_first(sweep):
     assert calls["finished"] == ["playlist-a"]
 
 
-async def test_a_playlist_that_never_built_anything_is_finished_with_no_storage_call(sweep):
+async def test_a_playlist_that_never_built_anything_is_finished_with_no_storage_call(
+    sweep,
+):
     state, calls = sweep
     state["due"] = ["never-built"]
     state["keys"] = {}
@@ -120,7 +128,9 @@ async def test_a_storage_failure_leaves_the_row_unfinished_for_the_next_cycle(sw
     assert "ok.mp4" in calls["deleted_objects"]
 
 
-async def test_a_superseded_artifact_is_reclaimed_once_no_signature_can_still_reach_it(sweep):
+async def test_a_superseded_artifact_is_reclaimed_once_no_signature_can_still_reach_it(
+    sweep,
+):
     """The age is not arbitrary: an address handed out before the rebuild
     stays valid for exactly the signing lifetime.
     """

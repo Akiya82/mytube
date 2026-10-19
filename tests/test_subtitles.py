@@ -5,6 +5,7 @@ them -- this module does not pre-assert them.
 Every subject is imported inside the test body so this module collects
 cleanly while `mytube_media.subtitles` does not exist yet.
 """
+
 import copy
 import json
 import subprocess
@@ -90,7 +91,10 @@ def test_every_listed_kind_is_in_the_frozen_vocabulary():
     _subtitle_stream(probe_json, 2)["codec_name"] = "dvd_subtitle"
 
     tracks = embedded_tracks(probe_json)
-    assert all(t.kind in ("none", "embedded_text", "embedded_bitmap", "external") for t in tracks)
+    assert all(
+        t.kind in ("none", "embedded_text", "embedded_bitmap", "external")
+        for t in tracks
+    )
 
 
 # --- external discovery, against a real tmp_path tree -----------------------
@@ -519,7 +523,9 @@ def _capture_extract_timeout(monkeypatch, source: Path, scratch: Path) -> float:
     return captured["timeout"]
 
 
-def test_extract_embedded_track_scales_its_timeout_to_the_source_size(monkeypatch, tmp_path):
+def test_extract_embedded_track_scales_its_timeout_to_the_source_size(
+    monkeypatch, tmp_path
+):
     from mytube_media import subtitles
 
     size = 1_600_000_000
@@ -531,12 +537,17 @@ def test_extract_embedded_track_scales_its_timeout_to_the_source_size(monkeypatc
     assert timeout > subtitles._EXTRACT_TIMEOUT_SECONDS
 
 
-def test_extract_embedded_track_keeps_the_floor_for_a_small_source(monkeypatch, tmp_path):
+def test_extract_embedded_track_keeps_the_floor_for_a_small_source(
+    monkeypatch, tmp_path
+):
     from mytube_media import subtitles
 
     source = _sparse_file(tmp_path / "clip.mkv", 5_000_000)
 
-    assert _capture_extract_timeout(monkeypatch, source, tmp_path) == subtitles._EXTRACT_TIMEOUT_SECONDS
+    assert (
+        _capture_extract_timeout(monkeypatch, source, tmp_path)
+        == subtitles._EXTRACT_TIMEOUT_SECONDS
+    )
 
 
 # --- the font cap bounds the copy, not the leftovers --------------------
@@ -595,7 +606,9 @@ def test_the_font_cap_stops_copying_at_the_byte_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(subtitles.shutil, "copy2", _counting_copy2)
 
     scratch = tmp_path / "scratch"
-    subtitles.collect_fonts(source=None, subtitle_path=str(subtitle_path), scratch_dir=str(scratch))
+    subtitles.collect_fonts(
+        source=None, subtitle_path=str(subtitle_path), scratch_dir=str(scratch)
+    )
 
     # 3 * 6 MiB = 18 MiB fits; the 4th would push the running total to 24
     # MiB, over the 20 MiB cap, so the loop must stop before it.
@@ -652,9 +665,7 @@ def test_dump_container_font_attachments_builds_the_dump_argv_before_the_input(
     source.write_bytes(b"x")
     destination = tmp_path / "fonts"
 
-    probe_streams = {
-        "streams": [{"index": 1, "codec_name": "ttf", "tags": {}}]
-    }
+    probe_streams = {"streams": [{"index": 1, "codec_name": "ttf", "tags": {}}]}
     calls = []
 
     def _fake_run(argv, **kwargs):
@@ -700,7 +711,11 @@ def test_dump_container_font_attachments_names_each_dump_by_a_generated_name(
     subtitles._dump_container_font_attachments(source, destination)
 
     dump_argv = calls[1]
-    targets = [dump_argv[i + 1] for i, arg in enumerate(dump_argv) if arg.startswith("-dump_attachment:")]
+    targets = [
+        dump_argv[i + 1]
+        for i, arg in enumerate(dump_argv)
+        if arg.startswith("-dump_attachment:")
+    ]
     assert len(targets) == 2
     assert targets[0] != targets[1]
     assert all(str(destination) in target for target in targets)
@@ -720,12 +735,16 @@ def test_is_font_attachment_uses_codec_name_when_present():
 def test_is_font_attachment_falls_back_to_mimetype_without_a_codec_name():
     from mytube_media.subtitles import _is_font_attachment
 
-    assert _is_font_attachment(
-        {"codec_name": None, "tags": {"mimetype": "application/x-truetype-font"}}
-    ) is True
-    assert _is_font_attachment(
-        {"codec_name": "", "tags": {"mimetype": "image/jpeg"}}
-    ) is False
+    assert (
+        _is_font_attachment(
+            {"codec_name": None, "tags": {"mimetype": "application/x-truetype-font"}}
+        )
+        is True
+    )
+    assert (
+        _is_font_attachment({"codec_name": "", "tags": {"mimetype": "image/jpeg"}})
+        is False
+    )
 
 
 def test_is_font_attachment_dumps_when_neither_tag_is_usable():

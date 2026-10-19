@@ -16,6 +16,7 @@ Parsing only the first line is not the same fallback a missing card gets
 run at all, and only a reading the tool *did* produce gets this narrower
 first-line reading.
 """
+
 import subprocess
 
 _QUERY_TIMEOUT_SECONDS = 10

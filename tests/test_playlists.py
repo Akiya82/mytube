@@ -11,12 +11,14 @@ is the one path that has to work with no pointer and no script, so it is
 also the one path where a stub standing in for the statement that actually
 renumbers the list would prove nothing.
 """
+
 import datetime
 import html
 import uuid
 
 import httpx
 import pytest
+from conftest import SESSION_COOKIE
 
 from orchestrator import reaper
 from orchestrator.config import get_settings
@@ -24,8 +26,6 @@ from orchestrator.db import queries
 from orchestrator.main import app
 from orchestrator.storage import StorageUsage
 from orchestrator.web import routes_titles
-
-from conftest import SESSION_COOKIE
 
 
 class _DummyConn:
@@ -73,7 +73,9 @@ def _picker_stub(monkeypatch):
     overrides it with its own patch, applied through the same monkeypatch
     fixture instance, so the override simply wins.
     """
-    monkeypatch.setattr(queries, "active_editions_for_picker", _fake_empty_picker, raising=False)
+    monkeypatch.setattr(
+        queries, "active_editions_for_picker", _fake_empty_picker, raising=False
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -90,7 +92,9 @@ def _storage_stub(monkeypatch):
     monkeypatch.setattr(
         routes_titles,
         "storage_usage",
-        lambda: StorageUsage(total_bytes=0, object_count=0, free_bytes=None, listing={}),
+        lambda: StorageUsage(
+            total_bytes=0, object_count=0, free_bytes=None, listing={}
+        ),
     )
 
 
@@ -163,7 +167,9 @@ async def test_assembly_screen_renders_a_name_field_an_address_field_and_one_pri
     assert resp.text.count('type="submit"') == 1
 
 
-async def test_assembly_create_derives_the_address_from_the_name(monkeypatch, client, signed_in):
+async def test_assembly_create_derives_the_address_from_the_name(
+    monkeypatch, client, signed_in
+):
     calls = []
 
     async def fake_create_playlist(conn, name, slug):
@@ -211,7 +217,9 @@ async def test_assembly_create_suffixes_a_taken_address_rather_than_refusing(
         assert "A similar address is already taken" in resp.text
 
 
-async def test_assembly_addresses_are_their_own_namespace(monkeypatch, client, signed_in):
+async def test_assembly_addresses_are_their_own_namespace(
+    monkeypatch, client, signed_in
+):
     """taken_playlist_slugs is the only source of taken values for a
     playlist -- a video slug of the same text does not collide, because
     /p/ and /v/ are separate namespaces under separate path prefixes.
@@ -243,7 +251,9 @@ async def test_assembly_addresses_are_their_own_namespace(monkeypatch, client, s
     assert calls == [("Vecher klipov", "vecher-klipov")]
 
 
-async def test_assembly_create_escapes_a_name_that_looks_like_markup(monkeypatch, client, signed_in):
+async def test_assembly_create_escapes_a_name_that_looks_like_markup(
+    monkeypatch, client, signed_in
+):
     async def fake_create_playlist(conn, name, slug):
         return PLAYLIST_ID
 
@@ -268,7 +278,9 @@ async def test_assembly_create_escapes_a_name_that_looks_like_markup(monkeypatch
 # --- The library row: a playlist lives next to videos, same row shape -----
 
 
-async def test_library_shows_playlists_and_videos_in_one_list(monkeypatch, client, signed_in):
+async def test_library_shows_playlists_and_videos_in_one_list(
+    monkeypatch, client, signed_in
+):
     async def fake_playlist_rows(conn):
         return [_playlist_row()]
 
@@ -317,9 +329,15 @@ async def test_library_shows_playlists_and_videos_in_one_list(monkeypatch, clien
     assert "A Clip" in fragment
 
 
-async def test_a_playlist_row_shows_its_own_address_and_a_copy_button(monkeypatch, client, settings, signed_in):
+async def test_a_playlist_row_shows_its_own_address_and_a_copy_button(
+    monkeypatch, client, settings, signed_in
+):
     async def fake_playlist_rows(conn):
-        return [_playlist_row(built_at="2026-08-27T12:00:00Z", member_count=3, duration_seconds=180.0)]
+        return [
+            _playlist_row(
+                built_at="2026-08-27T12:00:00Z", member_count=3, duration_seconds=180.0
+            )
+        ]
 
     async def fake_library_rows(conn):
         return []
@@ -399,12 +417,15 @@ async def test_a_playlist_row_states_which_of_its_four_states_it_is_in(
         assert "Clip B" in resp.text
 
 
-async def test_a_building_playlist_row_is_not_wired_to_the_row_poller(monkeypatch, client, signed_in):
+async def test_a_building_playlist_row_is_not_wired_to_the_row_poller(
+    monkeypatch, client, signed_in
+):
     """The four-second poller binds on data-row-status="preparing" and
     data-title-id, fetching a title's row fragment. A playlist row that
     claimed them would poll an address that does not exist and remove
     itself from the list on the first 404.
     """
+
     async def fake_playlist_rows(conn):
         return [_playlist_row(member_count=2)]
 
@@ -450,7 +471,9 @@ async def test_a_playlist_row_detail_line_degrades_when_a_duration_is_unknown(
 
     async def fake_playlist_rows_unknown(conn):
         return [
-            _playlist_row(built_at="2026-08-27T12:00:00Z", member_count=2, duration_seconds=None)
+            _playlist_row(
+                built_at="2026-08-27T12:00:00Z", member_count=2, duration_seconds=None
+            )
         ]
 
     # Both requests share the one client instance the fixture hands out --
@@ -460,7 +483,11 @@ async def test_a_playlist_row_detail_line_degrades_when_a_duration_is_unknown(
     _patch(monkeypatch, "playlist_rows", fake_playlist_rows_known)
     async with client:
         known_resp = await client.get("/library")
-        assert "clips" in known_resp.text and "180" not in known_resp.text or "clips" in known_resp.text
+        assert (
+            "clips" in known_resp.text
+            and "180" not in known_resp.text
+            or "clips" in known_resp.text
+        )
 
         _patch(monkeypatch, "playlist_rows", fake_playlist_rows_unknown)
         unknown_resp = await client.get("/library")
@@ -482,12 +509,21 @@ async def test_assembly_picker_lists_every_active_video_with_an_add_button(
         return []
 
     async def fake_active_editions_for_picker(conn):
-        return [{"edition_id": uuid.uuid4(), "title_name": "Pick Me", "duration_seconds": 60.0}]
+        return [
+            {
+                "edition_id": uuid.uuid4(),
+                "title_name": "Pick Me",
+                "duration_seconds": 60.0,
+            }
+        ]
 
     _patch(monkeypatch, "playlist_detail", fake_playlist_detail)
     _patch(monkeypatch, "playlist_members", fake_playlist_members)
     monkeypatch.setattr(
-        queries, "active_editions_for_picker", fake_active_editions_for_picker, raising=False
+        queries,
+        "active_editions_for_picker",
+        fake_active_editions_for_picker,
+        raising=False,
     )
 
     async with client:
@@ -514,7 +550,10 @@ async def _get_picker(monkeypatch, client, picker_rows):
     _patch(monkeypatch, "playlist_detail", fake_playlist_detail)
     _patch(monkeypatch, "playlist_members", fake_playlist_members)
     monkeypatch.setattr(
-        queries, "active_editions_for_picker", fake_active_editions_for_picker, raising=False
+        queries,
+        "active_editions_for_picker",
+        fake_active_editions_for_picker,
+        raising=False,
     )
 
     async with client:
@@ -539,7 +578,7 @@ async def test_picker_label_film_shows_bare_title_name(monkeypatch, client, sign
     )
 
     assert resp.status_code == 200
-    assert "<span class=\"share-row__name\">A Lone Film</span>" in resp.text
+    assert '<span class="share-row__name">A Lone Film</span>' in resp.text
 
 
 async def test_picker_label_series_default_edition_shows_title_and_number(
@@ -562,7 +601,7 @@ async def test_picker_label_series_default_edition_shows_title_and_number(
     )
 
     assert resp.status_code == 200
-    assert "<span class=\"share-row__name\">A Season 5</span>" in resp.text
+    assert '<span class="share-row__name">A Season 5</span>' in resp.text
 
 
 async def test_picker_label_series_non_default_edition_shows_title_number_and_slug(
@@ -585,7 +624,7 @@ async def test_picker_label_series_non_default_edition_shows_title_number_and_sl
     )
 
     assert resp.status_code == 200
-    assert "<span class=\"share-row__name\">A Season 5 (dub-ru)</span>" in resp.text
+    assert '<span class="share-row__name">A Season 5 (dub-ru)</span>' in resp.text
 
 
 async def test_picker_two_editions_of_the_same_episode_render_as_distinguishable_rows(
@@ -619,8 +658,8 @@ async def test_picker_two_editions_of_the_same_episode_render_as_distinguishable
     )
 
     assert resp.status_code == 200
-    assert "<span class=\"share-row__name\">A Season 5</span>" in resp.text
-    assert "<span class=\"share-row__name\">A Season 5 (dub-ru)</span>" in resp.text
+    assert '<span class="share-row__name">A Season 5</span>' in resp.text
+    assert '<span class="share-row__name">A Season 5 (dub-ru)</span>' in resp.text
     assert f'value="{edition1}"' in resp.text
     assert f'value="{edition2}"' in resp.text
 
@@ -638,10 +677,22 @@ async def test_assembly_allows_the_same_video_twice(monkeypatch, client, signed_
 
     async def fake_playlist_members(conn, playlist_id):
         return [
-            {"item_id": uuid.uuid4(), "position": 1, "edition_id": edition_id,
-             "title_name": "Pick Me", "duration_seconds": 60.0, "dropped": False},
-            {"item_id": uuid.uuid4(), "position": 2, "edition_id": edition_id,
-             "title_name": "Pick Me", "duration_seconds": 60.0, "dropped": False},
+            {
+                "item_id": uuid.uuid4(),
+                "position": 1,
+                "edition_id": edition_id,
+                "title_name": "Pick Me",
+                "duration_seconds": 60.0,
+                "dropped": False,
+            },
+            {
+                "item_id": uuid.uuid4(),
+                "position": 2,
+                "edition_id": edition_id,
+                "title_name": "Pick Me",
+                "duration_seconds": 60.0,
+                "dropped": False,
+            },
         ]
 
     _patch(monkeypatch, "add_playlist_item", fake_add_playlist_item)
@@ -649,11 +700,18 @@ async def test_assembly_allows_the_same_video_twice(monkeypatch, client, signed_
     _patch(monkeypatch, "playlist_members", fake_playlist_members)
 
     async with client:
-        await client.post(f"/playlists/{PLAYLIST_ID}/items", data={"edition_id": str(edition_id)})
-        await client.post(f"/playlists/{PLAYLIST_ID}/items", data={"edition_id": str(edition_id)})
+        await client.post(
+            f"/playlists/{PLAYLIST_ID}/items", data={"edition_id": str(edition_id)}
+        )
+        await client.post(
+            f"/playlists/{PLAYLIST_ID}/items", data={"edition_id": str(edition_id)}
+        )
         resp = await client.get(f"/playlists/{PLAYLIST_ID}/edit")
 
-    assert calls == [str(edition_id), str(edition_id)] or calls == [edition_id, edition_id]
+    assert calls == [str(edition_id), str(edition_id)] or calls == [
+        edition_id,
+        edition_id,
+    ]
     assert resp.text.count("Pick Me") == 2
     # A position is its own entity -- the picker row carries no
     # already-added marker.
@@ -741,7 +799,9 @@ async def test_assembly_the_member_list_is_fetchable_as_a_fragment_on_its_own(
     assert "<nav" not in resp.text
 
 
-async def test_assembly_move_buttons_are_disabled_at_the_ends(monkeypatch, client, signed_in):
+async def test_assembly_move_buttons_are_disabled_at_the_ends(
+    monkeypatch, client, signed_in
+):
     async def fake_playlist_detail(conn, playlist_id):
         return {"id": PLAYLIST_ID, "name": "Vecher klipov", "slug": "vecher-klipov"}
 
@@ -749,10 +809,22 @@ async def test_assembly_move_buttons_are_disabled_at_the_ends(monkeypatch, clien
 
     async def fake_playlist_members(conn, playlist_id):
         return [
-            {"item_id": first_id, "position": 1, "edition_id": uuid.uuid4(),
-             "title_name": "First", "duration_seconds": 60.0, "dropped": False},
-            {"item_id": second_id, "position": 2, "edition_id": uuid.uuid4(),
-             "title_name": "Second", "duration_seconds": 60.0, "dropped": False},
+            {
+                "item_id": first_id,
+                "position": 1,
+                "edition_id": uuid.uuid4(),
+                "title_name": "First",
+                "duration_seconds": 60.0,
+                "dropped": False,
+            },
+            {
+                "item_id": second_id,
+                "position": 2,
+                "edition_id": uuid.uuid4(),
+                "title_name": "Second",
+                "duration_seconds": 60.0,
+                "dropped": False,
+            },
         ]
 
     _patch(monkeypatch, "playlist_detail", fake_playlist_detail)
@@ -765,14 +837,22 @@ async def test_assembly_move_buttons_are_disabled_at_the_ends(monkeypatch, clien
     assert resp.text.count("aria-disabled") >= 2
 
 
-async def test_assembly_reorder_controls_carry_an_accessible_name(monkeypatch, client, signed_in):
+async def test_assembly_reorder_controls_carry_an_accessible_name(
+    monkeypatch, client, signed_in
+):
     async def fake_playlist_detail(conn, playlist_id):
         return {"id": PLAYLIST_ID, "name": "Vecher klipov", "slug": "vecher-klipov"}
 
     async def fake_playlist_members(conn, playlist_id):
         return [
-            {"item_id": uuid.uuid4(), "position": 1, "edition_id": uuid.uuid4(),
-             "title_name": "First", "duration_seconds": 60.0, "dropped": False},
+            {
+                "item_id": uuid.uuid4(),
+                "position": 1,
+                "edition_id": uuid.uuid4(),
+                "title_name": "First",
+                "duration_seconds": 60.0,
+                "dropped": False,
+            },
         ]
 
     _patch(monkeypatch, "playlist_detail", fake_playlist_detail)
@@ -786,14 +866,22 @@ async def test_assembly_reorder_controls_carry_an_accessible_name(monkeypatch, c
     assert 'aria-label="Remove"' in resp.text
 
 
-async def test_assembly_drag_handle_is_skipped_in_the_keyboard_path(monkeypatch, client, signed_in):
+async def test_assembly_drag_handle_is_skipped_in_the_keyboard_path(
+    monkeypatch, client, signed_in
+):
     async def fake_playlist_detail(conn, playlist_id):
         return {"id": PLAYLIST_ID, "name": "Vecher klipov", "slug": "vecher-klipov"}
 
     async def fake_playlist_members(conn, playlist_id):
         return [
-            {"item_id": uuid.uuid4(), "position": 1, "edition_id": uuid.uuid4(),
-             "title_name": "First", "duration_seconds": 60.0, "dropped": False},
+            {
+                "item_id": uuid.uuid4(),
+                "position": 1,
+                "edition_id": uuid.uuid4(),
+                "title_name": "First",
+                "duration_seconds": 60.0,
+                "dropped": False,
+            },
         ]
 
     _patch(monkeypatch, "playlist_detail", fake_playlist_detail)
@@ -805,14 +893,22 @@ async def test_assembly_drag_handle_is_skipped_in_the_keyboard_path(monkeypatch,
     assert 'tabindex="-1"' in resp.text
 
 
-async def test_assembly_marks_a_member_whose_video_was_deleted(monkeypatch, client, signed_in):
+async def test_assembly_marks_a_member_whose_video_was_deleted(
+    monkeypatch, client, signed_in
+):
     async def fake_playlist_detail(conn, playlist_id):
         return {"id": PLAYLIST_ID, "name": "Vecher klipov", "slug": "vecher-klipov"}
 
     async def fake_playlist_members(conn, playlist_id):
         return [
-            {"item_id": uuid.uuid4(), "position": 1, "edition_id": uuid.uuid4(),
-             "title_name": None, "duration_seconds": None, "dropped": True},
+            {
+                "item_id": uuid.uuid4(),
+                "position": 1,
+                "edition_id": uuid.uuid4(),
+                "title_name": None,
+                "duration_seconds": None,
+                "dropped": True,
+            },
         ]
 
     _patch(monkeypatch, "playlist_detail", fake_playlist_detail)
@@ -835,7 +931,9 @@ async def test_assembly_marks_a_member_whose_video_was_deleted(monkeypatch, clie
     assert gap_row.count("aria-label") == 1
 
 
-async def test_assembly_shows_the_timing_note_on_both_create_and_edit(monkeypatch, client, signed_in):
+async def test_assembly_shows_the_timing_note_on_both_create_and_edit(
+    monkeypatch, client, signed_in
+):
     async def fake_taken_playlist_slugs(conn):
         return set()
 
@@ -986,11 +1084,15 @@ def _deletion_stubs(monkeypatch, status):
     return calls
 
 
-async def test_deleting_a_playlist_starts_the_grace_window(monkeypatch, client, signed_in):
+async def test_deleting_a_playlist_starts_the_grace_window(
+    monkeypatch, client, signed_in
+):
     calls = _deletion_stubs(monkeypatch, "active")
 
     async with client:
-        resp = await client.post(f"/playlists/{PLAYLIST_ID}/delete", follow_redirects=False)
+        resp = await client.post(
+            f"/playlists/{PLAYLIST_ID}/delete", follow_redirects=False
+        )
 
     assert resp.status_code == 302
     assert resp.headers["location"] == "/library"
@@ -1004,17 +1106,23 @@ async def test_deleting_a_playlist_that_is_already_pending_is_refused(
     calls = _deletion_stubs(monkeypatch, "pending_delete")
 
     async with client:
-        resp = await client.post(f"/playlists/{PLAYLIST_ID}/delete", follow_redirects=False)
+        resp = await client.post(
+            f"/playlists/{PLAYLIST_ID}/delete", follow_redirects=False
+        )
 
     assert resp.status_code == 404
     assert calls["marked"] == []
 
 
-async def test_undo_returns_a_pending_playlist_to_active(monkeypatch, client, signed_in):
+async def test_undo_returns_a_pending_playlist_to_active(
+    monkeypatch, client, signed_in
+):
     calls = _deletion_stubs(monkeypatch, "pending_delete")
 
     async with client:
-        resp = await client.post(f"/playlists/{PLAYLIST_ID}/undo", follow_redirects=False)
+        resp = await client.post(
+            f"/playlists/{PLAYLIST_ID}/undo", follow_redirects=False
+        )
 
     assert resp.status_code == 302
     assert calls["cancelled"] == [PLAYLIST_ID]
@@ -1026,7 +1134,9 @@ async def test_undo_against_an_active_playlist_is_refused_and_changes_nothing(
     calls = _deletion_stubs(monkeypatch, "active")
 
     async with client:
-        resp = await client.post(f"/playlists/{PLAYLIST_ID}/undo", follow_redirects=False)
+        resp = await client.post(
+            f"/playlists/{PLAYLIST_ID}/undo", follow_redirects=False
+        )
 
     assert resp.status_code == 400
     assert calls["cancelled"] == []
@@ -1042,7 +1152,9 @@ async def test_purge_removes_every_artifact_and_finishes_the_row_before_respondi
     calls = _deletion_stubs(monkeypatch, "pending_delete")
 
     async with client:
-        resp = await client.post(f"/playlists/{PLAYLIST_ID}/purge", follow_redirects=False)
+        resp = await client.post(
+            f"/playlists/{PLAYLIST_ID}/purge", follow_redirects=False
+        )
 
     assert resp.status_code == 302
     assert calls["marked"] == [(PLAYLIST_ID, 0)]
@@ -1050,11 +1162,15 @@ async def test_purge_removes_every_artifact_and_finishes_the_row_before_respondi
     assert calls["finished"] == [PLAYLIST_ID]
 
 
-async def test_purge_against_an_active_playlist_is_refused(monkeypatch, client, signed_in):
+async def test_purge_against_an_active_playlist_is_refused(
+    monkeypatch, client, signed_in
+):
     calls = _deletion_stubs(monkeypatch, "active")
 
     async with client:
-        resp = await client.post(f"/playlists/{PLAYLIST_ID}/purge", follow_redirects=False)
+        resp = await client.post(
+            f"/playlists/{PLAYLIST_ID}/purge", follow_redirects=False
+        )
 
     assert resp.status_code == 400
     assert calls["deleted_objects"] == []
@@ -1067,6 +1183,7 @@ async def test_a_pending_playlist_row_renders_the_same_countdown_a_video_row_doe
     the existing tick already binds to, so the chip ticks with no browser
     code added for playlists.
     """
+
     async def fake_library_rows(conn):
         return []
 
@@ -1075,11 +1192,15 @@ async def test_a_pending_playlist_row_renders_the_same_countdown_a_video_row_doe
 
     async def fake_playlist_rows(conn):
         return [
-            _playlist_row(status="pending_delete", delete_at=DELETION_DEADLINE, member_count=2)
+            _playlist_row(
+                status="pending_delete", delete_at=DELETION_DEADLINE, member_count=2
+            )
         ]
 
     monkeypatch.setattr(queries, "library_rows", fake_library_rows, raising=False)
-    monkeypatch.setattr(queries, "referenced_objects", fake_referenced_objects, raising=False)
+    monkeypatch.setattr(
+        queries, "referenced_objects", fake_referenced_objects, raising=False
+    )
     _patch(monkeypatch, "playlist_rows", fake_playlist_rows)
 
     async with client:
@@ -1141,6 +1262,7 @@ async def test_a_building_playlist_row_with_a_live_job_is_wired_to_the_row_polle
     Preparing row, reading its own fragment address off data-row-url
     rather than the poller building one from a title id it does not have.
     """
+
     async def fake_playlist_rows(conn):
         return [_playlist_row(member_count=2, **_job_fields())]
 
@@ -1152,7 +1274,9 @@ async def test_a_building_playlist_row_with_a_live_job_is_wired_to_the_row_polle
 
     _patch(monkeypatch, "playlist_rows", fake_playlist_rows)
     monkeypatch.setattr(queries, "library_rows", fake_library_rows, raising=False)
-    monkeypatch.setattr(queries, "referenced_objects", fake_referenced_objects, raising=False)
+    monkeypatch.setattr(
+        queries, "referenced_objects", fake_referenced_objects, raising=False
+    )
 
     async with client:
         resp = await client.get("/library")
@@ -1180,7 +1304,9 @@ async def test_cancel_on_a_queued_playlist_job_finishes_it_with_no_hard_delete(
     _patch(monkeypatch, "request_job_cancel", fake_request_cancel)
 
     async with client:
-        resp = await client.post(f"/playlists/{PLAYLIST_ID}/cancel", follow_redirects=False)
+        resp = await client.post(
+            f"/playlists/{PLAYLIST_ID}/cancel", follow_redirects=False
+        )
 
     assert resp.status_code == 302
     assert calls["cancelled_job_ids"] == ["job-1"]
@@ -1195,12 +1321,16 @@ async def test_cancel_against_a_playlist_with_no_live_job_is_refused(
     _patch(monkeypatch, "job_for_playlist", fake_job_for_playlist)
 
     async with client:
-        resp = await client.post(f"/playlists/{PLAYLIST_ID}/cancel", follow_redirects=False)
+        resp = await client.post(
+            f"/playlists/{PLAYLIST_ID}/cancel", follow_redirects=False
+        )
 
     assert resp.status_code == 404
 
 
-async def test_build_again_enqueues_a_fresh_playlist_job(monkeypatch, client, signed_in):
+async def test_build_again_enqueues_a_fresh_playlist_job(
+    monkeypatch, client, signed_in
+):
     calls = {"enqueued": []}
 
     async def fake_playlist_detail(conn, playlist_id):
@@ -1214,7 +1344,9 @@ async def test_build_again_enqueues_a_fresh_playlist_job(monkeypatch, client, si
     _patch(monkeypatch, "enqueue_job", fake_enqueue_job)
 
     async with client:
-        resp = await client.post(f"/playlists/{PLAYLIST_ID}/retry", follow_redirects=False)
+        resp = await client.post(
+            f"/playlists/{PLAYLIST_ID}/retry", follow_redirects=False
+        )
 
     assert resp.status_code == 302
     assert calls["enqueued"] == [{"kind": "playlist", "playlist_id": PLAYLIST_ID}]

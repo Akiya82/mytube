@@ -10,6 +10,7 @@ are exercised for real (pure functions, no I/O) against hand-built
 subtitle text, since the timestamp logic is exactly what this file is
 here to prove.
 """
+
 import asyncio
 import json
 import subprocess
@@ -17,6 +18,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
 
 from mytube_media.compat import ProbeError
 from mytube_media.subtitles import SubtitleExtractError
@@ -30,8 +32,6 @@ from orchestrator.config import get_settings
 from orchestrator.main import app
 from orchestrator.web import routes_preview
 
-from conftest import ADMIN_FQDN, SESSION_COOKIE, WORKER_TOKEN
-
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "probe"
 
 
@@ -40,7 +40,9 @@ def _mixed_subtitle_probe() -> dict:
     stream 3 is an ASS track -- the shape the extraction_extension fix
     exists to tell apart.
     """
-    return json.loads((FIXTURES_DIR / "subtitles_mixed.json").read_text(encoding="utf-8"))
+    return json.loads(
+        (FIXTURES_DIR / "subtitles_mixed.json").read_text(encoding="utf-8")
+    )
 
 
 @pytest.fixture
@@ -82,15 +84,28 @@ def web_client(_web_env, signed_in):
 _PROBE_JSON = {
     "format": {"duration": "120.0"},
     "streams": [
-        {"index": 0, "codec_type": "video", "width": 1920, "height": 1080, "sample_aspect_ratio": "1:1"},
+        {
+            "index": 0,
+            "codec_type": "video",
+            "width": 1920,
+            "height": 1080,
+            "sample_aspect_ratio": "1:1",
+        },
         {"index": 1, "codec_type": "audio", "codec_name": "aac"},
-        {"index": 2, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "eng"}},
+        {
+            "index": 2,
+            "codec_type": "subtitle",
+            "codec_name": "subrip",
+            "tags": {"language": "eng"},
+        },
     ],
 }
 
 
 def _fake_completed(returncode=0, stderr=b""):
-    return subprocess.CompletedProcess(args=["ffmpeg"], returncode=returncode, stdout=b"", stderr=stderr)
+    return subprocess.CompletedProcess(
+        args=["ffmpeg"], returncode=returncode, stdout=b"", stderr=stderr
+    )
 
 
 @pytest.fixture
@@ -116,7 +131,12 @@ def render_stubs(monkeypatch, _web_env):
 
     def _extract_embedded_track(source, stream_index, scratch_dir, extension="ass"):
         stub.extract_calls.append(
-            {"source": source, "stream_index": stream_index, "scratch_dir": scratch_dir, "extension": extension}
+            {
+                "source": source,
+                "stream_index": stream_index,
+                "scratch_dir": scratch_dir,
+                "extension": extension,
+            }
         )
         dest = scratch_dir / f"track_{stream_index}.{extension}"
         dest.write_text(stub.extracted_text, encoding="utf-8")
@@ -129,7 +149,11 @@ def render_stubs(monkeypatch, _web_env):
 
     def _collect_fonts(source, subtitle_path, scratch_dir):
         stub.collect_fonts_calls.append(
-            {"source": source, "subtitle_path": subtitle_path, "scratch_dir": scratch_dir}
+            {
+                "source": source,
+                "subtitle_path": subtitle_path,
+                "scratch_dir": scratch_dir,
+            }
         )
         return None
 
@@ -144,7 +168,9 @@ def render_stubs(monkeypatch, _web_env):
         return _fake_completed(returncode=stub.returncode, stderr=stub.stderr)
 
     monkeypatch.setattr(routes_preview, "probe", _probe)
-    monkeypatch.setattr(routes_preview, "extract_embedded_track", _extract_embedded_track)
+    monkeypatch.setattr(
+        routes_preview, "extract_embedded_track", _extract_embedded_track
+    )
     monkeypatch.setattr(routes_preview, "read_text", _read_text)
     monkeypatch.setattr(routes_preview, "collect_fonts", _collect_fonts)
     monkeypatch.setattr(routes_preview.subprocess, "run", _run)
@@ -245,7 +271,11 @@ async def test_the_timestamp_falls_back_to_the_first_cue_when_none_qualify(
     async with web_client:
         resp = await web_client.post(
             "/preview/a-video.mp4",
-            data={"subtitle_choice": "embedded:2", "stereo_layout": "2d", "after": "50"},
+            data={
+                "subtitle_choice": "embedded:2",
+                "stereo_layout": "2d",
+                "after": "50",
+            },
         )
     assert 'data-frame-seconds="1.0"' in resp.text
 
@@ -299,7 +329,9 @@ async def test_a_failed_render_answers_the_error_state_convert_stays_possible(
     assert "<img" not in resp.text
 
 
-async def test_a_probe_failure_answers_the_error_state(web_client, render_stubs, monkeypatch):
+async def test_a_probe_failure_answers_the_error_state(
+    web_client, render_stubs, monkeypatch
+):
     def _raise(path):
         raise ProbeError("simulated")
 
@@ -398,10 +430,16 @@ def test_the_preview_and_the_conversion_command_share_the_same_filter_value():
         reencode_audio=False,
         stereo_layout="2d",
     )
-    subtitle = SubtitleChoice(kind="embedded_text", stream_index=2, path="/share/a-video.mp4")
+    subtitle = SubtitleChoice(
+        kind="embedded_text", stream_index=2, path="/share/a-video.mp4"
+    )
 
     preview_cmd = build_preview_command(
-        "/share/a-video.mp4", "/work/frame.jpg", plan=plan, subtitle=subtitle, at_seconds=5.0
+        "/share/a-video.mp4",
+        "/work/frame.jpg",
+        plan=plan,
+        subtitle=subtitle,
+        at_seconds=5.0,
     )
     transcode_cmd = build_transcode_command(
         "/share/a-video.mp4", "/work/out.mp4", plan=plan, subtitle=subtitle
@@ -605,7 +643,9 @@ async def test_the_preview_and_the_converter_resolve_the_same_choice_for_the_sam
         captured_preview["subtitle"] = kwargs["subtitle"]
         return real_build_preview_command(*args, **kwargs)
 
-    monkeypatch.setattr(routes_preview, "build_preview_command", _spy_build_preview_command)
+    monkeypatch.setattr(
+        routes_preview, "build_preview_command", _spy_build_preview_command
+    )
 
     async with web_client:
         resp = await web_client.post(
@@ -622,7 +662,9 @@ async def test_the_preview_and_the_converter_resolve_the_same_choice_for_the_sam
         captured_worker["subtitle"] = kwargs["subtitle"]
         return real_build_transcode_command(*args, **kwargs)
 
-    def _fake_extract_embedded_track(source, stream_index, scratch_dir, extension="ass"):
+    def _fake_extract_embedded_track(
+        source, stream_index, scratch_dir, extension="ass"
+    ):
         dest = scratch_dir / f"track_{stream_index}.{extension}"
         dest.write_text(render_stubs.extracted_text, encoding="utf-8")
         return dest
@@ -646,14 +688,22 @@ async def test_the_preview_and_the_converter_resolve_the_same_choice_for_the_sam
         async def cancelled(self, *args, **kwargs):
             pass
 
-    monkeypatch.setattr(worker_main, "build_transcode_command", _spy_build_transcode_command)
-    monkeypatch.setattr(worker_main, "extract_embedded_track", _fake_extract_embedded_track)
+    monkeypatch.setattr(
+        worker_main, "build_transcode_command", _spy_build_transcode_command
+    )
+    monkeypatch.setattr(
+        worker_main, "extract_embedded_track", _fake_extract_embedded_track
+    )
     monkeypatch.setattr(worker_main, "collect_fonts", lambda *a, **k: None)
     monkeypatch.setattr(worker_main, "run_ffmpeg_with_progress", _fake_run_ffmpeg)
-    monkeypatch.setattr(worker_main.compat, "probe", lambda path: render_stubs.probe_json)
+    monkeypatch.setattr(
+        worker_main.compat, "probe", lambda path: render_stubs.probe_json
+    )
     monkeypatch.setattr(worker_main.compat, "moov_before_mdat", lambda path: True)
     monkeypatch.setattr(worker_main.worker_storage, "upload_file", lambda *a, **k: None)
-    monkeypatch.setattr(worker_main.worker_storage, "abort_multipart", lambda *a, **k: None)
+    monkeypatch.setattr(
+        worker_main.worker_storage, "abort_multipart", lambda *a, **k: None
+    )
 
     worker_share = tmp_path / "worker_share"
     worker_scratch = tmp_path / "worker_scratch"
@@ -682,7 +732,12 @@ async def test_the_preview_and_the_converter_resolve_the_same_choice_for_the_sam
         "stereo_layout": "2d",
     }
     await worker_main._process_job(
-        _FakeWorkerClient(), object(), worker_settings, job, worker_scratch, asyncio.Event()
+        _FakeWorkerClient(),
+        object(),
+        worker_settings,
+        job,
+        worker_scratch,
+        asyncio.Event(),
     )
     worker_choice = captured_worker["subtitle"]
 

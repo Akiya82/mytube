@@ -14,6 +14,7 @@ per-file work below (`_process_file`) is additionally bounded by
 `MAX_CONCURRENT_FOLDER_PROBES` -- the share is a network mount that also
 carries every viewer's playback, and a folder can hold two dozen files.
 """
+
 import asyncio
 import shutil
 import uuid
@@ -51,7 +52,12 @@ from orchestrator.media.add import (
     validate_folder_submission,
 )
 from orchestrator.recognize import Recognised, normalize_season, recognize_filename
-from orchestrator.slugs import EditionSlugRefused, SlugError, normalize_edition_slug, normalize_slug
+from orchestrator.slugs import (
+    EditionSlugRefused,
+    SlugError,
+    normalize_edition_slug,
+    normalize_slug,
+)
 from orchestrator.web.routes_share import (
     MIN_VIDEO_FILES_FOR_FOLDER_ADD,
     _breadcrumb,
@@ -113,7 +119,9 @@ def _group_files(entries, recognised_by_path: dict) -> list[list]:
     return [groups[key] for key in order]
 
 
-def _effective_season(group_recognised: list[Recognised], folder_name: str) -> tuple[int, str]:
+def _effective_season(
+    group_recognised: list[Recognised], folder_name: str
+) -> tuple[int, str]:
     """The season this group's title carries, and where it came from.
 
     The folder name is consulted only as the *last* source, when
@@ -132,7 +140,9 @@ def _effective_season(group_recognised: list[Recognised], folder_name: str) -> t
     return 1, "none"
 
 
-def _title_name_and_explicit_slug(base_name: str, season: int) -> tuple[str, str | None]:
+def _title_name_and_explicit_slug(
+    base_name: str, season: int
+) -> tuple[str, str | None]:
     """The season suffix rule: a first season carries no suffix
     even when the release itself names it ("Horimiya" -> "horimiya"), a
     later season carries its number in both the display name and the
@@ -166,7 +176,9 @@ def _matches_default(default_signature, file_signatures: frozenset) -> bool:
     return default_signature is None or default_signature in file_signatures
 
 
-async def _process_file(root: Path, abs_path: Path, entry, recognised: Recognised) -> dict:
+async def _process_file(
+    root: Path, abs_path: Path, entry, recognised: Recognised
+) -> dict:
     """Everything one file's own row needs that only a probe or a
     filesystem walk can answer -- the whole unit of work
     `MAX_CONCURRENT_FOLDER_PROBES` bounds. A failed probe keeps this file's
@@ -320,7 +332,9 @@ def _build_subtitle_options(file_results: list[dict]) -> list[dict]:
                     "language": _resolve_sidecar_language(
                         candidate.suffix, *candidate.folder_segments
                     ),
-                    "track_kind": _resolve_track_kind_from_folders(candidate.folder_segments),
+                    "track_kind": _resolve_track_kind_from_folders(
+                        candidate.folder_segments
+                    ),
                 }
             )
     return options
@@ -348,7 +362,9 @@ def _file_subtitle_signatures(result: dict) -> frozenset:
     return frozenset(signatures)
 
 
-async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path: dict) -> dict:
+async def _build_rows(
+    conn, root: Path, active_entries: list, recognised_by_path: dict
+) -> dict:
     """Everything the confirmation screen renders about the active group's
     own files, computed once: the per-file rows, the folder-wide track
     options, and the plan for the title itself. Nothing here writes
@@ -357,7 +373,12 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
     abs_paths = {entry.rel_path: root / entry.rel_path for entry in active_entries}
     results_list = await asyncio.gather(
         *(
-            _process_file(root, abs_paths[entry.rel_path], entry, recognised_by_path[entry.rel_path])
+            _process_file(
+                root,
+                abs_paths[entry.rel_path],
+                entry,
+                recognised_by_path[entry.rel_path],
+            )
             for entry in active_entries
         )
     )
@@ -366,7 +387,9 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
     already_added_rows = await queries.editions_by_source_paths(
         conn, [entry.rel_path for entry in active_entries]
     )
-    already_added_by_path = {row["source_path"]: dict(row) for row in already_added_rows}
+    already_added_by_path = {
+        row["source_path"]: dict(row) for row in already_added_rows
+    }
 
     # A moved row takes no part in the folder-wide track choices and
     # is never highlighted -- its edition already exists and is only being
@@ -391,7 +414,9 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
     title_match = await queries.title_by_current_slug(conn, slug_plan.candidate)
     taken_numbers: set[int] = set()
     if title_match is not None:
-        taken_numbers = await queries.taken_episode_numbers(conn, title_match["title_id"])
+        taken_numbers = await queries.taken_episode_numbers(
+            conn, title_match["title_id"]
+        )
 
     # First pass: every fact that does not depend on any other row.
     draft_rows = []
@@ -432,7 +457,9 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
         if already_added is None and verdict is not None:
             audio_signatures = _file_audio_signatures(result)
             subtitle_signatures = _file_subtitle_signatures(result)
-            audio_mismatch = not _matches_default(default_audio_signature, audio_signatures)
+            audio_mismatch = not _matches_default(
+                default_audio_signature, audio_signatures
+            )
             subtitle_mismatch = not _matches_default(
                 default_subtitle_signature, subtitle_signatures
             )
@@ -479,7 +506,9 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
                 "number_taken": (
                     not already_here and number is not None and number in taken_numbers
                 ),
-                "size_bytes": verdict.size_bytes if verdict and verdict.size_bytes else 0,
+                "size_bytes": verdict.size_bytes
+                if verdict and verdict.size_bytes
+                else 0,
                 # The write side's own submission-preserving state:
                 # defaults here are exactly what the template
                 # already rendered before a refusal existed at all --
@@ -586,7 +615,9 @@ async def _build_edition_rows(
     already_added_rows = await queries.editions_by_source_paths(
         conn, [entry.rel_path for entry in active_entries]
     )
-    already_added_by_path = {row["source_path"]: dict(row) for row in already_added_rows}
+    already_added_by_path = {
+        row["source_path"]: dict(row) for row in already_added_rows
+    }
 
     target = await _resolve_edition_mode_target(active_entries, already_added_by_path)
     if target is None:
@@ -596,7 +627,12 @@ async def _build_edition_rows(
     abs_paths = {entry.rel_path: root / entry.rel_path for entry in active_entries}
     results_list = await asyncio.gather(
         *(
-            _process_file(root, abs_paths[entry.rel_path], entry, recognised_by_path[entry.rel_path])
+            _process_file(
+                root,
+                abs_paths[entry.rel_path],
+                entry,
+                recognised_by_path[entry.rel_path],
+            )
             for entry in active_entries
         )
     )
@@ -613,7 +649,9 @@ async def _build_edition_rows(
     # every other add path's own default.
     default_subtitle_signature = None
 
-    episode_ids = [already_added_by_path[e.rel_path]["episode_id"] for e in active_entries]
+    episode_ids = [
+        already_added_by_path[e.rel_path]["episode_id"] for e in active_entries
+    ]
     existing_rows = await queries.default_editions_technical(conn, episode_ids)
     existing_by_episode = {r["episode_id"]: dict(r) for r in existing_rows}
     taken_audio_languages = await queries.audio_languages_on_episodes(conn, episode_ids)
@@ -629,14 +667,20 @@ async def _build_edition_rows(
         (r["verdict"] for r in results_list if r["verdict"] is not None), None
     )
     candidate_technical = {
-        "audio_language": chosen_audio_option["language"] if chosen_audio_option else None,
+        "audio_language": chosen_audio_option["language"]
+        if chosen_audio_option
+        else None,
         "audio_studio_folder": (
             chosen_audio_option["folder_label"]
             if chosen_audio_option and chosen_audio_option["kind"] == "external"
             else None
         ),
-        "width": representative_verdict.width if representative_verdict is not None else None,
-        "height": representative_verdict.height if representative_verdict is not None else None,
+        "width": representative_verdict.width
+        if representative_verdict is not None
+        else None,
+        "height": representative_verdict.height
+        if representative_verdict is not None
+        else None,
         # The folder-wide subtitle default is "no subtitles",
         # so there is nothing here for the slug suggestion to differ on --
         # matching the single-file GET route's own pre-choice suggestion,
@@ -673,7 +717,9 @@ async def _build_edition_rows(
         if verdict is not None:
             audio_signatures = _file_audio_signatures(result)
             subtitle_signatures = _file_subtitle_signatures(result)
-            audio_mismatch = not _matches_default(default_audio_signature, audio_signatures)
+            audio_mismatch = not _matches_default(
+                default_audio_signature, audio_signatures
+            )
             subtitle_mismatch = not _matches_default(
                 default_subtitle_signature, subtitle_signatures
             )
@@ -695,7 +741,9 @@ async def _build_edition_rows(
         # default -- "every file participates" is the default, not a
         # constraint, but a row this screen already knows is wrong never
         # starts checked.
-        problem = bool(result["probe_failed"] or highlighted or not compatible or slug_taken)
+        problem = bool(
+            result["probe_failed"] or highlighted or not compatible or slug_taken
+        )
 
         draft_rows.append(
             {
@@ -723,7 +771,9 @@ async def _build_edition_rows(
                 "number_missing": False,
                 "number_duplicate": False,
                 "number_taken": False,
-                "size_bytes": verdict.size_bytes if verdict and verdict.size_bytes else 0,
+                "size_bytes": verdict.size_bytes
+                if verdict and verdict.size_bytes
+                else 0,
                 "move_checked": False,
                 "selected_audio_fallback_index": None,
                 "selected_subtitle_fallback_index": None,
@@ -734,7 +784,8 @@ async def _build_edition_rows(
 
     estimate_size = sum(row["size_bytes"] for row in draft_rows if row["checked"])
     default_stereo_layout = next(
-        (r["verdict"].stereo_layout for r in results_list if r["verdict"] is not None), "2d"
+        (r["verdict"].stereo_layout for r in results_list if r["verdict"] is not None),
+        "2d",
     )
 
     return {
@@ -788,7 +839,9 @@ def _render_edition_folder_screen(
     required_total = sum(
         required_free_bytes(
             row["size_bytes"],
-            already_correct=bool(row["verdict"] is not None and row["verdict"].already_correct),
+            already_correct=bool(
+                row["verdict"] is not None and row["verdict"].already_correct
+            ),
         )
         for row in checked
     )
@@ -806,13 +859,15 @@ def _render_edition_folder_screen(
         audio_options=edition_built["audio_options"],
         subtitle_options=edition_built["subtitle_options"],
         audio_choice_index=(
-            audio_choice_index if audio_choice_index is not None
+            audio_choice_index
+            if audio_choice_index is not None
             else (0 if edition_built["audio_options"] else None)
         ),
         subtitle_choice_index=subtitle_choice_index,
         default_stereo_layout=stereo_layout or edition_built["default_stereo_layout"],
         edition_slug_value=(
-            submitted_edition_slug if submitted_edition_slug is not None
+            submitted_edition_slug
+            if submitted_edition_slug is not None
             else edition_built["suggested_slug"]
         ),
         make_default_checked=submitted_make_default,
@@ -831,7 +886,9 @@ def _render_edition_folder_screen(
 
 
 @router.get("/add-folder/{path:path}")
-async def folder_confirm_route(request: Request, path: str, group: str = "", mode: str = ""):
+async def folder_confirm_route(
+    request: Request, path: str, group: str = "", mode: str = ""
+):
     settings = get_settings()
     root = Path(settings.share_root)
 
@@ -896,7 +953,9 @@ async def folder_confirm_route(request: Request, path: str, group: str = "", mod
     pool = request.app.state.db_pool
     if mode == "edition":
         async with pool.acquire() as conn:
-            edition_built = await _build_edition_rows(conn, root, active_entries, recognised_by_path)
+            edition_built = await _build_edition_rows(
+                conn, root, active_entries, recognised_by_path
+            )
         if edition_built is not None:
             estimate_seconds = 0.0
             if settings.add_estimate_mb_per_second > 0:
@@ -938,7 +997,9 @@ async def folder_confirm_route(request: Request, path: str, group: str = "", mod
     )
     checked_unmoved = [row for row in unmoved_rows if row["checked"]]
     incompatible_checked = [row for row in checked_unmoved if not row["compatible"]]
-    all_probes_failed = bool(unmoved_rows) and all(row["probe_failed"] for row in unmoved_rows)
+    all_probes_failed = bool(unmoved_rows) and all(
+        row["probe_failed"] for row in unmoved_rows
+    )
 
     estimate_seconds = 0.0
     if settings.add_estimate_mb_per_second > 0:
@@ -947,7 +1008,11 @@ async def folder_confirm_route(request: Request, path: str, group: str = "", mod
         )
 
     default_stereo_layout = next(
-        (row["verdict"].stereo_layout for row in unmoved_rows if row["verdict"] is not None),
+        (
+            row["verdict"].stereo_layout
+            for row in unmoved_rows
+            if row["verdict"] is not None
+        ),
         "2d",
     )
 
@@ -960,12 +1025,16 @@ async def folder_confirm_route(request: Request, path: str, group: str = "", mod
     required_total = sum(
         required_free_bytes(
             row["size_bytes"],
-            already_correct=bool(row["verdict"] is not None and row["verdict"].already_correct),
+            already_correct=bool(
+                row["verdict"] is not None and row["verdict"].already_correct
+            ),
         )
         for row in checked_unmoved
     )
     if required_total:
-        free_bytes = await asyncio.to_thread(lambda: shutil.disk_usage(settings.work_dir).free)
+        free_bytes = await asyncio.to_thread(
+            lambda: shutil.disk_usage(settings.work_dir).free
+        )
         not_enough_space = free_bytes < required_total
 
     return render(
@@ -1085,7 +1154,9 @@ def _resolve_audio_selection(
     return None
 
 
-def _fallback_audio_selection(result: dict) -> tuple[str, int | None, str | None, int | None]:
+def _fallback_audio_selection(
+    result: dict,
+) -> tuple[str, int | None, str | None, int | None]:
     """The floor `_resolve_audio_selection` falls back to when a
     signature cannot be found in this file at all: this file's own first
     embedded track, since an audio choice is never optional and a
@@ -1183,16 +1254,24 @@ def _render_refused_folder_screen(
             and ticked_numbers[resolved["number"]] > 1
         )
         row["number_taken"] = resolved["number_taken"]
-        row["selected_audio_fallback_index"] = resolved.get("selected_audio_fallback_index")
-        row["selected_subtitle_fallback_index"] = resolved.get("selected_subtitle_fallback_index")
+        row["selected_audio_fallback_index"] = resolved.get(
+            "selected_audio_fallback_index"
+        )
+        row["selected_subtitle_fallback_index"] = resolved.get(
+            "selected_subtitle_fallback_index"
+        )
         rows.append(row)
 
     unmoved_rows = [row for row in rows if row["already_added"] is None]
     all_added = bool(rows) and not unmoved_rows
-    nothing_recognized = bool(unmoved_rows) and all(row["number"] is None for row in unmoved_rows)
+    nothing_recognized = bool(unmoved_rows) and all(
+        row["number"] is None for row in unmoved_rows
+    )
     checked_unmoved = [row for row in unmoved_rows if row["checked"]]
     incompatible_checked = [row for row in checked_unmoved if not row["compatible"]]
-    all_probes_failed = bool(unmoved_rows) and all(row["probe_failed"] for row in unmoved_rows)
+    all_probes_failed = bool(unmoved_rows) and all(
+        row["probe_failed"] for row in unmoved_rows
+    )
 
     return render(
         request,
@@ -1256,7 +1335,9 @@ async def _handle_edition_folder_submit(
     side -- see that function's own docstring for what edition mode never
     has to handle that the ordinary screen does.
     """
-    edition_built = await _build_edition_rows(conn, root, active_entries, recognised_by_path)
+    edition_built = await _build_edition_rows(
+        conn, root, active_entries, recognised_by_path
+    )
     if edition_built is None:
         return _unreachable_response(request, status_code=400)
 
@@ -1275,7 +1356,9 @@ async def _handle_edition_folder_submit(
         ):
             return _unreachable_response(request, status_code=400)
         audio_choice_index = parsed[1]
-        default_audio_signature = edition_built["audio_options"][audio_choice_index]["signature"]
+        default_audio_signature = edition_built["audio_options"][audio_choice_index][
+            "signature"
+        ]
 
     subtitle_choice_raw = form.get("subtitle_choice", "none")
     default_subtitle_signature = None
@@ -1289,15 +1372,17 @@ async def _handle_edition_folder_submit(
         ):
             return _unreachable_response(request, status_code=400)
         subtitle_choice_index = parsed[1]
-        default_subtitle_signature = edition_built["subtitle_options"][subtitle_choice_index][
-            "signature"
-        ]
+        default_subtitle_signature = edition_built["subtitle_options"][
+            subtitle_choice_index
+        ]["signature"]
 
     if stereo_layout != "2d" and default_subtitle_signature is not None:
         return _unreachable_response(request, status_code=400)
 
     try:
-        candidate_slug = normalize_edition_slug(submitted_slug_raw or edition_built["suggested_slug"])
+        candidate_slug = normalize_edition_slug(
+            submitted_slug_raw or edition_built["suggested_slug"]
+        )
     except (SlugError, EditionSlugRefused):
         return _render_edition_folder_screen(
             request,
@@ -1389,7 +1474,9 @@ async def _handle_edition_folder_submit(
     # or a crafted submission against a title deleted meanwhile refuses the
     # same way the ordinary screen's "existing" mode already does.
     target_row = await queries.episode_with_title(conn, edition_built["episode_ids"][0])
-    target_ok = target_row is not None and target_row["title_id"] == edition_built["title_id"]
+    target_ok = (
+        target_row is not None and target_row["title_id"] == edition_built["title_id"]
+    )
 
     validation = validate_edition_folder_submission(
         target_ok=target_ok,
@@ -1414,8 +1501,12 @@ async def _handle_edition_folder_submit(
             row = dict(original)
             row["checked"] = resolved["ticked"]
             row["slug_taken_on_episode"] = resolved["slug_taken"]
-            row["selected_audio_fallback_index"] = resolved["selected_audio_fallback_index"]
-            row["selected_subtitle_fallback_index"] = resolved["selected_subtitle_fallback_index"]
+            row["selected_audio_fallback_index"] = resolved[
+                "selected_audio_fallback_index"
+            ]
+            row["selected_subtitle_fallback_index"] = resolved[
+                "selected_subtitle_fallback_index"
+            ]
             rows.append(row)
         refused_built = dict(edition_built)
         refused_built["rows"] = rows
@@ -1438,7 +1529,9 @@ async def _handle_edition_folder_submit(
     new_rows = [r for r in resolved_rows if r["ticked"]]
 
     async with conn.transaction():
-        await conn.execute("SELECT pg_advisory_xact_lock($1)", queries.SLUG_CLAIM_LOCK_KEY)
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock($1)", queries.SLUG_CLAIM_LOCK_KEY
+        )
 
         # Re-checked inside the lock: two folder
         # saves racing for the same episode and the same slug must never
@@ -1446,7 +1539,9 @@ async def _handle_edition_folder_submit(
         # "re-check under the lock" shape create_title_with_edition's own
         # docstring documents for a title slug.
         for r in new_rows:
-            if await queries.edition_slug_taken_on_episode(conn, r["episode_id"], candidate_slug):
+            if await queries.edition_slug_taken_on_episode(
+                conn, r["episode_id"], candidate_slug
+            ):
                 return _unreachable_response(request, status_code=400)
 
         for r in new_rows:
@@ -1481,7 +1576,9 @@ async def _handle_edition_folder_submit(
                 sub_kind, sub_index, sub_path = _resolve_subtitle_selection(
                     result, r["subtitle_signature"]
                 )
-                subtitle_path = relative_to_root(root, Path(sub_path)) if sub_path else None
+                subtitle_path = (
+                    relative_to_root(root, Path(sub_path)) if sub_path else None
+                )
                 await queries.enqueue_job(
                     conn,
                     kind="transcode",
@@ -1644,7 +1741,9 @@ async def folder_confirm_submit_route(request: Request, path: str):
             ):
                 return _unreachable_response(request, status_code=400)
             audio_choice_index = parsed[1]
-            default_audio_signature = built["audio_options"][audio_choice_index]["signature"]
+            default_audio_signature = built["audio_options"][audio_choice_index][
+                "signature"
+            ]
 
         subtitle_choice_raw = form.get("subtitle_choice", "none")
         default_subtitle_signature = None
@@ -1658,9 +1757,9 @@ async def folder_confirm_submit_route(request: Request, path: str):
             ):
                 return _unreachable_response(request, status_code=400)
             subtitle_choice_index = parsed[1]
-            default_subtitle_signature = built["subtitle_options"][subtitle_choice_index][
-                "signature"
-            ]
+            default_subtitle_signature = built["subtitle_options"][
+                subtitle_choice_index
+            ]["signature"]
 
         # A stereo source refuses a burn-in outright, the identical
         # check the single-file form already makes, folder-wide here.
@@ -1865,7 +1964,9 @@ async def folder_confirm_submit_route(request: Request, path: str):
                     if audio_kind == "external" and audio_external
                     else None
                 )
-                r["audio_stream_index"] = audio_index if audio_kind == "embedded" else None
+                r["audio_stream_index"] = (
+                    audio_index if audio_kind == "embedded" else None
+                )
                 r["external_audio_rel_path"] = external_audio_rel_path
                 edition_specs.append(
                     {
@@ -1890,7 +1991,9 @@ async def folder_confirm_submit_route(request: Request, path: str):
             else:
                 title_id = built["title_match"]["title_id"]
                 if edition_specs:
-                    await queries.attach_episodes_to_title(conn, title_id, edition_specs)
+                    await queries.attach_episodes_to_title(
+                        conn, title_id, edition_specs
+                    )
 
             for r in move_rows:
                 already_added = r["already_added"]

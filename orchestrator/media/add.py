@@ -6,6 +6,7 @@ never grow two slightly different ideas of what a submitted subtitle
 choice means). Extracted so every caller shares one implementation instead
 of two that drift.
 """
+
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -79,11 +80,15 @@ async def plan_slug(
         # assignments turns it into a bug no test written against a
         # substring match would ever report (see cli/__main__.py's own
         # comment on this exact failure mode).
-        return SlugPlan(candidate=candidate, chosen=candidate, similar=[], is_tombstone=True)
+        return SlugPlan(
+            candidate=candidate, chosen=candidate, similar=[], is_tombstone=True
+        )
 
     taken = await queries.taken_slugs(conn)
     chosen, similar = pick_unique_slug(candidate, taken)
-    return SlugPlan(candidate=candidate, chosen=chosen, similar=similar, is_tombstone=False)
+    return SlugPlan(
+        candidate=candidate, chosen=chosen, similar=similar, is_tombstone=False
+    )
 
 
 def required_free_bytes(source_size: int, *, already_correct: bool) -> int:
@@ -149,14 +154,14 @@ def parse_subtitle_choice(
         return "none", None, None
 
     if value.startswith(_SUBTITLE_KIND_EMBEDDED_PREFIX):
-        raw_index = value[len(_SUBTITLE_KIND_EMBEDDED_PREFIX):]
+        raw_index = value[len(_SUBTITLE_KIND_EMBEDDED_PREFIX) :]
         try:
             return "embedded", int(raw_index), None
         except ValueError:
             raise SubtitleChoiceRefused() from None
 
     if value.startswith(_SUBTITLE_KIND_EXTERNAL_PREFIX):
-        rel = value[len(_SUBTITLE_KIND_EXTERNAL_PREFIX):]
+        rel = value[len(_SUBTITLE_KIND_EXTERNAL_PREFIX) :]
         if not rel:
             raise SubtitleChoiceRefused()
         return "external", None, rel
@@ -219,14 +224,14 @@ def parse_audio_choice(value: str) -> tuple[str, int | None, str | None]:
     emits is share-relative.
     """
     if value.startswith(_AUDIO_KIND_EMBEDDED_PREFIX):
-        raw_index = value[len(_AUDIO_KIND_EMBEDDED_PREFIX):]
+        raw_index = value[len(_AUDIO_KIND_EMBEDDED_PREFIX) :]
         try:
             return "embedded", int(raw_index), None
         except ValueError:
             raise AudioChoiceRefused() from None
 
     if value.startswith(_AUDIO_KIND_EXTERNAL_PREFIX):
-        rel = value[len(_AUDIO_KIND_EXTERNAL_PREFIX):]
+        rel = value[len(_AUDIO_KIND_EXTERNAL_PREFIX) :]
         if not rel:
             raise AudioChoiceRefused()
         posix = PurePosixPath(rel)
@@ -402,7 +407,8 @@ def validate_folder_submission(
     unresolved = frozenset(
         row["index"]
         for row in ticked
-        if row["highlighted"] and not (row["audio_resolved"] and row["subtitle_resolved"])
+        if row["highlighted"]
+        and not (row["audio_resolved"] and row["subtitle_resolved"])
     )
     if unresolved:
         return FolderValidation(False, "folder.validation.blocked", unresolved)
@@ -417,7 +423,9 @@ def validate_folder_submission(
     return FolderValidation(True)
 
 
-async def plan_edition_slug(conn: asyncpg.Connection, episode_id, explicit_slug: str) -> str:
+async def plan_edition_slug(
+    conn: asyncpg.Connection, episode_id, explicit_slug: str
+) -> str:
     """Validate a submitted edition-slug the way `plan_slug` validates a
     title slug -- through the shape rule (`normalize_edition_slug`, the
     not-all-digits refusal, which also refuses a blank string exactly as
@@ -485,7 +493,8 @@ def validate_edition_folder_submission(
     unresolved = frozenset(
         row["index"]
         for row in ticked
-        if row["highlighted"] and not (row["audio_resolved"] and row["subtitle_resolved"])
+        if row["highlighted"]
+        and not (row["audio_resolved"] and row["subtitle_resolved"])
     )
     if unresolved:
         return FolderValidation(False, "folder.validation.blocked", unresolved)
@@ -495,7 +504,9 @@ def validate_edition_folder_submission(
         return FolderValidation(False, "folder.validation.blocked", taken)
 
     if action == "add":
-        incompatible = frozenset(row["index"] for row in ticked if not row["compatible"])
+        incompatible = frozenset(
+            row["index"] for row in ticked if not row["compatible"]
+        )
         if incompatible:
             return FolderValidation(False, "folder.incompatible.hint", incompatible)
 

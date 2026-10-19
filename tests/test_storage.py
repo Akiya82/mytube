@@ -49,7 +49,10 @@ def test_upload_accepts_a_custom_content_type_for_the_poster(monkeypatch):
 def test_abort_dangling_multipart_aborts_each_upload_found(monkeypatch):
     client = MagicMock()
     client.list_multipart_uploads.return_value = {
-        "Uploads": [{"Key": "abc.mp4", "UploadId": "u1"}, {"Key": "abc.mp4", "UploadId": "u2"}]
+        "Uploads": [
+            {"Key": "abc.mp4", "UploadId": "u1"},
+            {"Key": "abc.mp4", "UploadId": "u2"},
+        ]
     }
     monkeypatch.setattr(storage, "get_s3_client", lambda: client)
     monkeypatch.setattr(storage, "get_settings", lambda: MagicMock(s3_bucket="mytube"))
@@ -57,11 +60,17 @@ def test_abort_dangling_multipart_aborts_each_upload_found(monkeypatch):
     storage.abort_dangling_multipart("abc.mp4")
 
     assert client.abort_multipart_upload.call_count == 2
-    client.abort_multipart_upload.assert_any_call(Bucket="mytube", Key="abc.mp4", UploadId="u1")
-    client.abort_multipart_upload.assert_any_call(Bucket="mytube", Key="abc.mp4", UploadId="u2")
+    client.abort_multipart_upload.assert_any_call(
+        Bucket="mytube", Key="abc.mp4", UploadId="u1"
+    )
+    client.abort_multipart_upload.assert_any_call(
+        Bucket="mytube", Key="abc.mp4", UploadId="u2"
+    )
 
 
-def test_abort_dangling_multipart_no_uploads_makes_no_call_and_does_not_raise(monkeypatch):
+def test_abort_dangling_multipart_no_uploads_makes_no_call_and_does_not_raise(
+    monkeypatch,
+):
     client = MagicMock()
     client.list_multipart_uploads.return_value = {"Uploads": []}
     monkeypatch.setattr(storage, "get_s3_client", lambda: client)
@@ -153,7 +162,9 @@ def _stub_listing_client(monkeypatch, *pages):
     client.get_paginator.return_value.paginate.side_effect = list(pages)
     monkeypatch.setattr(storage, "get_s3_client", lambda: client)
     monkeypatch.setattr(
-        storage, "get_settings", lambda: MagicMock(s3_bucket="mytube", storage_quota_bytes=0)
+        storage,
+        "get_settings",
+        lambda: MagicMock(s3_bucket="mytube", storage_quota_bytes=0),
     )
     return client
 
@@ -228,7 +239,9 @@ def test_invalidate_usage_cache_clears_both_fields_directly():
     assert storage._usage_cache["expires_at"] == 0.0
 
 
-def test_two_consecutive_usage_reads_with_no_write_share_one_cached_listing(monkeypatch):
+def test_two_consecutive_usage_reads_with_no_write_share_one_cached_listing(
+    monkeypatch,
+):
     client = _stub_listing_client(monkeypatch, [{"Contents": []}])
 
     storage.storage_usage()

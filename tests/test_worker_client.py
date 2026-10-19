@@ -7,6 +7,7 @@ subject below is imported inside its own test body (mirrors
 each test fails as its own `ModuleNotFoundError` rather than one
 collection error hiding the whole file.
 """
+
 import asyncio
 import json
 import uuid
@@ -92,7 +93,9 @@ METHOD_CALLS = _method_calls()
 
 
 @pytest.mark.parametrize("method_name", sorted(METHOD_CALLS))
-async def test_every_call_carries_the_bearer_token_and_the_protocol_version(method_name):
+async def test_every_call_carries_the_bearer_token_and_the_protocol_version(
+    method_name,
+):
     from worker.client import WORKER_PROTOCOL_VERSION
 
     captured = {}
@@ -144,7 +147,9 @@ async def test_an_empty_queue_is_returned_as_nothing_rather_than_an_error():
     assert result is None
 
 
-async def test_an_unreachable_orchestrator_is_retried_within_a_bounded_window(monkeypatch):
+async def test_an_unreachable_orchestrator_is_retried_within_a_bounded_window(
+    monkeypatch,
+):
     from worker import client as client_module
 
     sleeps = []
@@ -188,7 +193,8 @@ async def test_the_retry_gives_up_at_the_window_and_raises(monkeypatch):
         await client.claim()
 
     assert sum(sleeps) <= (
-        client_module.REPORT_RETRY_WINDOW_SECONDS + client_module.RETRY_BACKOFF_CAP_SECONDS
+        client_module.REPORT_RETRY_WINDOW_SECONDS
+        + client_module.RETRY_BACKOFF_CAP_SECONDS
     )
 
 
@@ -260,7 +266,11 @@ async def test_a_protocol_mismatch_answer_is_raised_naming_both_versions():
         calls["n"] += 1
         return httpx.Response(
             400,
-            json={"error": "protocol_mismatch", "expected_protocol": 99, "got_protocol": 2},
+            json={
+                "error": "protocol_mismatch",
+                "expected_protocol": 99,
+                "got_protocol": 2,
+            },
         )
 
     client = _client(handler)
@@ -339,7 +349,8 @@ async def test_a_server_error_retry_gives_up_at_the_same_boundary_a_transport_fa
         await client.claim()
 
     assert sum(sleeps) <= (
-        client_module.REPORT_RETRY_WINDOW_SECONDS + client_module.RETRY_BACKOFF_CAP_SECONDS
+        client_module.REPORT_RETRY_WINDOW_SECONDS
+        + client_module.RETRY_BACKOFF_CAP_SECONDS
     )
 
 
@@ -369,7 +380,9 @@ def test_the_client_and_the_service_declare_the_same_protocol_version():
     to one that forgets the other must fail here, not four minutes into
     a real encode.
     """
-    from orchestrator.web.routes_worker import WORKER_PROTOCOL_VERSION as service_version
+    from orchestrator.web.routes_worker import (
+        WORKER_PROTOCOL_VERSION as service_version,
+    )
     from worker.client import WORKER_PROTOCOL_VERSION as client_version
 
     assert client_version == service_version

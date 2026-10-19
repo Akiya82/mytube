@@ -5,6 +5,7 @@ ffmpeg -- the mapping is worth its own quick-loop test because a wrong
 reason costs more than a vague one: it sends the operator to look at the
 wrong subsystem.
 """
+
 from mytube_media.compat import ProbeError
 from mytube_media.remux import RemuxError
 from mytube_media.runner import FfmpegFailed

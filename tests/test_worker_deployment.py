@@ -33,6 +33,7 @@ Postgres container). This one gates a client-side render that needs no
 daemon at all, only the CLI and its compose plugin -- a client without an
 engine, or without the plugin, must skip here too, never fail.
 """
+
 import re
 import shutil
 import subprocess

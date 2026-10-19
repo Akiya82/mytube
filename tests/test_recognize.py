@@ -5,11 +5,16 @@ provenance key -- or an honest blank, never a guess.
 Every subject is imported inside the test body so this module collects
 cleanly while `orchestrator.recognize` does not exist yet.
 """
+
 from unittest.mock import patch
 
 import pytest
 
-from tests.fixtures.recognition_names import KNOWN_LIMITS, REAL_SHARE_NAMES, SHAPE_FIXTURES
+from tests.fixtures.recognition_names import (
+    KNOWN_LIMITS,
+    REAL_SHARE_NAMES,
+    SHAPE_FIXTURES,
+)
 
 _ALL_FIXTURES = REAL_SHARE_NAMES + SHAPE_FIXTURES
 _KNOWN_LIMIT_NAMES = {name for name, _reason in KNOWN_LIMITS}
@@ -167,7 +172,11 @@ def test_fallback_refuses_a_season_at_or_above_the_guard():
     from orchestrator.recognize import guessit_fallback
 
     with patch("orchestrator.recognize.guessit.guessit") as mock_guessit:
-        mock_guessit.return_value = {"title": "Blade Runner", "season": 20, "episode": 49}
+        mock_guessit.return_value = {
+            "title": "Blade Runner",
+            "season": 20,
+            "episode": 49,
+        }
         assert guessit_fallback("Blade Runner 2049.mkv") == (None, None, None)
 
 

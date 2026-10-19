@@ -8,6 +8,7 @@ pattern and now walks the catalogs and the templates as well as the
 Python, so a second narrower copy of the same check here could only drift
 out of agreement with it.
 """
+
 import json
 import re
 from pathlib import Path
@@ -20,9 +21,7 @@ _TEMPLATE_KEY_PATTERN = re.compile(r"""t\(\s*["']([^"']+)["']""")
 # identifier mentioned in a docstring or a comment is not collected.
 # Deliberately not a list of key families -- see
 # test_every_runtime_selected_key_in_the_source_exists_in_both_catalogs.
-_SOURCE_KEY_PATTERN = re.compile(
-    r"""["']([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)["']"""
-)
+_SOURCE_KEY_PATTERN = re.compile(r"""["']([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)["']""")
 # A substitution as `format`/`str.format` sees it: `{name}`. Anything else
 # inside braces is not a parameter the renderer supplies.
 _PLACEHOLDER_PATTERN = re.compile(r"{([A-Za-z_][A-Za-z0-9_]*)}")
@@ -64,7 +63,9 @@ def test_every_template_translation_key_exists_in_both_catalogs():
     ru = _load("ru")
     used_keys: set[str] = set()
     for path in TEMPLATES_DIR.rglob("*.html"):
-        used_keys.update(_TEMPLATE_KEY_PATTERN.findall(path.read_text(encoding="utf-8")))
+        used_keys.update(
+            _TEMPLATE_KEY_PATTERN.findall(path.read_text(encoding="utf-8"))
+        )
 
     assert used_keys, "expected at least one t(...) call across the templates"
     for key in used_keys:

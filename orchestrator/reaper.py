@@ -30,6 +30,7 @@ body, each isolated from the other three: a failure in the session sweep
 must never stop the title reaper's cycle, nor the playlist reaper's, nor
 the stale-job sweep's, and in any other pairing of the four.
 """
+
 import asyncio
 import logging
 
@@ -248,9 +249,7 @@ async def sweep_stale_jobs(pool: asyncpg.Pool) -> None:
     lock beyond each individual statement.
     """
     async with pool.acquire() as conn:
-        due = await queries.due_for_requeue(
-            conn, stale_after_seconds=JOB_STALE_SECONDS
-        )
+        due = await queries.due_for_requeue(conn, stale_after_seconds=JOB_STALE_SECONDS)
         for row in due:
             job_id = row["id"]
             try:
@@ -280,7 +279,9 @@ async def sweep_stale_jobs(pool: asyncpg.Pool) -> None:
                         for object_key in keys:
                             await asyncio.to_thread(delete_object, object_key)
                         try:
-                            await queries.delete_never_active_title(conn, row["title_id"])
+                            await queries.delete_never_active_title(
+                                conn, row["title_id"]
+                            )
                         except (LookupError, ValueError):
                             pass
                 elif row["attempts"] >= queries.JOB_MAX_ATTEMPTS:

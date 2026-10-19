@@ -5,6 +5,7 @@ Every function takes an already-open `asyncpg.Connection` (or a connection
 acquired from a pool) as its first argument -- pool lifecycle is
 `orchestrator.db.create_pool`'s job, not this module's.
 """
+
 import json
 import re
 
@@ -90,7 +91,9 @@ async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | 
     )
 
 
-async def resolve_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
+async def resolve_edition(
+    conn: asyncpg.Connection, edition_id
+) -> asyncpg.Record | None:
     """Look up an edition by id, with its title's status -- used by
     GET /refresh/{edition_id}: nginx only knows edition_id, not the
     slug it was reached through, so re-signing has to key off the edition.
@@ -307,7 +310,9 @@ async def rename_slug(conn: asyncpg.Connection, old_slug: str, new_slug: str):
     return title_id
 
 
-async def mark_for_delete(conn: asyncpg.Connection, title_id, grace_seconds: int) -> None:
+async def mark_for_delete(
+    conn: asyncpg.Connection, title_id, grace_seconds: int
+) -> None:
     """Flip a title to pending_delete with delete_at = now() + grace_seconds.
     GET /v/{slug} for this title starts returning 410 immediately
     -- the grace window only delays the reaper's physical delete_object.
@@ -373,7 +378,9 @@ async def mark_title_active(conn: asyncpg.Connection, title_id) -> None:
     )
 
 
-async def mark_title_failed(conn: asyncpg.Connection, title_id, reason_key: str) -> None:
+async def mark_title_failed(
+    conn: asyncpg.Connection, title_id, reason_key: str
+) -> None:
     """Flip a title to 'failed' with `reason_key`, a translation catalog
     key (e.g. 'failed.reason.upload') -- never an English sentence. See the
     failure_reason column's comment in
@@ -484,7 +491,9 @@ async def set_edition_technical(
     )
 
 
-async def set_edition_poster(conn: asyncpg.Connection, edition_id, poster_key: str) -> None:
+async def set_edition_poster(
+    conn: asyncpg.Connection, edition_id, poster_key: str
+) -> None:
     """Point the edition at its extracted poster frame. Never called
     for a failed extraction -- the library row degrades to a placeholder
     when poster_key stays null, rather than a broken <img>.
@@ -862,7 +871,9 @@ async def episodes_for_library(
     )
 
 
-async def editions_for_library(conn: asyncpg.Connection, episode_ids: list) -> list[asyncpg.Record]:
+async def editions_for_library(
+    conn: asyncpg.Connection, episode_ids: list
+) -> list[asyncpg.Record]:
     """Every edition of every episode in `episode_ids`, oldest first, each
     carrying its own technical detail (including the burned-in subtitle
     columns and the signs-only attribute) and whether it is that episode's
@@ -1044,7 +1055,9 @@ def _refuse_unless_never_active(title) -> None:
         )
 
 
-async def never_active_title_object_keys(conn: asyncpg.Connection, title_id) -> list[str]:
+async def never_active_title_object_keys(
+    conn: asyncpg.Connection, title_id
+) -> list[str]:
     """The object keys a cancelled title's hard delete is about to orphan
     -- read-only, deletes nothing. Same shape and same reason as
     `failed_title_object_keys`: read before anything is
@@ -1391,7 +1404,11 @@ async def renumber_episode(
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock($1)", SLUG_CLAIM_LOCK_KEY)
         current = await episode_for_number(conn, title_id, number)
-        if current is not None and current["is_current"] and current["episode_id"] != episode_id:
+        if (
+            current is not None
+            and current["is_current"]
+            and current["episode_id"] != episode_id
+        ):
             raise EpisodeNumberTaken(number)
         await claim_episode_number(conn, title_id, episode_id, number)
 
@@ -1601,7 +1618,9 @@ async def mark_edition_active(conn: asyncpg.Connection, edition_id) -> None:
             await touch_title_changed(conn, title_id)
 
 
-async def mark_edition_failed(conn: asyncpg.Connection, edition_id, reason_key: str) -> None:
+async def mark_edition_failed(
+    conn: asyncpg.Connection, edition_id, reason_key: str
+) -> None:
     """Flip an edition to 'failed' with `reason_key`, a translation-catalog
     key -- the edition-scoped twin of mark_title_failed. Validated the same
     way the worker-facing job writers already validate a reason key
@@ -1688,7 +1707,9 @@ async def requeue_edition(conn: asyncpg.Connection, edition_id) -> None:
             await touch_title_changed(conn, title_id)
 
 
-async def episode_for_action(conn: asyncpg.Connection, episode_id) -> asyncpg.Record | None:
+async def episode_for_action(
+    conn: asyncpg.Connection, episode_id
+) -> asyncpg.Record | None:
     """One episode's own status, its title id, and its default edition's
     status/failure reason -- what every per-episode action route
     (routes_episodes.py) reads fresh on every request, never trusted from
@@ -1841,7 +1862,9 @@ class EpisodeNumberTaken(Exception):
     """
 
 
-async def title_by_current_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | None:
+async def title_by_current_slug(
+    conn: asyncpg.Connection, slug: str
+) -> asyncpg.Record | None:
     """The title `slug` currently resolves to, restricted to a title an
     operator could actually add another episode to right now:
     'active' or 'preparing'. A title mid-delete or already gone is never
@@ -1888,7 +1911,9 @@ async def episode_by_number(
     )
 
 
-async def episode_with_title(conn: asyncpg.Connection, episode_id) -> asyncpg.Record | None:
+async def episode_with_title(
+    conn: asyncpg.Connection, episode_id
+) -> asyncpg.Record | None:
     """One episode's own title id/name and current number, in one row --
     what the add form's "opened from the library's Add edition action"
     entry point needs to write `add.editing_edition_of`'s
@@ -1960,7 +1985,9 @@ async def audio_languages_on_episode(conn: asyncpg.Connection, episode_id) -> se
     return {row["audio_language"] for row in rows}
 
 
-async def audio_languages_on_episodes(conn: asyncpg.Connection, episode_ids: list) -> set[str]:
+async def audio_languages_on_episodes(
+    conn: asyncpg.Connection, episode_ids: list
+) -> set[str]:
     """The season-wide twin of `audio_languages_on_episode`: every
     non-null audio language already used by *any* edition of *any* episode
     in `episode_ids` -- the folder-wide edition batch's own tie-break, since
@@ -2252,10 +2279,14 @@ async def sync_title_status(
         if agg["any_ready"]:
             await mark_title_active(conn, title_id)
         elif agg["all_failed"]:
-            await mark_title_failed(conn, title_id, reason_key or "failed.reason.unknown")
+            await mark_title_failed(
+                conn, title_id, reason_key or "failed.reason.unknown"
+            )
 
 
-async def lowest_episode_of_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
+async def lowest_episode_of_title(
+    conn: asyncpg.Connection, title_id
+) -> asyncpg.Record | None:
     """The title's own lowest episode -- the exact lateral
     `resolve_title_edition_slug` already runs, exposed as its own reader
     for a caller that needs to act on that episode rather than resolve
@@ -2331,7 +2362,9 @@ async def delete_edition(conn: asyncpg.Connection, edition_id) -> None:
     await conn.execute("DELETE FROM editions WHERE id = $1", edition_id)
 
 
-async def edition_for_action(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
+async def edition_for_action(
+    conn: asyncpg.Connection, edition_id
+) -> asyncpg.Record | None:
     """One edition's own status, its object/poster keys, its episode and
     title ids, whether it is its episode's current default, and how many
     editions the episode holds in total -- what every edition-scoped action
@@ -2684,10 +2717,13 @@ async def reparent_edition_to_episode(
         # reference moves -- see the docstring above for why this order is
         # fixed rather than incidental.
         await conn.execute(
-            "UPDATE episodes SET default_edition_id = NULL WHERE id = $1", old_episode_id
+            "UPDATE episodes SET default_edition_id = NULL WHERE id = $1",
+            old_episode_id,
         )
         await conn.execute(
-            "UPDATE editions SET episode_id = $1 WHERE id = $2", new_episode_id, edition_id
+            "UPDATE editions SET episode_id = $1 WHERE id = $2",
+            new_episode_id,
+            edition_id,
         )
         await conn.execute(
             "UPDATE episodes SET default_edition_id = $1 WHERE id = $2",
@@ -2713,13 +2749,17 @@ async def reparent_edition_to_episode(
         await conn.execute("DELETE FROM editions WHERE episode_id = $1", old_episode_id)
         await conn.execute("DELETE FROM episodes WHERE id = $1", old_episode_id)
         await conn.execute("DELETE FROM seasons WHERE title_id = $1", old_title_id)
-        await conn.execute("UPDATE titles SET status = 'deleted' WHERE id = $1", old_title_id)
+        await conn.execute(
+            "UPDATE titles SET status = 'deleted' WHERE id = $1", old_title_id
+        )
 
         await touch_title_changed(conn, target_title_id)
     return new_episode_id
 
 
-async def create_title_shell(conn: asyncpg.Connection, name: str, slug: str) -> "uuid.UUID":
+async def create_title_shell(
+    conn: asyncpg.Connection, name: str, slug: str
+) -> "uuid.UUID":
     """A bare title -- one season, no episodes yet, its slug reserved --
     for the move form's new-title branch: the title
     itself has nothing of its own to convert or wait on, its only episode
@@ -2794,7 +2834,9 @@ async def create_playlist(conn: asyncpg.Connection, name: str, slug: str):
     )
 
 
-async def resolve_playlist_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | None:
+async def resolve_playlist_slug(
+    conn: asyncpg.Connection, slug: str
+) -> asyncpg.Record | None:
     """Resolve a playlist slug to the row the public `/p/{slug}` address
     reads -- a direct lookup on `playlists.slug`, not a newest-wins join
     over a history table, because playlists keep no history.
@@ -2850,7 +2892,9 @@ def _playlist_row_from_record(row: asyncpg.Record) -> dict:
     params_raw = data.pop("build_failure_params_raw")
     reason_key = data["refused_reason_key"]
     data["refused"] = reason_key is not None
-    data["refused_reason_params"] = json.loads(params_raw) if reason_key is not None else None
+    data["refused_reason_params"] = (
+        json.loads(params_raw) if reason_key is not None else None
+    )
     return data
 
 
@@ -2972,7 +3016,9 @@ async def playlist_detail(conn: asyncpg.Connection, playlist_id) -> dict | None:
     return dict(row) if row is not None else None
 
 
-async def update_playlist(conn: asyncpg.Connection, playlist_id, name: str, slug: str) -> None:
+async def update_playlist(
+    conn: asyncpg.Connection, playlist_id, name: str, slug: str
+) -> None:
     """Save a changed name and/or address -- the slug has already gone
     through the same `normalize_slug`/`pick_unique_slug` path the create
     route uses, with this playlist's own current slug excluded from the
@@ -3136,7 +3182,9 @@ async def move_playlist_item(
         )
 
 
-async def mark_playlist_for_delete(conn: asyncpg.Connection, playlist_id, grace_seconds: int) -> None:
+async def mark_playlist_for_delete(
+    conn: asyncpg.Connection, playlist_id, grace_seconds: int
+) -> None:
     """Flip a playlist to `pending_delete` with `delete_at = now() +
     grace_seconds` -- the same shape `mark_for_delete` already gives a
     title. `GET /p/{slug}` answers 404 for this status immediately (no
@@ -3156,7 +3204,9 @@ async def mark_playlist_for_delete(conn: asyncpg.Connection, playlist_id, grace_
 
 async def finish_delete_playlist(conn: asyncpg.Connection, playlist_id) -> None:
     """Mark a playlist deleted once its artifacts have been reclaimed."""
-    await conn.execute("UPDATE playlists SET status = 'deleted' WHERE id = $1", playlist_id)
+    await conn.execute(
+        "UPDATE playlists SET status = 'deleted' WHERE id = $1", playlist_id
+    )
 
 
 async def cancel_delete_playlist(conn: asyncpg.Connection, playlist_id) -> None:
@@ -3362,7 +3412,9 @@ async def set_playlist_build_failed(
     )
 
 
-async def playlist_artifact_sections(conn: asyncpg.Connection, playlist_id) -> list[dict]:
+async def playlist_artifact_sections(
+    conn: asyncpg.Connection, playlist_id
+) -> list[dict]:
     """The current generation's artifacts in play order -- what the public
     address renders its document from, and the same rows its validation
     reads its known keys from. **One query**, because that address runs on
@@ -3900,9 +3952,7 @@ async def finish_job(
     return row is not None
 
 
-async def request_job_cancel(
-    conn: asyncpg.Connection, job_id
-) -> asyncpg.Record | None:
+async def request_job_cancel(conn: asyncpg.Connection, job_id) -> asyncpg.Record | None:
     """Ask for a job to stop.
 
     A running job has no way to be told anything except through its next
@@ -4081,7 +4131,9 @@ async def job_for_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | 
     )
 
 
-async def job_for_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
+async def job_for_edition(
+    conn: asyncpg.Connection, edition_id
+) -> asyncpg.Record | None:
     """The live (queued or running) job for one edition, if any -- the
     per-episode Cancel action's own read, scoped one level below
     `job_for_title`: an episode's default edition is what its row's own
@@ -4098,7 +4150,9 @@ async def job_for_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Recor
     )
 
 
-async def live_jobs_for_title(conn: asyncpg.Connection, title_id) -> list[asyncpg.Record]:
+async def live_jobs_for_title(
+    conn: asyncpg.Connection, title_id
+) -> list[asyncpg.Record]:
     """Every live (queued or running) job of a title, each with the episode
     its edition belongs to, in the order `job_for_title` picks its one row
     from. Cancel on a title row acts on all of them: a season is one job
@@ -4116,7 +4170,9 @@ async def live_jobs_for_title(conn: asyncpg.Connection, title_id) -> list[asyncp
     )
 
 
-async def job_for_episode(conn: asyncpg.Connection, episode_id) -> asyncpg.Record | None:
+async def job_for_episode(
+    conn: asyncpg.Connection, episode_id
+) -> asyncpg.Record | None:
     """The live (queued or running) job of any edition of one episode --
     the same lookup the library's episode row renders its chip and Cancel
     control from (`episodes_for_library`), so Cancel acts on exactly the
@@ -4135,7 +4191,9 @@ async def job_for_episode(conn: asyncpg.Connection, episode_id) -> asyncpg.Recor
     )
 
 
-async def last_job_for_edition(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
+async def last_job_for_edition(
+    conn: asyncpg.Connection, edition_id
+) -> asyncpg.Record | None:
     """The most recent job of any status for one edition -- what a
     per-episode Retry reads to requeue the same choices, the
     edition-scoped twin of `last_job_for_title`.
@@ -4168,7 +4226,9 @@ async def job_for_playlist(
     )
 
 
-async def last_job_for_title(conn: asyncpg.Connection, title_id) -> asyncpg.Record | None:
+async def last_job_for_title(
+    conn: asyncpg.Connection, title_id
+) -> asyncpg.Record | None:
     """The most recent job of any status for a title -- what Retry reads
     to requeue the same choices, unlike `job_for_title`, which
     only ever answers a *live* job and would find nothing for the failed
@@ -4185,7 +4245,9 @@ async def last_job_for_title(conn: asyncpg.Connection, title_id) -> asyncpg.Reco
     )
 
 
-async def last_job_for_playlist(conn: asyncpg.Connection, playlist_id) -> asyncpg.Record | None:
+async def last_job_for_playlist(
+    conn: asyncpg.Connection, playlist_id
+) -> asyncpg.Record | None:
     """The playlist equivalent of `last_job_for_title` -- Build again's own
     read.
     """
@@ -4227,7 +4289,9 @@ async def edition_object_key(conn: asyncpg.Connection, edition_id) -> str | None
     )
 
 
-async def edition_for_remux(conn: asyncpg.Connection, edition_id) -> asyncpg.Record | None:
+async def edition_for_remux(
+    conn: asyncpg.Connection, edition_id
+) -> asyncpg.Record | None:
     """The destination object key and the operator's chosen channel count
     for a claimed `remux` job -- the two edition-side facts `claim_job`'s
     own row cannot carry, since `jobs` has no `object_key` column (see

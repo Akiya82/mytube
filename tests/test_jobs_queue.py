@@ -26,6 +26,7 @@ connection's own view of one row rather than a race -- unmarked, per this
 module's own contract, so `-m "not integration"` still exercises the bulk
 of this file's failing assertions.
 """
+
 import asyncio
 import re
 import uuid
@@ -330,7 +331,9 @@ async def test_claiming_records_the_worker_name_and_raises_the_attempt(worker_co
 
 
 @pytest.mark.integration
-async def test_claiming_an_empty_queue_returns_nothing_rather_than_raising(worker_conns):
+async def test_claiming_an_empty_queue_returns_nothing_rather_than_raising(
+    worker_conns,
+):
     conn_a, _ = worker_conns
     claimed = await asyncio.wait_for(
         queries.claim_job(conn_a, kind="transcode", worker_name="ml-server"),
@@ -350,7 +353,9 @@ async def test_a_heartbeat_advances_the_timestamp_the_progress_and_the_stage(
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
 
     updated = await queries.heartbeat_job(
         db_conn,
@@ -375,7 +380,9 @@ async def test_a_heartbeat_from_a_superseded_attempt_is_refused(db_conn):
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
 
     before = await db_conn.fetchrow(
         "SELECT progress_pct, heartbeat_at FROM jobs WHERE id = $1", job_id
@@ -403,22 +410,34 @@ async def test_a_heartbeat_reports_the_cancel_flag_back_to_the_caller(db_conn):
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
 
     before = await queries.heartbeat_job(
-        db_conn, job_id, worker_name="ml-server", attempt=claimed["attempts"], stage="working"
+        db_conn,
+        job_id,
+        worker_name="ml-server",
+        attempt=claimed["attempts"],
+        stage="working",
     )
     assert before["cancel_requested"] is False
 
     await queries.request_job_cancel(db_conn, job_id)
 
     after = await queries.heartbeat_job(
-        db_conn, job_id, worker_name="ml-server", attempt=claimed["attempts"], stage="working"
+        db_conn,
+        job_id,
+        worker_name="ml-server",
+        attempt=claimed["attempts"],
+        stage="working",
     )
     assert after["cancel_requested"] is True
 
 
-async def test_requesting_cancellation_on_a_queued_job_can_finish_it_immediately(db_conn):
+async def test_requesting_cancellation_on_a_queued_job_can_finish_it_immediately(
+    db_conn,
+):
     """A queued job has no worker to tell -- cancelling it finishes it on
     the spot, distinct from the running case which only sets the flag.
     """
@@ -430,7 +449,9 @@ async def test_requesting_cancellation_on_a_queued_job_can_finish_it_immediately
     result = await queries.request_job_cancel(db_conn, job_id)
 
     assert result["status"] == "cancelled"
-    row = await db_conn.fetchrow("SELECT status, worker_name FROM jobs WHERE id = $1", job_id)
+    row = await db_conn.fetchrow(
+        "SELECT status, worker_name FROM jobs WHERE id = $1", job_id
+    )
     assert row["status"] == "cancelled"
     assert row["worker_name"] is None
 
@@ -446,7 +467,9 @@ async def test_finishing_a_job_records_the_outcome_and_the_realtime_factor(
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
 
     reason_key = "failed.reason.upload" if outcome == "failed" else None
     ok = await queries.finish_job(
@@ -480,7 +503,9 @@ async def test_a_report_from_a_superseded_attempt_is_refused(db_conn):
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
 
     before = await db_conn.fetchrow("SELECT status FROM jobs WHERE id = $1", job_id)
 
@@ -510,10 +535,16 @@ async def test_a_late_report_against_an_already_finished_job_changes_nothing(db_
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
 
     first = await queries.finish_job(
-        db_conn, job_id, worker_name="ml-server", attempt=claimed["attempts"], outcome="done"
+        db_conn,
+        job_id,
+        worker_name="ml-server",
+        attempt=claimed["attempts"],
+        outcome="done",
     )
     assert first is True
 
@@ -545,9 +576,15 @@ async def test_a_progress_write_against_a_job_that_is_no_longer_running_returns_
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
     await queries.finish_job(
-        db_conn, job_id, worker_name="ml-server", attempt=claimed["attempts"], outcome="done"
+        db_conn,
+        job_id,
+        worker_name="ml-server",
+        attempt=claimed["attempts"],
+        outcome="done",
     )
 
     result = await queries.heartbeat_job(
@@ -575,7 +612,9 @@ async def test_a_raise_after_the_terminal_write_inside_one_transaction_leaves_th
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
 
     with pytest.raises(RuntimeError):
         async with db_conn.transaction():
@@ -601,7 +640,9 @@ async def test_a_failure_reason_is_stored_as_a_catalog_key(db_conn):
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
 
     await queries.finish_job(
         db_conn,
@@ -612,7 +653,9 @@ async def test_a_failure_reason_is_stored_as_a_catalog_key(db_conn):
         reason_key="failed.reason.crashed_converter",
     )
 
-    row = await db_conn.fetchrow("SELECT failure_reason FROM jobs WHERE id = $1", job_id)
+    row = await db_conn.fetchrow(
+        "SELECT failure_reason FROM jobs WHERE id = $1", job_id
+    )
     reason = row["failure_reason"]
     assert re.match(r"^[a-z]+(\.[a-z_]+)+$", reason)
     assert " " not in reason
@@ -660,7 +703,9 @@ async def test_a_requeued_job_returns_to_the_queue_with_its_worker_cleared(db_co
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
     await queries.heartbeat_job(
         db_conn,
         job_id,
@@ -680,14 +725,18 @@ async def test_a_requeued_job_returns_to_the_queue_with_its_worker_cleared(db_co
     assert row["attempts"] == claimed["attempts"]
 
 
-async def test_the_fourth_attempt_is_a_named_failure_rather_than_a_fifth_requeue(db_conn):
+async def test_the_fourth_attempt_is_a_named_failure_rather_than_a_fifth_requeue(
+    db_conn,
+):
     title = await _title_and_edition(db_conn, "attempts-cap")
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
 
     for attempt in range(1, queries.JOB_MAX_ATTEMPTS + 1):
-        claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+        claimed = await queries.claim_job(
+            db_conn, kind="transcode", worker_name="ml-server"
+        )
         assert claimed["attempts"] == attempt
         await db_conn.execute(
             "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1",
@@ -722,7 +771,9 @@ async def test_a_stale_job_that_was_already_cancelled_finishes_as_cancelled_not_
     job_id = await queries.enqueue_job(
         db_conn, kind="transcode", title_id=title[0], edition_id=title[1]
     )
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
     await queries.request_job_cancel(db_conn, job_id)
     await db_conn.execute(
         "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1", job_id
@@ -731,7 +782,9 @@ async def test_a_stale_job_that_was_already_cancelled_finishes_as_cancelled_not_
     due = await queries.due_for_requeue(db_conn, stale_after_seconds=60)
     assert any(row["id"] == job_id for row in due)
 
-    row = await db_conn.fetchrow("SELECT cancel_requested FROM jobs WHERE id = $1", job_id)
+    row = await db_conn.fetchrow(
+        "SELECT cancel_requested FROM jobs WHERE id = $1", job_id
+    )
     assert row["cancel_requested"] is True
 
     # The reaper's own sweep (a later plan's concern, orchestrator.reaper)
@@ -739,7 +792,11 @@ async def test_a_stale_job_that_was_already_cancelled_finishes_as_cancelled_not_
     # outcome="cancelled" instead of requeue_job -- asserted directly
     # against the query primitive the sweep will call.
     ok = await queries.finish_job(
-        db_conn, job_id, worker_name="ml-server", attempt=claimed["attempts"], outcome="cancelled"
+        db_conn,
+        job_id,
+        worker_name="ml-server",
+        attempt=claimed["attempts"],
+        outcome="cancelled",
     )
     assert ok is True
 
@@ -791,10 +848,13 @@ async def test_three_stale_sweeps_leave_a_transcode_job_s_title_failed_with_a_wo
     pool = _SingleConnPool(db_conn)
 
     for attempt in range(1, queries.JOB_MAX_ATTEMPTS + 1):
-        claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+        claimed = await queries.claim_job(
+            db_conn, kind="transcode", worker_name="ml-server"
+        )
         assert claimed["attempts"] == attempt
         await db_conn.execute(
-            "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1", job_id
+            "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1",
+            job_id,
         )
         await reaper.sweep_stale_jobs(pool)
 
@@ -828,13 +888,16 @@ async def test_three_stale_sweeps_leave_a_playlist_build_carrying_a_failure(db_c
     from orchestrator import reaper
 
     playlist_id = await _playlist(db_conn, "exhausted-playlist")
-    job_id = await queries.enqueue_job(db_conn, kind="playlist", playlist_id=playlist_id)
+    job_id = await queries.enqueue_job(
+        db_conn, kind="playlist", playlist_id=playlist_id
+    )
     pool = _SingleConnPool(db_conn)
 
     for _attempt in range(1, queries.JOB_MAX_ATTEMPTS + 1):
         await queries.claim_job(db_conn, kind="playlist", worker_name="ml-server")
         await db_conn.execute(
-            "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1", job_id
+            "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1",
+            job_id,
         )
         await reaper.sweep_stale_jobs(pool)
 
@@ -866,11 +929,14 @@ async def test_a_cancelled_job_past_the_attempt_cap_still_ends_cancelled_not_fai
     for attempt in range(1, queries.JOB_MAX_ATTEMPTS):
         await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
         await db_conn.execute(
-            "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1", job_id
+            "UPDATE jobs SET heartbeat_at = now() - interval '1 hour' WHERE id = $1",
+            job_id,
         )
         await reaper.sweep_stale_jobs(pool)
 
-    claimed = await queries.claim_job(db_conn, kind="transcode", worker_name="ml-server")
+    claimed = await queries.claim_job(
+        db_conn, kind="transcode", worker_name="ml-server"
+    )
     assert claimed["attempts"] == queries.JOB_MAX_ATTEMPTS
     await queries.request_job_cancel(db_conn, job_id)
     await db_conn.execute(
@@ -912,9 +978,13 @@ async def test_the_last_seen_worker_is_reported_with_its_name_time_and_status(db
     none_yet = await queries.last_worker_seen(db_conn)
     assert none_yet is None
 
-    await queries.record_worker_seen(db_conn, worker_name="ml-server-old", status="idle")
+    await queries.record_worker_seen(
+        db_conn, worker_name="ml-server-old", status="idle"
+    )
     await asyncio.sleep(0.01)
-    await queries.record_worker_seen(db_conn, worker_name="ml-server", status="waiting_for_gpu")
+    await queries.record_worker_seen(
+        db_conn, worker_name="ml-server", status="waiting_for_gpu"
+    )
 
     latest = await queries.last_worker_seen(db_conn)
     assert latest["worker_name"] == "ml-server"
@@ -1002,7 +1072,9 @@ async def test_eleven_jobs_enqueued_in_one_transaction_get_distinct_positions_th
         )
 
     rows = await queries.library_rows(db_conn)
-    positions = [row["job_queued_ahead"] for row in rows if row["title_id"] in title_ids]
+    positions = [
+        row["job_queued_ahead"] for row in rows if row["title_id"] in title_ids
+    ]
 
     assert len(positions) == 11
     assert sorted(positions) == list(range(11))
@@ -1045,9 +1117,12 @@ async def test_claim_order_matches_the_promised_positions(db_conn):
         entries.append((title_id, job_id))
 
     ahead = {
-        job_id: await queries.count_queued_ahead(db_conn, job_id) for _, job_id in entries
+        job_id: await queries.count_queued_ahead(db_conn, job_id)
+        for _, job_id in entries
     }
-    expected_order = [job_id for job_id, _ in sorted(ahead.items(), key=lambda kv: kv[1])]
+    expected_order = [
+        job_id for job_id, _ in sorted(ahead.items(), key=lambda kv: kv[1])
+    ]
 
     claimed_order = []
     for _ in entries:

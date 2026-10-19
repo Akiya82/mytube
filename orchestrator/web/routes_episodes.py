@@ -19,6 +19,7 @@ address that plays it, and read through the exact same address grammar
 playing address can never disagree about what a segment means. Both stay
 behind the session gate -- the check page has never been public.
 """
+
 import asyncio
 import uuid
 from pathlib import Path
@@ -32,7 +33,12 @@ from orchestrator.media.add import plan_slug
 from orchestrator.reaper import reap_once
 from orchestrator.recognize import recognize_filename
 from orchestrator.resolve import _readiness_status_code
-from orchestrator.slugs import AddressRefused, SlugError, normalize_slug, parse_public_address
+from orchestrator.slugs import (
+    AddressRefused,
+    SlugError,
+    normalize_slug,
+    parse_public_address,
+)
 from orchestrator.storage import delete_object
 from orchestrator.web.templates import render
 
@@ -68,7 +74,9 @@ async def delete_episode_route(episode_id: str, request: Request):
         row = await queries.episode_for_action(conn, parsed)
         if row is None or row["episode_status"] != "active":
             return Response(status_code=404)
-        await queries.mark_episode_for_delete(conn, parsed, settings.delete_grace_seconds)
+        await queries.mark_episode_for_delete(
+            conn, parsed, settings.delete_grace_seconds
+        )
 
     return RedirectResponse("/library", status_code=302)
 
@@ -318,7 +326,9 @@ async def delete_edition_route(edition_id: str, request: Request):
         row = await queries.edition_for_action(conn, parsed)
         if row is None or row["edition_status"] != "active" or row["is_default"]:
             return Response(status_code=404)
-        await queries.mark_edition_for_delete(conn, parsed, settings.delete_grace_seconds)
+        await queries.mark_edition_for_delete(
+            conn, parsed, settings.delete_grace_seconds
+        )
 
     return RedirectResponse("/library", status_code=302)
 
@@ -477,7 +487,9 @@ async def renumber_confirm_route(
             return _refuse(error_key="library.renumber.invalid")
         new_number = int(clean)
 
-        existing = await queries.episode_for_number(conn, target["title_id"], new_number)
+        existing = await queries.episode_for_number(
+            conn, target["title_id"], new_number
+        )
         if existing is not None and existing["episode_id"] != parsed:
             if existing["is_current"]:
                 return _refuse(error_key="library.renumber.taken")
@@ -486,7 +498,9 @@ async def renumber_confirm_route(
                 return _refuse(
                     history_warning={
                         "number": new_number,
-                        "old_episode_number": former["number"] if former is not None else None,
+                        "old_episode_number": former["number"]
+                        if former is not None
+                        else None,
                     }
                 )
 
@@ -515,7 +529,11 @@ async def _move_target_row(conn, title_id) -> dict | None:
     `_renumber_target_row` above already applies to a sibling action.
     """
     row = await queries.library_row(conn, title_id)
-    if row is None or row["title_status"] != "active" or (row["episode_count"] or 1) != 1:
+    if (
+        row is None
+        or row["title_status"] != "active"
+        or (row["episode_count"] or 1) != 1
+    ):
         return None
     episode = await queries.lowest_episode_of_title(conn, title_id)
     if episode is None:
@@ -571,14 +589,18 @@ async def _render_move_form(
     if name_value is None:
         name_value = recognised.name
     if number_value is None:
-        default_number = recognised.episode if recognised.episode is not None else current_number
+        default_number = (
+            recognised.episode if recognised.episode is not None else current_number
+        )
         number_value = str(default_number) if default_number is not None else ""
     if selected_target_title_id is None and title_match is not None:
         selected_target_title_id = str(title_match["title_id"])
 
     candidates = [
         dict(row)
-        for row in await queries.move_target_titles(conn, target["title_id"], filter_value)
+        for row in await queries.move_target_titles(
+            conn, target["title_id"], filter_value
+        )
     ]
     if title_match is not None:
         candidates.sort(key=lambda row: row["title_id"] != title_match["title_id"])
@@ -735,7 +757,9 @@ async def move_confirm_route(
                         slug_plan=slug_plan,
                     )
 
-                new_title_id = await queries.create_title_shell(conn, clean_name, slug_plan.chosen)
+                new_title_id = await queries.create_title_shell(
+                    conn, clean_name, slug_plan.chosen
+                )
 
             await queries.reparent_edition_to_episode(
                 conn,
@@ -786,7 +810,13 @@ def _episode_check_href(slug: str, number: int, edition_slug: str | None) -> str
 
 
 async def _render_episode_check(
-    request: Request, conn, *, slug: str, number: int, edition_slug: str | None, resolved
+    request: Request,
+    conn,
+    *,
+    slug: str,
+    number: int,
+    edition_slug: str | None,
+    resolved,
 ) -> Response:
     """Shared body of both routes below -- an episode's own check page, or
     an edition's, reached one path segment apart. Mirrors
@@ -818,13 +848,19 @@ async def _render_episode_check(
             conn, resolved["title_id"], number, edition_slug
         )
         if neighbours["previous_number"] is not None:
-            keep_edition = edition_slug if neighbours["previous_has_edition_slug"] else None
-            previous_href = _episode_check_href(slug, neighbours["previous_number"], keep_edition)
+            keep_edition = (
+                edition_slug if neighbours["previous_has_edition_slug"] else None
+            )
+            previous_href = _episode_check_href(
+                slug, neighbours["previous_number"], keep_edition
+            )
         else:
             previous_reason_key = "check.nav.first"
         if neighbours["next_number"] is not None:
             keep_edition = edition_slug if neighbours["next_has_edition_slug"] else None
-            next_href = _episode_check_href(slug, neighbours["next_number"], keep_edition)
+            next_href = _episode_check_href(
+                slug, neighbours["next_number"], keep_edition
+            )
         else:
             next_reason_key = "check.nav.last"
 
@@ -865,7 +901,9 @@ async def check_episode_route(slug: str, segment: str, request: Request):
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
         if address.number is not None:
-            resolved = await queries.resolve_episode_slug(conn, address.slug, address.number)
+            resolved = await queries.resolve_episode_slug(
+                conn, address.slug, address.number
+            )
             number = address.number
             edition_slug = None
         else:
