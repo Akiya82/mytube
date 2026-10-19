@@ -17,6 +17,7 @@ explicitly marked as not run.
 - [Playlists](#playlists) — what the link does, and what the world player has to be set to
 - [Conversion worker](#conversion-worker) — optional, needs a GPU, the second compose file
 - [What to expose to the reverse proxy](#what-to-expose-to-the-reverse-proxy) — a worked config block
+- [Releases](#releases) — cutting a tagged release, and the one step no script can do
 - [Upgrading](#upgrading) — pulling a change into a running deployment
 - [Rolling back](#rolling-back) — reverting one
 - [Backup and restore](#backup-and-restore) — what the dump now contains
@@ -694,6 +695,76 @@ Expect a `206` status and a `Content-Range` header shaped like
 `bytes 0-1048575/<full size>`. A `200` with the whole file means the
 external proxy is buffering — fix that on its side, not in this compose
 project.
+
+## Releases
+
+The images a deployment runs are `ghcr.io/akiya82/mytube` (interface) and
+`ghcr.io/akiya82/mytube-worker` (converter), both `linux/amd64` only. Nothing
+publishes except a tag push.
+
+**Cutting a release.** Tags are dated, not semantic: `vYYYY.MM.DD`. Push
+the branch first, then the tag, so the tag points at a commit the default
+branch reaches:
+
+```bash
+git push github main
+git tag v2026.10.19
+git push github v2026.10.19
+```
+
+The run builds both images and pushes each under the tag you pushed and under
+`latest`. The package-write permission exists on that one job and nowhere else.
+
+**Which tag gets pulled.** The default `docker-compose.yml` resolves
+`${MYTUBE_IMAGE_TAG:-latest}`, so somebody who sets nothing pulls `latest`. A
+deployment that wants to stay put sets `MYTUBE_IMAGE_TAG` to the dated tag
+explicitly and never follows `latest`. Every rollout is therefore a release: a
+one-line fix needs a new tag, and a rollout needs the hosting platform to be
+reachable.
+
+**A new package is private by default, and nothing can change that from a
+script.** There is no command or API for it. After the first successful
+publish, open each package's page on the hosting platform, then its package
+settings, then "Change package visibility", choose public and type the package
+name to confirm. Do it once per package (two). It cannot be undone. Forget it
+and the symptom is an authorisation failure or "manifest unknown" on a
+`docker pull` of an image that plainly exists in the web interface. Confirm
+from a machine that is not logged in to the registry:
+
+```bash
+docker pull ghcr.io/akiya82/mytube:latest
+docker pull ghcr.io/akiya82/mytube-worker:latest
+```
+
+### The first release only
+
+The repository was created private on purpose, so that a tree without a
+licence file was never readable. The first release is also when it becomes
+public: after the packages exist, open the repository's settings and change
+its visibility in the danger zone. Three settings pages, one sitting, all
+irreversible. Later releases do none of this.
+
+### Inspecting the images before the first public push
+
+Every layer of a public package is readable by anyone, permanently. Build
+both, then read what is in them:
+
+```bash
+docker build --platform linux/amd64 -f Dockerfile -t mytube-check-api .
+docker build --platform linux/amd64 -f Dockerfile.worker -t mytube-check-worker .
+for i in api worker; do
+  docker history --no-trunc --format '{{.CreatedBy}}' mytube-check-$i
+  docker image inspect mytube-check-$i --format '{{json .Config}}'
+  docker run --rm --entrypoint sh mytube-check-$i -c \
+    "grep -rIlE 'PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_|192\.168\.|10\.0\.0\.' /app /opt /etc 2>/dev/null"
+done
+```
+
+Nothing in the history or configuration should look like a credential, an
+internal address or a hostname. Hits inside third-party package examples and
+the base image's own sample config files are expected; hits under the
+application's own directories are not. Remove the check images afterwards
+with `docker rmi mytube-check-api mytube-check-worker`.
 
 ## Upgrading
 
