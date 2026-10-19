@@ -39,6 +39,8 @@ from orchestrator import auth  # RED: orchestrator/auth.py does not exist yet.
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.main import app
+from orchestrator.storage import StorageUsage
+from orchestrator.web import routes_titles
 
 # A same-site browser POST carries this pair; the edge's admin block sets
 # X-Forwarded-Host on every request it proxies, and a browser attaches
@@ -586,7 +588,15 @@ async def _signed_up_operator(
 
 
 @pytest.fixture
-def integration_client():
+def integration_client(monkeypatch):
+    # /library lists object storage; these tests are about sessions, not bucket contents.
+    monkeypatch.setattr(
+        routes_titles,
+        "storage_usage",
+        lambda: StorageUsage(
+            total_bytes=0, object_count=0, free_bytes=None, listing={}
+        ),
+    )
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="https://testserver")
 
