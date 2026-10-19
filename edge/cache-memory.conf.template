@@ -4,8 +4,8 @@
 # that ${MYTUBE_CACHE_LOCK_TIMEOUT} gets substituted the same way as the
 # main config.
 proxy_cache vid;
-# Deliberately diverges from docs/designs/mytube-delivery-pipeline.md, which
-# specifies $uri$is_args$args$slice_range as the cache key. Each viewer gets
+# The key leaves out the query string ($uri$is_args$args$slice_range would
+# be the obvious choice and is wrong here). Each viewer gets
 # their own $arg_sig/$arg_exp, so including query args here would fragment
 # the cache per signature: three friends watching in sync would each cause
 # an independent origin fetch per chunk instead of sharing one, and the
