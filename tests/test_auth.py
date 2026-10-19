@@ -28,7 +28,6 @@ satisfy:
 """
 
 import re
-import time
 import urllib.parse
 import uuid
 

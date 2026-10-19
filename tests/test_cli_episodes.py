@@ -104,9 +104,9 @@ async def test_add_episode_only_gives_the_new_titles_single_episode_that_number(
     assert any(line.startswith("/v/") and "/07" not in line for line in lines)
     assert any(line.endswith("/07 -- this episode's own address") for line in lines)
 
-    slug = next(l for l in lines if l.startswith("/v/") and " " not in l).removeprefix(
-        "/v/"
-    )
+    slug = next(
+        line for line in lines if line.startswith("/v/") and " " not in line
+    ).removeprefix("/v/")
     row = await queries.resolve_episode_slug(raw_conn, slug, 7)
     assert row is not None
 

@@ -8,8 +8,12 @@ acquired from a pool) as its first argument -- pool lifecycle is
 
 import json
 import re
+from typing import TYPE_CHECKING
 
 import asyncpg
+
+if TYPE_CHECKING:
+    import uuid
 
 
 async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | None:

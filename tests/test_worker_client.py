@@ -8,7 +8,6 @@ each test fails as its own `ModuleNotFoundError` rather than one
 collection error hiding the whole file.
 """
 
-import asyncio
 import json
 import uuid
 

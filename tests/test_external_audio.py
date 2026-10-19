@@ -18,7 +18,6 @@ than fail when neither is on `PATH`.
 import json
 import shutil
 import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest

@@ -202,13 +202,16 @@ async def resolve_episode_or_edition_route(slug: str, segment: str, request: Req
         return Response(status_code=404)
 
     if address.number is not None:
-        resolver = lambda conn: queries.resolve_episode_slug(
-            conn, address.slug, address.number
-        )
+
+        def resolver(conn):
+            return queries.resolve_episode_slug(conn, address.slug, address.number)
+
     else:
-        resolver = lambda conn: queries.resolve_title_edition_slug(
-            conn, address.slug, address.edition_slug
-        )
+
+        def resolver(conn):
+            return queries.resolve_title_edition_slug(
+                conn, address.slug, address.edition_slug
+            )
 
     try:
         row = await asyncio.wait_for(

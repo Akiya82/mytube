@@ -1743,7 +1743,7 @@ async def test_library_row_aggregate_counts_ready_failed_and_current_episode(raw
         f"{first_edition}.mp4",
     )
     ep2_edition = uuid.uuid4()
-    ep2_id = await queries.attach_episode_to_title(
+    await queries.attach_episode_to_title(
         raw_conn,
         title_id,
         2,
@@ -1996,7 +1996,7 @@ async def test_episodes_for_library_scoped_to_the_given_title_ids_and_short_circ
         f"{first_edition}.mp4",
     )
     second_edition = uuid.uuid4()
-    title_b = await queries.create_title_with_edition(
+    await queries.create_title_with_edition(
         raw_conn,
         "Scope B",
         "scope-b-slug",

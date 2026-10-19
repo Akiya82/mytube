@@ -659,8 +659,7 @@ async def test_provenance_season_from_the_folder_name_when_no_file_carries_one(
     )
     recognised_by_path = {e.rel_path: recognize_filename(e.name) for e in entries}
     root = Path(FIXTURES_DIR).parent
-    fake_folder_root = root / "Foo II"
-    built = await routes_folder._build_rows(
+    await routes_folder._build_rows(
         conn=object(),
         root=root,
         active_entries=entries,

@@ -42,9 +42,7 @@ from mytube_media.subtitles import (
 from orchestrator.config import get_settings
 from orchestrator.db import queries
 from orchestrator.media.add import (
-    EditionSlugTaken,
     FolderValidation,
-    plan_edition_slug,
     plan_slug,
     required_free_bytes,
     suggest_edition_slug,
@@ -836,15 +834,6 @@ def _render_edition_folder_screen(
     all_probes_failed = bool(rows) and all(row["probe_failed"] for row in rows)
 
     not_enough_space = False
-    required_total = sum(
-        required_free_bytes(
-            row["size_bytes"],
-            already_correct=bool(
-                row["verdict"] is not None and row["verdict"].already_correct
-            ),
-        )
-        for row in checked
-    )
 
     return render(
         request,

@@ -633,7 +633,7 @@ async def test_taken_episode_numbers_and_episode_for_number_read_the_current_his
     title_id, _slug_value, episodes = await _seed_series(
         raw_conn, "number-history", episode_count=2
     )
-    episode_1, episode_2 = episodes[1], episodes[2]
+    episode_1 = episodes[1]
 
     assert await queries.taken_episode_numbers(raw_conn, title_id) == {1, 2}
 
@@ -837,7 +837,7 @@ async def test_http_preparing_answers_the_preparing_status_from_all_four_routes(
 ):
     edition_id = uuid.uuid4()
     slug = _slug("http-preparing")
-    title_id = await queries.create_title_with_edition(
+    await queries.create_title_with_edition(
         raw_conn,
         "HTTP Preparing",
         slug,

@@ -774,7 +774,7 @@ async def test_edition_branch_refuses_an_already_taken_slug(
     client, raw_conn, clips, gated_worker
 ):
     clip = clips["already_correct"]
-    r1 = await client.post(
+    await client.post(
         f"/add/{clip['path'].name}",
         data=_post_data(clip, name="Taken Slug Show", slug="taken-slug-show"),
         follow_redirects=False,
@@ -822,7 +822,7 @@ async def test_edition_branch_refuses_an_all_digit_slug(
     client, raw_conn, clips, gated_worker
 ):
     clip = clips["already_correct"]
-    r1 = await client.post(
+    await client.post(
         f"/add/{clip['path'].name}",
         data=_post_data(clip, name="All Digit Slug Show", slug="all-digit-slug-show"),
         follow_redirects=False,
