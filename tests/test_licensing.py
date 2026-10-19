@@ -43,6 +43,7 @@ def test_the_package_metadata_declares_the_same_licence():
 
 
 DOCKERFILES = {
+    "api": REPO_ROOT / "Dockerfile",
     "worker": REPO_ROOT / "Dockerfile.worker",
 }
 LICENCE_IN_IMAGE = "/usr/share/licenses/ffmpeg/LICENSE.txt"
