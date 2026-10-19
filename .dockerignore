@@ -2,6 +2,9 @@
 # ships dev-only fixtures, backups, and caches to the daemon on every build.
 .git
 .venv
+venv
+.env
+share
 .pytest_cache
 __pycache__
 *.pyc
