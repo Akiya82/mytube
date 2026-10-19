@@ -1,15 +1,16 @@
-# Experiments 2 and 5, external reverse proxy, clean machine: phase-1 final acceptance
+# Experiments 2 and 5, external reverse proxy, clean machine: final acceptance of the first release
 
-**English abstract:** The final acceptance record for phase 1's delivery
+**English abstract:** The final acceptance record for the first release's delivery
 skeleton -- redirect-then-signed-URL playback through the owner's real
 reverse proxy, and the slice cache under simultaneous viewers. The first
 automated pass produced a false PASS against a non-video fixture (right
 size, no actual video bytes); the record was corrected and re-run against a
 real decodable file before being trusted.
 
-D-32: the phase closes only when all five ROADMAP success criteria hold at
-once (criteria 3 and 4 in the revised wording from `01-CONTEXT.md`: D-02/D-28
-instead of the original `X-Cache-Status` and ACL phrasing). This document
+The release closes only when all five success criteria hold at
+once (criteria 3 and 4 in their revised wording: origin requests per chunk
+and storage unreachability, instead of the original `X-Cache-Status` and ACL
+phrasing). This document
 went through a correction after the first automated pass — see the section
 immediately below before reading anything else in this file.
 
@@ -32,7 +33,7 @@ the actual gap the owner hit.
 **Correction applied:**
 
 - `acceptance-reel` was removed via `docker compose exec api python -m
-  orchestrator.cli remove acceptance-reel` (D-13 grace-delete path — the
+  orchestrator.cli remove acceptance-reel` (the grace-delete path — the
   object is gone or on its way out, not silently left as a live "passing"
   acceptance record backed by garbage).
 - All evidence in this document from this point on is re-measured against
@@ -60,7 +61,7 @@ phase's existing automated tests and `smoke_blob.sh` had ever done):
 | `0b724cd` | `storage.py` uploaded with no `ExtraArgs`, so S3 stored `application/octet-stream` — browsers download such a response instead of playing it | Pin `ContentType: video/mp4` on upload; regression test in `tests/test_storage.py` |
 | `0b724cd` | nginx `X-Forwarded-Host` was `$host`, which drops the port; a client following the `302` from `:8080` landed on `:80` | Use `$http_host` instead |
 | `b6ddf11` | nginx `X-Forwarded-Proto` was `$scheme` (`http` behind a TLS-terminating external proxy) — the app built an `http://` `Location` for an `https://` client | `map` prefers an incoming `X-Forwarded-Proto`, falls back to `$scheme` |
-| `eaca534` | `return 302 /refresh/$edition_id` is relative in nginx's own terms, but nginx expanded it *absolutely* using its own scheme, breaking the D-04 loop guard behind a TLS proxy | `absolute_redirect off;` keeps the `Location` relative |
+| `eaca534` | `return 302 /refresh/$edition_id` is relative in nginx's own terms, but nginx expanded it *absolutely* using its own scheme, breaking the redirect loop guard behind a TLS proxy | `absolute_redirect off;` keeps the `Location` relative |
 | `eaca534` | `/errors/` added a `Content-Type` for files nginx already types from `mime.types`, doubling the header | Removed the redundant directive |
 
 **Verification-quality lesson, worth carrying into later phases:** none of
@@ -79,7 +80,7 @@ Full `pytest` suite: 67 passed. `tools/smoke_blob.sh`: all 13 steps passed.
 
 ---
 
-## Experiment 2 — short link in AVPro (ROADMAP criterion 2)
+## Experiment 2 — short link in AVPro (criterion 2)
 
 ### Automated, re-measured against the real clip (local stack)
 
@@ -105,7 +106,7 @@ Full-file sha256 fetched through the local edge matches `build/control.mp4`
 byte for byte — confirmed independently of the live-domain measurement
 below.
 
-Tampered signature (D-04 loop guard):
+Tampered signature (redirect loop guard):
 
 ```
 $ curl -sD- -o /dev/null "http://.../blob/45d6415c-...mp4?exp=...&sig=tampered...."
@@ -121,9 +122,9 @@ Content-Length: 12526
 ```
 
 Second attempt with a bad signature and `retry=1` serves the stub clip
-exactly once instead of redirecting again — the D-04 loop guard works.
+exactly once instead of redirecting again — the redirect loop guard works.
 
-Unknown slug (D-31 not-found stub, not a bare 404):
+Unknown slug (not-found stub, not a bare 404):
 
 ```
 $ curl -sD- -o /dev/null "http://.../v/no-such-title"
@@ -151,9 +152,9 @@ same `kontrolnyi-rolik` title:
   proving `absolute_redirect off;` works behind the real proxy); chain ends
   `200 video/mp4`.
 - Tampered signature carrying `retry=1` → `200`, `Content-Type: video/mp4`
-  (exactly once), `12526` bytes — the stub clip. D-04 loop guard terminates.
+  (exactly once), `12526` bytes — the stub clip. The redirect loop guard terminates.
 - Unknown slug `/v/no-such-title` → `200`, `Content-Type: video/mp4` — the
-  not-found stub per D-31.
+  not-found stub.
 - Byte integrity: sha256 of the file fetched through the edge matches
   `build/control.mp4` exactly.
 
@@ -167,13 +168,13 @@ same `kontrolnyi-rolik` title:
 - [x] Re-signing on a tampered signature and the `retry=1` loop guard —
       confirmed above through both the local stack and the live domain.
 
-**Result: PASSED.** ROADMAP criterion 2 is closed: `/v/{slug}` opens in
+**Result: PASSED.** Criterion 2 is closed: `/v/{slug}` opens in
 AVPro via `302`, confirmed live, with the full redirect and re-signing
 chain independently measured against a real decodable clip.
 
 ---
 
-## External reverse proxy (D-20, DELIV-07)
+## External reverse proxy
 
 ### Automated
 
@@ -181,8 +182,8 @@ Local edge (`127.0.0.1:8080`) does not buffer and passes `Range` correctly
 (see the `206`/`Content-Range` output above) — confirms the **edge itself**
 is not the problem.
 
-Storage unreachable in a way that is a connection error, not an HTTP code
-(D-38), checked at the container-network level:
+Storage unreachable in a way that is a connection error, not an HTTP code,
+checked at the container-network level:
 
 ```
 $ docker port src-storage-1
@@ -194,7 +195,7 @@ http_code=000 exit=28
 ```
 
 `/healthz` through edge returns the same not-found stub as any unmatched
-path (D-31), not the orchestrator's real health response — the real
+path, not the orchestrator's real health response — the real
 `/healthz` is not reachable externally, only `/v/`, `/p/`, `/blob/`,
 `/refresh/` have defined `location` blocks.
 
@@ -207,11 +208,11 @@ section above) — the external reverse proxy the owner actually runs does
 check the plan asked for and it is now measured against real
 infrastructure, not just the internal edge.
 
-**Result: PASSED.** D-20/DELIV-07 closed against the live external proxy.
+**Result: PASSED.** The external reverse proxy path is closed against the live external proxy.
 
 ---
 
-## Experiment 5 — cache on a synchronous session (ROADMAP criterion 3, D-28 revision)
+## Experiment 5 — cache on a synchronous session (criterion 3, revised wording)
 
 ### Automated — single-session proof, re-measured against the real clip
 
@@ -224,7 +225,7 @@ This line reports 89 chunks warmed, 92330979 of 92330979 bytes, a 512m
 cache zone, in 0.3s.
 
 (Warmed the entire 88 MiB clip in one pass — it is smaller than the default
-warm limit of half the 512 MiB cache zone, so the M5 file-longer-than-limit
+warm limit of half the 512 MiB cache zone, so the file-longer-than-limit
 path is not exercised here; that path has its own unit-test coverage in
 `tests/test_cache_report.py` and a dedicated acceptance criterion in the
 plan.)
@@ -236,26 +237,26 @@ $ curl -s -o /dev/null "<signed control-clip URL>"   # one full linear download,
 $ docker compose exec api python -m orchestrator.cli cache-report --since "$SINCE"
 прочитано строк: 199, разобрано: 89
 уникальных кусков: 89, доля HIT: 100.0%
-кусков с более чем одним запросом к хранилищу (нарушение D-28): 0
+кусков с более чем одним запросом к хранилищу (нарушение): 0
 $ echo $?
 0
 ```
 
 This report reads 199 log lines, parses 89 of them, finds 89 unique chunks
 at a 100.0% HIT ratio, and zero chunks with more than one request to
-storage (a D-28 violation).
+storage (a violation of the single-fetch property).
 
-D-28 holds on a single, reproducible session against real decodable video:
+The single-fetch property holds on a single, reproducible session against real decodable video:
 after warming, zero chunks went to storage more than once, exit code `0`.
 
-### Machine proof of the single-flight property (DELIV-05), not a substitute for the human test
+### Machine proof of the single-flight property, not a substitute for the human test
 
 `tools/smoke_blob.sh` step 12 already proves the exact property criterion 3
 is asking for, mechanically and repeatably, independent of any human
 session:
 
 ```
-[PASS] step 12 (DELIV-05): exactly 1 origin fetch for the same cold chunk across 10 parallel requests
+[PASS] step 12: exactly 1 origin fetch for the same cold chunk across 10 parallel requests
 ```
 
 Ten concurrent requests for the same cold chunk produce exactly one origin
@@ -377,23 +378,23 @@ to the `storage` service definition, both out of this plan's scope
       warm>` on that session — zero chunks with more than one origin
       request (exit code `0`).
 - [ ] The same session **without** warming, to observe cold-cache behavior;
-      if violating chunks appear, check `proxy_cache_lock_timeout` first
-      (Pitfall 11), not the cache logic itself.
+      if violating chunks appear, check `proxy_cache_lock_timeout` first,
+      not the cache logic itself.
 - [ ] Record viewer count and observed `HIT` ratio for reference (not an
-      acceptance number — D-28: the ceiling at N synchronous viewers on a
+      acceptance number: the ceiling at N synchronous viewers on a
       cold cache is `(N-1)/N`, 67% at three).
 
 **Result: NOT CLOSED.** The single-session automated proof and the
-DELIV-05 machine proof both hold. The specific claim ROADMAP criterion 3
+single-flight machine proof both hold. The specific claim criterion 3
 makes — three simultaneous human viewers, one world — has not been run.
 Do not treat the machine proof as a substitute; it is strong supporting
 evidence for the mechanism, not the acceptance test itself.
 
 ---
 
-## `docker compose up` on a clean machine (ROADMAP criterion 4, DIST-01)
+## `docker compose up` on a clean machine (criterion 4)
 
-Criterion 4 has two independent halves per the D-38 revision: storage stays
+Criterion 4 has two independent halves in its revised wording: storage stays
 unreachable outside of edge, and the stack comes up clean on a machine with
 no pre-warmed images. They are verified separately below because their
 evidence status differs.
@@ -406,7 +407,7 @@ proxy section above), via `smoke_blob.sh` step 2 (host cannot reach the
 published-nowhere port), and implicitly via the live domain only ever
 exposing `/v/`, `/p/`, `/blob/`, `/refresh/` (Experiment 2 live section).
 All three agree: the storage port is unreachable in a way that is a
-connection failure, exactly the D-38 wording, not an ACL question.
+connection failure, exactly the revised wording, not an ACL question.
 
 ### Clean-machine `docker compose up` — NOT DONE
 
@@ -433,11 +434,11 @@ at the end of this document.
 
 ---
 
-## Final reconciliation of the five criteria (D-32)
+## Final reconciliation of the five criteria
 
-Criteria are read in the CONTEXT.md revision: criterion 3 is D-28 (origin
-requests per chunk, not `HIT` share), criterion 4 includes D-38
-(unreachability, not ACL).
+Criteria are read in their revised wording: criterion 3 is origin
+requests per chunk, not `HIT` share, and criterion 4 includes
+unreachability, not an ACL.
 
 Criterion 1: passed
 Criterion 2: passed
@@ -451,8 +452,8 @@ below states how each was settled.
 
 In full:
 
-1. **Direct MP4 plays in VRChat AVPro — PASSED.** Closed in plan 01-01
-   (Experiment 1), unchanged since.
+1. **Direct MP4 plays in VRChat AVPro — PASSED.** Closed in
+   Experiment 1, unchanged since.
 2. **`/v/{slug}` opens in AVPro via `302` — PASSED.** Closed above: live
    playback confirmed by the owner, full redirect/re-sign/loop-guard chain
    independently measured both locally and against the real domain, against
@@ -479,10 +480,10 @@ In full:
    for this platform without pulling them, the undeclared host prerequisites
    were declared, and the Windows and WSL claims were narrowed to what
    read-only evidence on this host actually supports.
-5. **Slug rename does not break the old link — PASSED.** Closed in plan
-   01-04 by tests and a live run, unaffected by this session.
+5. **Slug rename does not break the old link — PASSED.** Closed by
+   tests and a live run, unaffected by this session.
 
-**Phase-1 verdict: no criterion remains open.** Four of the five are
+**Verdict for the first release: no criterion remains open.** Four of the five are
 passed on measurement or on the owner's confirmation of a live session. The
 fifth, criterion 4, is passed for everything downstream of the image pull
 and closed for the install half by the owner's explicit acceptance on

@@ -1,4 +1,4 @@
-# Experiment 7: choosing the object storage backend (DIST-02)
+# Experiment 7: choosing the object storage backend
 
 **English abstract:** Compared Garage and SeaweedFS as the self-hosted S3
 backend, both driven through the same nginx `slice` setup, on two required
@@ -15,7 +15,7 @@ records being what the stack actually runs.
 ## Task
 
 Upstream `minio/minio` is archived, and official Community Edition images
-have not been published since October 2025. D-17 requires comparing
+have not been published since October 2025. The requirements call for comparing
 **Garage** and **SeaweedFS** through the same nginx with `slice`, rather
 than picking one by default. This document's outcome is a concrete image,
 tag and parameter set, dropped straight into `docker-compose.yml` without
@@ -39,7 +39,7 @@ disqualified:
 
 1. **Range through `slice` produced a matching sha256.**
 2. **An anonymous, unsigned Range GET from inside the network returns
-   `206`** (D-38).
+   `206`**.
 
 Beyond that — preferences: (3) lower TTFB on a cold chunk, (4) smaller
 image. If both candidates fail any mandatory condition, the fallback is
@@ -54,7 +54,7 @@ Both candidates were run through the `experiment07_storage.sh` rig
 |---|---|---|
 | Unreachable from outside (curl from the host to the candidate's port) | **PASS** — `curl -m 3` did not establish a connection (exit 28, timeout) | **PASS** — same result (exit 28) |
 | Container name does not resolve from the `bridge` network | confirmed (`getent hosts` — NORESOLVE) | confirmed (`getent hosts` — NORESOLVE) |
-| **Anonymous, unsigned Range GET from inside the network** (D-38, mandatory condition 2) | **FAIL** — both ranges (`0-1048575` and a tail range) returned `403 Forbidden`. Garage has no mechanism for anonymous `GetObject` through the S3 API: `PutBucketPolicy` returns `NotImplemented`; the `garage bucket allow/deny` subcommands only work with named keys, not an anonymous principal; `garage bucket website` is a separate HTTP server with Host-based routing and `index.html` semantics, not the `GetObject` path that `slice` uses | **PASS** — both ranges returned `206 Partial Content` with a correct `Content-Range` |
+| **Anonymous, unsigned Range GET from inside the network** (mandatory condition 2) | **FAIL** — both ranges (`0-1048575` and a tail range) returned `403 Forbidden`. Garage has no mechanism for anonymous `GetObject` through the S3 API: `PutBucketPolicy` returns `NotImplemented`; the `garage bucket allow/deny` subcommands only work with named keys, not an anonymous principal; `garage bucket website` is a separate HTTP server with Host-based routing and `index.html` semantics, not the `GetObject` path that `slice` uses | **PASS** — both ranges returned `206 Partial Content` with a correct `Content-Range` |
 | Signed Range (`s3api get-object --range`) | **PASS** — the `206` equivalent, a correct `ContentRange: bytes 0-1048575/67108864` | **PASS** — same result |
 | Download through nginx `slice` (HTTP code) | **403** — nginx proxies `Range` without a signature (OSS nginx cannot do SigV4), and Garage answers `403` on the very first slice subrequest | **200** |
 | sha256 of the object downloaded through `slice` matched the original (**mandatory condition 1**) | **FAIL** — the response body is the `403` (213 bytes of XML), not the object | **PASS** — byte-for-byte match |
@@ -75,7 +75,7 @@ SeaweedFS is a candidate that passed both mandatory conditions.
 **`chrislusf/seaweedfs:3.97` is chosen** — the only candidate that passed
 both mandatory conditions: Range through `slice` serves a byte-for-byte
 matching object, and from inside the `mytube-exp07` network the candidate
-answers an unsigned Range GET with `206`, exactly what D-38 requires (OSS
+answers an unsigned Range GET with `206`, exactly what is required (OSS
 nginx cannot sign AWS SigV4, so there is no alternative — either the
 candidate can serve anonymously, or `slice` does not work at all).
 
@@ -168,7 +168,7 @@ The captured transcript above shows the bucket-creation call succeeding
 (`"Location": "/mytube"`), with a single inline comment left as it was
 printed in the session.
 
-**Anonymous reads from inside the network (D-38):** enabled by the
+**Anonymous reads from inside the network:** enabled by the
 `s3.json` config from the very start (identity `anonymous`, action
 `Read`) — no separate "enable after start" step is needed, unlike what the
 plan assumed for Garage (`PutBucketPolicy`/`garage bucket` subcommands,
@@ -211,10 +211,10 @@ s3 = boto3.client(
 )
 ```
 
-The full check of Pitfall F (compatibility of `boto3` calls with the
+The full check (compatibility of `boto3` calls with the
 SeaweedFS S3 API beyond `put_object`/`head_object`/`get_object`/
 `list_objects_v2`, already exercised through `aws-cli` on this rig) happens
-in the step where a real Python environment first appears (M2) — this
+in the step where a real Python environment first appears — this
 experiment deliberately does not install `boto3` on the host.
 
 ## access_log format
@@ -259,19 +259,19 @@ that the first internal redirect merges with the main request rather than
 being logged as a separate subrequest.
 
 **This changes nothing material for the `cache-report` parser**: the point
-of B2 is to confirm that `log_subrequest on` produces many lines per file
+of this step is to confirm that `log_subrequest on` produces many lines per file
 rather than one, and that is confirmed (`64 ≫ 1`). The regular expression
 built against the format `$time_iso8601 $uri $slice_range
 $upstream_cache_status $status $body_bytes_sent` must accept an empty
 `slice_range` (`-`) for the main request's line — exactly as shown in the
 sample above.
 
-For Garage (disqualified per D-38), attempting to download the same object
+For Garage (disqualified on the anonymous-read condition), attempting to download the same object
 through the same `slice` config produces a log with **1** line — nginx
 proxies the first `Range` subrequest, gets a `403`, and does not continue
 slicing, since the object is entirely unavailable.
 
-## Privacy under D-38
+## Privacy: storage unreachable from outside
 
 Storage privacy here is **unreachability from outside**, not a closed
 bucket ACL. Both measured facts:
@@ -286,7 +286,7 @@ bucket ACL. Both measured facts:
    correct `Content-Range` — without this, edge nginx (which physically
    cannot sign AWS SigV4) would not be able to read the object at all.
 
-Both facts together are what D-38's privacy means: the bucket serves
+Both facts together are what privacy means here: the bucket serves
 anonymously **only** from inside the `internal` `storage` network, and
 there is no path to it from outside, because the port is not published.
 This is **not** "an anonymous GET returned a non-2xx from outside" — from
@@ -296,15 +296,14 @@ on a network with `internal: true` and publish no port at all — if someone
 "fixes" this later by adding `ports:`, edge keeps working, but privacy
 disappears silently.
 
-## The owner's production MinIO (D-18)
+## The owner's production MinIO
 
-The owner's production MinIO with the old HLS library (`s3.example.com`,
-see `01-01-SUMMARY.md`) is **not touched and not addressed** by any command
+The owner's production MinIO with the old HLS library (`s3.example.com`) is **not touched and not addressed** by any command
 in this experiment. The rig runs exclusively on temporary containers on an
 isolated `mytube-exp07` network (Garage/SeaweedFS/nginx/aws-cli), none of
 which have any network path to the owner's production storage. The chosen
 storage (`chrislusf/seaweedfs:3.97`) comes up **alongside it**, in this
-delivery work's own `docker-compose.yml` (D-16) — migrating the old HLS
+delivery work's own `docker-compose.yml` — migrating the old HLS
 library is not part of this work.
 
 ## Cleanup

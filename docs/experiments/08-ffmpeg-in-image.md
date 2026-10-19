@@ -7,10 +7,10 @@
 
 ## Task
 
-The compatibility remux (`ASIS-01`/`ASIS-02`) needs `ffmpeg`/`ffprobe` inside the `api`
-image, which is `python:3.13-slim` today with neither binary. RESEARCH.md named
-`mwader/static-ffmpeg` as the source, found by web search and never resolved to a digest
-(assumption A1). This document resolves that image to an immutable digest, records where
+The compatibility remux needs `ffmpeg`/`ffprobe` inside the `api`
+image, which is `python:3.13-slim` today with neither binary. the earlier research named
+`mwader/static-ffmpeg` as the source, found by web search and never resolved to a digest.
+This document resolves that image to an immutable digest, records where
 its binaries actually live, and records the provenance of the two new PyPI packages
 (`jinja2`, `python-multipart`) this phase adds — so a reader who rebuilds the image a
 year from now can tell where every third-party artifact came from and why.
@@ -38,7 +38,7 @@ published):
 2026-08-14 while `9.0` carries a different build, so the two tags are not interchangeable
 today and `latest` cannot be treated as a stand-in for the newest explicit version.
 
-**Chosen reference for plan 02's `COPY --from=`:**
+**Chosen reference for the Dockerfile's `COPY --from=`:**
 
 ```
 mwader/static-ffmpeg:9.0@sha256:f1e16a2f8fd9c4470fcccf4de56655c58b4ef7f2e6a5fcefb0e636e124363b36
@@ -77,7 +77,7 @@ $ docker run --rm --entrypoint /ffprobe mwader/static-ffmpeg:9.0@sha256:f1e16a2f
 ffprobe version 9.0 Copyright (c) 2007-2026 the FFmpeg developers
 ```
 
-Both binaries run and report the version the tag promises. Plan 02's Dockerfile stage
+Both binaries run and report the version the tag promises. The Dockerfile stage
 should copy from the paths above, not assume a Debian-style `/usr/bin/ffmpeg`.
 
 ### Licence posture
@@ -87,7 +87,7 @@ The build's own `-version` output shows `--enable-gpl --enable-version3` and no
 the full `-version` output for the literal word `nonfree`, no match). This phase re-encodes
 audio to AAC and copies video with plain CPU instructions — no NVENC, no nonfree CUDA
 flags are ever passed to this binary — so the separate LGPL/nonfree-CUDA build problem
-already logged against the GPU worker (`DIST-03` in STATE.md, needs a self-built LGPL
+already logged against the GPU worker (it needs a self-built LGPL
 ffmpeg with NVENC before that image can be published) does not apply here. This image is
 GPLv3, not LGPL, and is invoked as a separate process via `subprocess` — the orchestrator
 never links against it — so GPL's copyleft-on-linking clause has nothing to attach to;
@@ -98,7 +98,7 @@ were statically or dynamically linked into the orchestrator itself.
 ### Fallback if this image cannot be used
 
 If the pinned digest above stops resolving, or the entrypoint/binaries are not where this
-document says once plan 02 actually builds against it, plan 02 installs `ffmpeg` through
+document says once the Dockerfile actually builds against it, the Dockerfile installs `ffmpeg` through
 the base image's package manager instead:
 
 ```dockerfile
@@ -109,7 +109,7 @@ RUN apt-get update && apt-get install --no-install-recommends -y ffmpeg \
 This is a larger image (Debian's `ffmpeg` package pulls its full shared-library closure)
 and ties the pinned ffmpeg version to whatever Debian bookworm ships rather than a version
 this project chose deliberately — but distribution size is not this phase's job, only
-correctness is, and this path is not blocked on anything external. If plan 02 has to take
+correctness is, and this path is not blocked on anything external. If the build has to take
 this fallback, it must add one line to this document recording that the fallback was
 taken and why.
 
@@ -122,19 +122,19 @@ taken and why.
 
 Both version numbers were re-verified live against PyPI in this session (`pip index
 versions <name>`) rather than trusted from the earlier research pass; both came back
-identical to what RESEARCH.md already recorded on 2026-08-21, so nothing moved in the
+identical to what the earlier research already recorded on 2026-08-21, so nothing moved in the
 intervening day.
 
 **On the `SUS` verdicts:** the automated package-legitimacy checker flagged both packages
 `SUS` with the reason `unknown-downloads` — it has no download-count signal for PyPI in
 this environment. This is the same signal-absence false positive the previous phase
-already hit and recorded (`STATE.md`, plan 01-01: the checker returned false `SUS` on all
+already hit and recorded (the checker returned false `SUS` on all
 seven packages it first checked, purely for lacking a download-count feed, not for any
 finding about the packages themselves). It is not evidence against either package, and it
 is not being treated as one — it is being written down so the record states plainly why a
 `SUS` tag sits next to two packages that are, in fact, unremarkable.
 
-## What plan 02 pastes where
+## What the build pastes where
 
 - `Dockerfile` builder stage: `COPY --from=mwader/static-ffmpeg:9.0@sha256:f1e16a2f8fd9c4470fcccf4de56655c58b4ef7f2e6a5fcefb0e636e124363b36 /ffmpeg /usr/local/bin/ffmpeg` (and the same for `/ffprobe`), or the fallback `apt-get install` block above if the digest fails to resolve at build time.
 - `pyproject.toml`: add `jinja2` and `python-multipart` as dependencies, version-unpinned or pinned at `3.1.6`/`0.0.32` per the plan's own preference — this document only establishes that both are legitimate and current as of the date above.
@@ -153,4 +153,4 @@ records, and confirmed all three as pinned:
 2. `jinja2` `3.1.6`
 3. `python-multipart` `0.0.32`
 
-Plan 02 may install these three artifacts as recorded.
+The build may install these three artifacts as recorded.

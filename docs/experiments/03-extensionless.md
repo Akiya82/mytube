@@ -1,4 +1,4 @@
-# Experiment 3: extensionless + Content-Type (reference, D-06/D-07)
+# Experiment 3: extensionless + Content-Type (reference)
 
 **English abstract:** Checked whether an extensionless address serving
 `Content-Type: video/mp4` plays directly in AVPro, as a reference point
@@ -10,9 +10,9 @@ the short link. Informational; does not gate anything.
 **This experiment's result is informational and does not affect the
 implementation.** Even if an extensionless file with `Content-Type:
 video/mp4` plays directly in AVPro, direct serving will not be chosen:
-signatures (D-01/D-02/D-03) have nowhere to go without polluting the short
+signatures have nowhere to go without polluting the short
 link. This delivery implementation always returns `302` from `/v/{slug}` to
-`/blob/{edition_id}.mp4` (D-06), regardless of this experiment's outcome.
+`/blob/{edition_id}.mp4`, regardless of this experiment's outcome.
 
 ## Rig
 
@@ -60,12 +60,12 @@ rig does not have.
 ## Conclusion
 
 The result is informational and **does not apply to this delivery
-implementation** (D-06/D-07): in the project's architecture, the
+implementation**: in the project's architecture, the
 extensionless address `/v/{slug}` is served not by S3 directly but by the
 **orchestrator**, which resolves the slug and returns `302` to
 `/blob/{edition_id}.mp4` — meaning the path "a raw extensionless request
 straight to storage" is not on the production delivery path at all. A bare
-S3 bucket's 404 on a missing key says nothing for or against the D-06
+S3 bucket's 404 on a missing key says nothing for or against the redirect
 architecture — it only confirms that S3 has no extension-autocompletion
 magic, which was already assumed.
 

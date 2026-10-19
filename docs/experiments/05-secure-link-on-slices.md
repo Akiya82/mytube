@@ -1,4 +1,4 @@
-# Experiment 5: `secure_link` on slice subrequests (DELIV-06, D-01/D-02/D-04)
+# Experiment 5: `secure_link` on slice subrequests
 
 **English abstract:** Confirmed that nginx's `secure_link` signature check
 runs locally on every slice subrequest, with no per-chunk round trip to the
@@ -15,9 +15,9 @@ held.
 
 ## Task
 
-Per Pitfall 7 in `PITFALLS.md`, the original risk (`auth_request` × `slice`
+The original risk (`auth_request` × `slice`
 — thousands of access checks per file) was already neutralised
-architecturally at decision D-02: the signature check runs locally, inside
+architecturally: the signature check runs locally, inside
 the `ngx_http_secure_link_module` module, on every slice subrequest, with no
 round trip to the backend. This document is not a gate on the architecture
 choice (that choice is already made) — it is a protocol for three
@@ -25,11 +25,9 @@ measurements that would have had to fail if the implementation had drifted
 from the intent:
 
 1. the `access_log` format under `log_subrequest on` — how many lines
-   actually land in the log per file (verdict B2);
-2. what happens to the stream if the signature expires **mid-download**
-   (assumption A1, verdict M6);
-3. coalescing of parallel requests for the same cold chunk (DELIV-05,
-   verdict m9).
+   actually land in the log per file;
+2. what happens to the stream if the signature expires **mid-download**;
+3. coalescing of parallel requests for the same cold chunk.
 
 ## Step 10: `access_log` format — the measured truth against the plan's original criterion
 
@@ -61,7 +59,7 @@ Sample of the first lines from the live run (64 MiB object, `slice 1m`):
 ```
 
 The line count confirms that `log_subrequest on` genuinely works — without
-it there would be **one** line per file, not 64. That is exactly what B2
+it there would be **one** line per file, not 64. That is exactly what this step
 set out to confirm: that subrequests land in the log, not to hold onto the
 specific number 65.
 
@@ -71,7 +69,7 @@ strict "N+1" formula — the actual number of slice subrequests per file, for
 N one-megabyte slices, is N (not N+1), because the first slice merges with
 the main request.
 
-## Step 11: a signature expiring mid-download (assumption A1, verdict M6)
+## Step 11: a signature expiring mid-download
 
 The earlier phrasing of the criterion ("zero 302/403 entries for a valid
 signature") could not fail under any outcome. The real check: sign an
@@ -101,7 +99,7 @@ the stream as a chunk's body, breaking the MP4 mid-playback.
 genuinely is checked on each one.** `$secure_link_expires`/`secure_link` are
 recomputed on EVERY subrequest (not cached from the first) — this is not an
 assumption, it is the same behaviour that makes checking the signature
-itself on every chunk possible in the first place (D-01/D-02). With `exp`
+itself on every chunk possible in the first place. With `exp`
 five seconds out and a rate limit of 6 MB/s, downloading 64 MiB takes
 ~10.7s by calculation — meaning most of the 64 subrequests are physically
 sent by nginx AFTER the TTL has genuinely expired by the server clock.
@@ -118,22 +116,22 @@ the client passed the check at the moment the download began, all internal
 slices of THAT download keep passing, even if the server's physical clock
 has moved past `exp` by the time the last slices are sent.
 
-**Practical consequence for D-04:** an expired signature is only caught by
+**Practical consequence for the refresh flow:** an expired signature is only caught by
 the **next NEW** client request (a seek or a pause producing a fresh
 request from the player, for example) — it does not tear down an
-already-running stream. That is exactly what assumption A1 needed checked:
+already-running stream. That is exactly what the mid-download assumption needed checked:
 a 12-hour TTL on a three-hour film does not produce a mid-playback break
 under any scenario, including the unlikely "TTL expires in the film's last
 minute."
 
-**Verdict on assumption A1:** CONFIRMED. The sha256 matched, no subrequest
+**Verdict on the mid-download assumption:** CONFIRMED. The sha256 matched, no subrequest
 got a `302`/`403`. The architectural risk of "a 12-hour TTL expiring
 mid-three-hour-film" does not materialise as a stream break in practice —
 the worst case when the TTL expires mid-session is that the next **new**
 request (not a subrequest of an already-running download) gets a `302` to
-`/refresh/`, and the player reopens the link (D-04).
+`/refresh/`, and the player reopens the link.
 
-## Step 12: coalescing of parallel requests (DELIV-05, verdict m9)
+## Step 12: coalescing of parallel requests
 
 Ten parallel `curl` requests for the same cold one-megabyte chunk (after
 clearing the log and restarting `edge` to guarantee an empty cache)
@@ -143,9 +141,8 @@ produced **exactly one** trip to storage (`MISS` in
 
 This is the first **automated** confirmation of something that could
 previously only be checked by gathering live people in VRChat — the one
-check that gets at the substance of the whole slice+cache+lock construction
-(DELIV-05). `proxy_cache_lock_timeout 20s` (above the default 5s, Pitfall
-11) was not needed on this run — the local docker storage responds faster
+check that gets at the substance of the whole slice+cache+lock construction.
+`proxy_cache_lock_timeout 20s` (above the default 5s) was not needed on this run — the local docker storage responds faster
 than 5s, but the value was raised deliberately in case of a slower
 disk/network on the production machine.
 
@@ -154,8 +151,8 @@ disk/network on the production machine.
 | Check | Result |
 |---|---|
 | Lines in access_log for 64 MiB / slice 1m | **64** (not 65 — the discrepancy with the plan's original criterion is documented above) |
-| Assumption A1 (TTL expires mid-download) | **PASS** — sha256 matched, 0 302/403 entries among the subrequests |
-| Coalescing of parallel requests (DELIV-05) | **PASS** — 1 origin fetch for 10 parallel requests to the same chunk |
+| TTL expires mid-download | **PASS** — sha256 matched, 0 302/403 entries among the subrequests |
+| Coalescing of parallel requests | **PASS** — 1 origin fetch for 10 parallel requests to the same chunk |
 | `log_subrequest on` works | **Confirmed** (64 ≫ 1) |
 
 The full thirteen-step run — `bash tools/smoke_blob.sh` from `src/` — all

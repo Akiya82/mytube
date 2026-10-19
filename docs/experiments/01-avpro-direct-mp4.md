@@ -7,15 +7,15 @@ confirmed on both a direct address and the real production form with a
 signed query string.
 
 Go/no-go for the whole project. A failure would not mean rethinking the
-concept — first work through the list of causes (D-33).
+concept — first work through the list of causes.
 
 ## Preconditions (filled in automatically)
 
-- The control clip was built and machine-verified per D-34:
+- The control clip was built and machine-verified:
   `src/tools/make_control_clip.sh` → `build/control.mp4`. H.264 High 4.1,
   `yuv420p`, `+faststart` confirmed by `ffprobe` and `check_faststart.py`
   (see the commit for the control-clip build task).
-- The domain and TLS already exist and work (D-19) — the owner serves the
+- The domain and TLS already exist and work — the owner serves the
   file through an existing reverse proxy.
 
 ## Deviation from the protocol: the rig
@@ -26,7 +26,7 @@ production rig**: the owner's own MinIO S3 bucket behind a caching reverse
 proxy (`nginx/1.27.5`), not a bare file on the domain. This is a deliberate
 substitution, not a deviation from the protocol — the rig is stricter than
 the required minimum: a caching layer already sits in the chain (an
-analogue of the edge nginx this delivery work later builds, D-20), and the
+analogue of the edge nginx this delivery work later builds), and the
 result also confirms that Range requests survive the cache (see step 3
 below, `X-Cache: HIT` on the partial response). Had the experiment run
 against a bare, uncached file, that would have said nothing about the
@@ -104,11 +104,11 @@ Step verdict: `206` with a correct `Content-Range: bytes
 `X-Cache: HIT` — the Range request survived the caching layer in front of
 the bucket intact, it was not bypassed by the cache.
 
-### Step 3a: the production form of the address, with a query string (M4)
+### Step 3a: the production form of the address, with a query string
 
 Repeat of step 2 against
 `https://s3.example.com/movies/control.mp4?exp=1&sig=abc` (the
-production-form address per D-06).
+production-form address).
 
 ```
 $ curl -I "https://s3.example.com/movies/control.mp4?exp=1&sig=abc"
@@ -138,7 +138,7 @@ picture is not black, there is sound.
 Observation: plays (per the owner's report; see "evidence gap" — the run's
 specifics were not recorded in the protocol).
 
-### Step 6a: the production form of the address in the player (M4)
+### Step 6a: the production form of the address in the player
 
 The owner reports: the address
 `https://s3.example.com/movies/control.mp4?exp=1&sig=abc` was opened in the
@@ -168,12 +168,12 @@ signed links this is exactly the behaviour wanted: different signatures for
 the same object should share one cache entry rather than spawning a
 duplicate per unique signature. This is an observation from someone else's
 rig, not a verified decision for this project — for this project's own edge
-nginx (D-20, `proxy_cache_key`) the behaviour needs to be confirmed
+nginx (`proxy_cache_key`) the behaviour needs to be confirmed
 separately, in experiment 5.
 
 ## Verdict: PASS
 
-## D-33 checklist items worked through (filled in only on FAIL)
+## Checklist of causes worked through (filled in only on FAIL)
 
 Not applicable — the experiment passed with a PASS verdict, no need to work
 through failure causes.

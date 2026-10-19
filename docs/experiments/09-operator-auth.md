@@ -38,7 +38,7 @@ guess into a number taken on the machine that runs them.
 `MYTUBE_ADMIN_FQDN` was not present in the real `.env` on this machine — not
 blank, entirely absent, an open item every plan since the hostname was added
 to the edge has carried forward without the operator making the choice yet.
-Task 1 below could not run the live-FQDN check at all without some value in
+Part 1 below could not run the live-FQDN check at all without some value in
 that variable, so it was set temporarily to `admin-verify.example.com` for
 the duration of this run's local checks (the same approach two earlier plans
 in this phase took for their own live verification), and `.env` was restored
@@ -48,14 +48,14 @@ environment file. The operator's own permanent choice of hostname remains
 open, and is exactly what the checkpoint later in this record is waiting on.
 
 A second, unrelated environment note: this session's own tooling refuses
-`docker compose down -v` as a destructive command, so task 1's stack was not
+`docker compose down -v` as a destructive command, so part 1's stack was not
 brought up from wiped volumes as the plan text describes. This was confirmed
 not to matter: no container was running before this session started, and a
 direct query against `operator_credential` immediately after bring-up
 returned zero rows, so the run genuinely exercised the first-run path
 regardless of how the empty table came to be empty.
 
-## Task 1: the live smoke test, and four defects found in the test itself
+## Part 1: the live smoke test, and four defects found in the test itself
 
 `docker compose build api` ran before any live check in this record — every
 result below came from an image built from this phase's source, not
@@ -201,7 +201,7 @@ overwritten by the no-store rule that covers every other authenticated page.
 **This verdict covers loopback only** — the real-hostname half is the next
 section.
 
-## Task 2: publishing the hostname, then reaching it once from outside
+## Part 2: publishing the hostname, then reaching it once from outside
 
 The operator created a DNS record and a reverse-proxy vhost for
 `admin.mytube.example.com`, outside this repository, once the loopback
@@ -246,7 +246,7 @@ travelled the hostname and got the login screen back, with the operator's
 own certificate terminating it. Nothing about this contradicts the loopback
 verdict above; it closes the half loopback structurally cannot reach.
 
-## Task 3: delivery, re-measured
+## Part 3: delivery, re-measured
 
 The storage-capacity exhaustion an earlier plan in this phase found and
 diagnosed does not apply to what this record measures: this machine's `.env`
@@ -277,12 +277,12 @@ $ cd src && bash tools/smoke_blob.sh; echo "exit=$?"
 [PASS] step 4: uploaded 9f941893-0ca8-4698-b57b-fbf8e2f92edb.mp4 (64 MiB), sha256=3cf0fe29c036157ee3999c1defbf9e7aa6d2bda76b83725c3c5499a9e39c2699
 [PASS] step 5: signed sig=vj_X-gcTpWnr5qTybX_Hbg exp=1787619133
 [PASS] step 6: unsigned request got 302 -> Location: /refresh/9f941893-0ca8-4698-b57b-fbf8e2f92edb
-[PASS] step 7: retry=1 with bad signature got 200 Content-Type: video/mp4 (loop-guard works, D-04)
+[PASS] step 7: retry=1 with bad signature got 200 Content-Type: video/mp4 (loop-guard works)
 [PASS] step 8: 206, Content-Range: bytes 0-1048575/67108864, X-Cache-Status: MISS
 [PASS] step 9: X-Cache-Status: HIT
 [PASS] step 10: full download OK, sha256 matches (3cf0fe29c036157ee3999c1defbf9e7aa6d2bda76b83725c3c5499a9e39c2699)
 [PASS] step 10: access_log has 64 lines for 64 MiB @ slice 1m (matches measured truth from prior work, NOT the original '65' assumption -- log_subrequest on is confirmed working: 64 >> 1)
-[PASS] step 11 (assumption A1): sha256 matches after mid-stream expiry, zero 302/403 among subrequests
+[PASS] step 11: sha256 matches after mid-stream expiry, zero 302/403 among subrequests
 [PASS] step 12: exactly 1 origin fetch for the same cold chunk across 10 parallel requests
 [PASS] step 13: MYTUBE_CACHE_MODE=off gives X-Cache-Status: OFF, bytes still served (206)
 
@@ -345,7 +345,7 @@ checked against the real container for the first time. A player reaching an
 admin path on the delivery hostname gets exactly the same stub-clip answer
 as any other unmatched path — structurally, not by inspecting a client.
 
-## Task 4: the hash cost, measured
+## Part 4: the hash cost, measured
 
 `orchestrator/auth.py`'s Argon2 parameters were a starting-point guess with
 nothing measured behind them (`time_cost=3, memory_cost=65536,
@@ -423,7 +423,7 @@ to the genuinely absent original, once these checks were done.
    switcher in its header (no nav, no storage figure), the heading "Create
    the operator password", the one-sentence intro, and three fields —
    username, new password, confirm — with "At least 8 characters." under
-   the password field. Matches Screen B of the design contract.
+   the password field. Matches the design contract for that page.
 3. **Performed.** Submitting two different passwords rendered "Passwords do
    not match." (localized: "Пароли не совпадают.") in an error banner above
    the form, with the username field still carrying the value that was
