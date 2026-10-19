@@ -1,5 +1,4 @@
-"""The playlist assembly screen and the public playlist address (D-101..
-D-104, D-107, D-108).
+"""The playlist assembly screen and the public playlist address.
 
 Two different surfaces share this module for the same reason
 `routes_titles.py` shares the Library screen and the add flow: they are
@@ -15,7 +14,7 @@ docstring gives: the event loop is shared with every other request this
 process answers, including `GET /v/{slug}`.
 
 The public address deliberately has no tombstone answer. A playlist slug
-is a plain unique column with no history table behind it (D-103): renaming
+is a plain unique column with no history table behind it: renaming
 a playlist breaks its old address on purpose, so there is nothing to
 tombstone and an address that stops working stops working outright --
 `GET /p/{slug}` never answers 410, unlike `/v/{slug}`.
@@ -46,7 +45,7 @@ router = APIRouter()
 # black screen, so the only way a viewer can tell "the operator has not
 # finished this playlist yet" from "the server is broken" is for the edge
 # to answer each with a different stub clip -- and that mapping keys off
-# the status code (D-104). The four codes the delivery block already maps
+# the status code. The four codes the delivery block already maps
 # are 404, 410, 403 and the 5xx group; this one is picked from what is
 # free. 425 ("Too Early") is not otherwise meaningful to this
 # application -- it exists here purely as a distinct signal edge/nginx.conf.
@@ -98,9 +97,7 @@ async def _enqueue_build(request: Request, playlist_id) -> None:
     and a note about when a change reaches a viewer.
 
     The row is durable the instant this insert commits -- there is no
-    in-memory handle to be missing here any more, unlike before this
-    plan, when the unit tests for these screens drove the app with no
-    queue object attached at all.
+    in-memory handle to be missing.
     """
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
@@ -127,7 +124,7 @@ async def create_playlist_route(
     `pick_unique_slug` against `taken_playlist_slugs` -- never `plan_slug`
     and never `taken_slugs`, the video-address machinery: `/p/` and `/v/`
     are separate namespaces under separate path prefixes, and playlists
-    keep no tombstone to check (D-103). A collision is a plain collision
+    keep no tombstone to check. A collision is a plain collision
     and gets the auto-suffix, visible and editable, with no confirmation
     step -- there is no history here to ask about reusing.
     """
@@ -164,13 +161,12 @@ def _parse_uuid(value: str) -> uuid.UUID | None:
 
 @router.get("/playlists/{playlist_id}/edit")
 async def edit_playlist_form_route(playlist_id: str, request: Request):
-    """The assembly screen's edit entry point (03-UI-SPEC.md Screen 5) --
-    name/address fields pre-filled, the timing note, the ordered member
-    list and the picker. A playlist that does not exist, or one whose
-    status is not `active`, answers 404 -- `.get("status", "active")`
-    rather than a bare index so a hand-built test double that omits the
-    field (this screen's own frozen behaviour spec does, throughout) is
-    treated as active rather than raising.
+    """The assembly screen's edit entry point -- name/address fields
+    pre-filled, the timing note, the ordered member list and the picker.
+    A playlist that does not exist, or one whose status is not `active`,
+    answers 404 -- `.get("status", "active")` rather than a bare index so
+    a hand-built test double that omits the field (this screen's own
+    tests do, throughout) is treated as active rather than raising.
     """
     parsed = _parse_uuid(playlist_id)
     if parsed is None:
@@ -281,7 +277,7 @@ async def add_playlist_item_route(
     """Append `edition_id` to the member list and redirect back to the
     assembly screen -- never a fragment body (see the module-level note
     below `move_playlist_item_route`, which every mutating route in this
-    module follows for the same reason). Repeats are allowed (D-101): no
+    module follows for the same reason). Repeats are allowed: no
     lookup here refuses an edition already present.
 
     Both identifiers arrive from the browser and both are foreign keys, so
@@ -311,7 +307,7 @@ async def add_playlist_item_route(
 async def remove_playlist_item_route(playlist_id: str, item_id: str, request: Request):
     """Remove one member and redirect back to the assembly screen.
     `queries.remove_playlist_item` scopes its DELETE to this playlist id
-    as well as the item id (T-03-18) and raises `LookupError` when the
+    as well as the item id and raises `LookupError` when the
     item belongs to a different playlist -- answered here as 404, not a
     redirect that silently changed nothing.
     """
@@ -335,7 +331,7 @@ async def move_playlist_item_route(
     playlist_id: str, item_id: str, request: Request, direction: str = Form(...)
 ):
     """One arrow click, one small POST, one redirect back to the assembly
-    screen -- the whole no-mouse baseline (D-107). This is a plain form
+    screen -- the whole no-mouse baseline. This is a plain form
     post: `static/app.js` intercepts a submit only to run a confirmation
     dialog and to disable a one-shot button, never to cancel one and swap
     markup in place, and there is no such machinery in this project to
@@ -348,7 +344,7 @@ async def move_playlist_item_route(
 
     A `direction` that is neither "up" nor "down" is ignored outright,
     before `queries.move_playlist_item` gets a chance to also treat it as
-    a no-op (T-03-19) -- belt and suspenders, cheap at this size.
+    a no-op -- belt and suspenders, cheap at this size.
     """
     parsed_playlist = _parse_uuid(playlist_id)
     parsed_item = _parse_uuid(item_id)
@@ -458,7 +454,7 @@ async def resolve_playlist_route(slug: str, request: Request):
     # the moment the operator presses delete, and there is nothing to
     # tombstone -- from outside, a deletion that can still be cancelled
     # and one that is finished look the same, which is what a namespace
-    # with no history means (D-103). Deliberately NOT the branch that
+    # with no history means. Deliberately NOT the branch that
     # answers 410 for a non-active status the way `/v/{slug}` does:
     # playlists keep no address history, so there is no tombstone to
     # answer for.
@@ -474,9 +470,9 @@ async def resolve_playlist_route(slug: str, request: Request):
 @router.get("/playlists/{playlist_id}/row")
 async def playlist_row_fragment_route(playlist_id: str, request: Request):
     """The exact row partial `library.html` includes, rendered standalone
-    for one playlist row -- the playlist-row half of the 4-second poll
-    (04-UI-SPEC.md Amendment 2), mirroring
-    `routes_titles.library_row_fragment_route` exactly: same partial, so
+    for one playlist row -- the playlist-row half of the 4-second poll,
+    mirroring `routes_titles.library_row_fragment_route` exactly: same
+    partial, so
     the polled markup and the in-page markup stay byte-identical for the
     same row. An assembly is a durable job with a percentage now, and a
     percentage nobody sees update is not live progress.
@@ -500,7 +496,7 @@ async def playlist_row_fragment_route(playlist_id: str, request: Request):
 
 @router.post("/playlists/{playlist_id}/cancel")
 async def cancel_playlist_route(playlist_id: str, request: Request):
-    """Stop an in-flight build (D-129, D-132). Unlike a title's own
+    """Stop an in-flight build. Unlike a title's own
     cancel, nothing here is hard-deleted: a playlist is a thing the
     operator made, not a byproduct of the build, and a cancelled build
     simply leaves it exactly where it was before the build started --
@@ -526,7 +522,7 @@ async def cancel_playlist_route(playlist_id: str, request: Request):
 
 @router.post("/playlists/{playlist_id}/retry")
 async def retry_playlist_route(playlist_id: str, request: Request):
-    """Build again (D-130) -- a playlist build carries no operator
+    """Build again -- a playlist build carries no operator
     choices of its own beyond the membership already saved on the
     playlist (unlike a title's remux/transcode job, which carries the
     add form's own picks), so this is exactly `_enqueue_build` again,
@@ -553,7 +549,7 @@ async def delete_playlist_route(playlist_id: str, request: Request):
     returns: the resolve route answers 404 for any status that is not
     active, so nothing there had to change.
 
-    Only an active playlist can be marked (T-03-33) -- a playlist that is
+    Only an active playlist can be marked -- a playlist that is
     not active has no live address to protect a mouse slip against.
     """
     parsed = _parse_uuid(playlist_id)
@@ -574,7 +570,7 @@ async def delete_playlist_route(playlist_id: str, request: Request):
 @router.post("/playlists/{playlist_id}/undo")
 async def undo_playlist_delete_route(playlist_id: str, request: Request):
     """Call the deletion off. Only a playlist currently pending deletion
-    may be undone (T-03-33): a stale page cannot revive one that was
+    may be undone: a stale page cannot revive one that was
     already purged, nor re-decide anything about one nobody deleted.
     """
     parsed = _parse_uuid(playlist_id)
@@ -601,7 +597,7 @@ async def purge_playlist_route(playlist_id: str, request: Request):
     is actually gone and the row is actually finished before this response
     returns, rather than sometime within the next poll.
 
-    Only a playlist already pending deletion may be purged (T-03-33):
+    Only a playlist already pending deletion may be purged:
     delete-now is reached from the countdown, which only ever shows for a
     playlist already in that state.
     """

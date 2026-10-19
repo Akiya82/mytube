@@ -1,13 +1,10 @@
-"""Folder-wide add: `GET /add-folder/{path:path}`, the confirmation screen
-this phase is named after.
+"""Folder-wide add: `GET /add-folder/{path:path}`, the confirmation screen.
 
 Shows a whole season folder as the series it would become -- one title
 (new or existing), every episode's own recognised number, one set of
 folder-wide track choices, one action for the whole folder -- before
 anything is probed beyond the click that opened it and before anything at
-all is written. The save this screen's own form points at is a later
-plan's own work; this module is the read side only, computing everything
-the template renders as plain data.
+all is written.
 
 Every rule `orchestrator.web.routes_share`'s own module docstring states
 applies here too, for the identical reason: this route shares an event
@@ -69,7 +66,7 @@ from orchestrator.web.templates import render
 
 router = APIRouter()
 
-# T-05-29: the share is a network mount that also carries every viewer's
+# The share is a network mount that also carries every viewer's
 # playback, so an unbounded burst of probes over a folder of twenty-six
 # files is the wrong default even though a single probe is cheap. Each
 # unit of work this bounds is one file's whole share of this route's own
@@ -77,9 +74,8 @@ router = APIRouter()
 # probe of every external audio candidate they turn up). Widened from the
 # preview render's own MAX_CONCURRENT_PREVIEWS=2 (a CPU-bound decode) since
 # an ffprobe header read over NFS is I/O-bound, not CPU-bound -- a starting
-# figure from 05-RESEARCH.md's own Pattern 4 assumption entry (A3), to be
-# measured against a real folder rather than trusted as a permanent
-# ceiling.
+# figure, to be measured against a real folder rather than trusted as a
+# permanent ceiling.
 MAX_CONCURRENT_FOLDER_PROBES = 6
 _PROBE_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_FOLDER_PROBES)
 
@@ -92,7 +88,7 @@ _SUBTITLE_FOLDER_NAMES = ("Subs", "Subtitles")
 
 
 def _group_key(recognised: Recognised) -> tuple[str, int | None]:
-    """D-152: files group by their own normalised name and season -- a
+    """Files group by their own normalised name and season -- a
     normalisation failure (a name that transliterates to nothing usable)
     still has to sort somewhere, so it falls back to a plain lowercase
     compare rather than raising out of a route that has not refused
@@ -120,7 +116,7 @@ def _group_files(entries, recognised_by_path: dict) -> list[list]:
 def _effective_season(group_recognised: list[Recognised], folder_name: str) -> tuple[int, str]:
     """The season this group's title carries, and where it came from.
 
-    D-152: the folder name is consulted only as the *last* source, when
+    The folder name is consulted only as the *last* source, when
     none of the group's own files carry a season at all -- every file in
     one group already shares the same season value by construction of
     `_group_key`, so the first non-`None` provenance found is the whole
@@ -137,7 +133,7 @@ def _effective_season(group_recognised: list[Recognised], folder_name: str) -> t
 
 
 def _title_name_and_explicit_slug(base_name: str, season: int) -> tuple[str, str | None]:
-    """D-150/D-151's season suffix rule: a first season carries no suffix
+    """The season suffix rule: a first season carries no suffix
     even when the release itself names it ("Horimiya" -> "horimiya"), a
     later season carries its number in both the display name and the
     address ("Mushoku Tensei S3" -> "mushoku-tensei-3"). The address
@@ -159,14 +155,13 @@ def _title_name_and_explicit_slug(base_name: str, season: int) -> tuple[str, str
 
 
 def _matches_default(default_signature, file_signatures: frozenset) -> bool:
-    """Whether one file "has" the folder-wide chosen track (D-171): true
+    """Whether one file "has" the folder-wide chosen track: true
     when there is no folder-wide choice to match at all (nothing found
     anywhere, or the default is "no subtitles"), or when this file's own
     signature set contains the chosen one. A signature is an opaque,
     hashable identity -- `("embedded", language, title)` or
     `("external", folder_label)` -- the same shape for audio and
-    subtitles, so this one function serves both track-mismatch checks
-    (Screen B item 7).
+    subtitles, so this one function serves both track-mismatch checks.
     """
     return default_signature is None or default_signature in file_signatures
 
@@ -175,8 +170,7 @@ async def _process_file(root: Path, abs_path: Path, entry, recognised: Recognise
     """Everything one file's own row needs that only a probe or a
     filesystem walk can answer -- the whole unit of work
     `MAX_CONCURRENT_FOLDER_PROBES` bounds. A failed probe keeps this file's
-    row (T-04-01's own rule, reused here): `verdict` is `None`, never a
-    raised exception reaching the route.
+    row: `verdict` is `None`, never a raised exception reaching the route.
     """
     async with _PROBE_SEMAPHORE:
         probe_json = None
@@ -196,7 +190,7 @@ async def _process_file(root: Path, abs_path: Path, entry, recognised: Recognise
         subtitle_candidates = []
         audio_candidates: list[tuple] = []
         if recognised.episode is not None:
-            # D-173: paired by the episode number in the sidecar's own
+            # Paired by the episode number in the sidecar's own
             # filename, the same folder-wide search for both kinds -- a
             # file with no recognised number has no number to pair a
             # sidecar against, so the search does not even run for it.
@@ -245,7 +239,7 @@ def _build_audio_options(file_results: list[dict]) -> list[dict]:
     """Every distinct audio source found across the whole active group,
     folded by its own signature -- an embedded track identified by its
     language and title, or a sidecar folder identified by its folder
-    label (D-171). Order is first-seen, so the folder's own default track
+    label. Order is first-seen, so the folder's own default track
     (almost always the first file's own default) sorts first and becomes
     the folder-wide default choice.
     """
@@ -291,7 +285,7 @@ def _build_subtitle_options(file_results: list[dict]) -> list[dict]:
     """The subtitle twin of `_build_audio_options` -- embedded tracks plus
     sidecar folders, folded by signature the same way. Unlike audio, the
     folder-wide default subtitle choice is "no subtitles" (matching the
-    single-file form's own opt-in default, D-140): the options built here
+    single-file form's own opt-in default): the options built here
     are what the fieldset offers, not what every row is matched against.
     """
     options: list[dict] = []
@@ -374,7 +368,7 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
     )
     already_added_by_path = {row["source_path"]: dict(row) for row in already_added_rows}
 
-    # D-160: a moved row takes no part in the folder-wide track choices and
+    # A moved row takes no part in the folder-wide track choices and
     # is never highlighted -- its edition already exists and is only being
     # repointed, so only a not-yet-added file's own probe feeds the
     # folder-wide options below.
@@ -384,7 +378,7 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
     audio_options = _build_audio_options(unmoved_results)
     subtitle_options = _build_subtitle_options(unmoved_results)
     default_audio_signature = audio_options[0]["signature"] if audio_options else None
-    # D-140: the folder-wide subtitle default is "no subtitles", exactly
+    # The folder-wide subtitle default is "no subtitles", exactly
     # as the single-file form's own default -- never an assumed burn-in.
     default_subtitle_signature = None
 
@@ -425,7 +419,7 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
             checked = False  # nothing left to do for this file
         elif moved:
             number = already_added.get("number")
-            checked = True  # D-160: "move into this series" is checked by default
+            checked = True  # "move into this series" is checked by default
         else:
             number = recognised.episode
             checked = number is not None
@@ -486,10 +480,10 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
                     not already_here and number is not None and number in taken_numbers
                 ),
                 "size_bytes": verdict.size_bytes if verdict and verdict.size_bytes else 0,
-                # The write side's own submission-preserving state (Task 1,
-                # plan 08): defaults here are exactly what the template
+                # The write side's own submission-preserving state:
+                # defaults here are exactly what the template
                 # already rendered before a refusal existed at all --
-                # "move" ticked by default (D-160), no fallback pre-picked.
+                # "move" ticked by default, no fallback pre-picked.
                 # A refused POST overrides all three from what the
                 # operator actually sent; nothing else here changes.
                 "move_checked": True,
@@ -525,7 +519,7 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
         "season": group_season,
         "season_provenance": season_provenance,
         "estimate_size_bytes": estimate_size,
-        # The write side's own state (Task 2/3): the per-file probe result
+        # The write side's own state: the per-file probe result
         # each row's own audio/subtitle choice is resolved against at save
         # time (`_resolve_audio_selection`/`_resolve_subtitle_selection`),
         # and the numbers already claimed on the target title, read inside
@@ -538,15 +532,15 @@ async def _build_rows(conn, root: Path, active_entries: list, recognised_by_path
     }
 
 
-# --- Screen B': the folder-wide edition batch (plan 11, D-176) -------------
+# --- The folder-wide edition batch -----------------------------------------
 
 
 async def _resolve_edition_mode_target(
     active_entries: list, already_added_by_path: dict
 ) -> tuple | None:
-    """The one precondition edition mode requires (D-176): every video file
+    """The one precondition edition mode requires: every video file
     directly in this listing already resolves to an episode of one and the
-    same title. Re-checked here on every GET and every POST (T-05-33) --
+    same title. Re-checked here on every GET and every POST --
     the button that links here already checked this once
     (`routes_share._folder_button_context`), but a page can sit open long
     enough for that to stop being true. Returns `(title_id, title_name)`,
@@ -570,8 +564,8 @@ async def _resolve_edition_mode_target(
 async def _build_edition_rows(
     conn, root: Path, active_entries: list, recognised_by_path: dict
 ) -> dict | None:
-    """Screen B''s whole data source: one edition slug and one default
-    checkbox for a whole season, computed once. Returns `None` when
+    """The edition screen's whole data source: one edition slug and one
+    default checkbox for a whole season, computed once. Returns `None` when
     `_resolve_edition_mode_target` refuses -- the caller renders the
     ordinary screen instead.
 
@@ -582,7 +576,7 @@ async def _build_edition_rows(
 
     Every row here already names a real episode (`already_added_by_path`),
     so there is no "moved" row, no missing/duplicate number to compute,
-    and no folder-wide default subtitle choice other than D-140's usual
+    and no folder-wide default subtitle choice other than the usual
     "no subtitles" -- narrower than `_build_rows` throughout, sharing only
     the low-level per-file helpers (`_process_file`, `_build_audio_
     options`/`_build_subtitle_options`, `_matches_default`, the two
@@ -608,14 +602,14 @@ async def _build_edition_rows(
     )
     results_by_path = {r["entry"].rel_path: r for r in results_list}
 
-    # Unlike _build_rows's own D-160 "a moved row takes no part in the
+    # Unlike _build_rows's "a moved row takes no part in the
     # folder-wide track choices", every file here participates: none of
     # them is a reparent, each is a candidate for the one new edition this
     # batch is about to add, so every file's own probe feeds the options.
     audio_options = _build_audio_options(results_list)
     subtitle_options = _build_subtitle_options(results_list)
     default_audio_signature = audio_options[0]["signature"] if audio_options else None
-    # D-140: the folder-wide subtitle default is "no subtitles", exactly as
+    # The folder-wide subtitle default is "no subtitles", exactly as
     # every other add path's own default.
     default_subtitle_signature = None
 
@@ -624,7 +618,7 @@ async def _build_edition_rows(
     existing_by_episode = {r["episode_id"]: dict(r) for r in existing_rows}
     taken_audio_languages = await queries.audio_languages_on_episodes(conn, episode_ids)
 
-    # D-177: one suggestion for the whole batch, against the first target
+    # One suggestion for the whole batch, against the first target
     # episode's own existing default edition -- the same audio/resolution/
     # subtitle/conversion difference rule the single-file form's own
     # suggestion already applies, run once here instead of once per row
@@ -643,7 +637,7 @@ async def _build_edition_rows(
         ),
         "width": representative_verdict.width if representative_verdict is not None else None,
         "height": representative_verdict.height if representative_verdict is not None else None,
-        # D-140/D-183: the folder-wide subtitle default is "no subtitles",
+        # The folder-wide subtitle default is "no subtitles",
         # so there is nothing here for the slug suggestion to differ on --
         # matching the single-file GET route's own pre-choice suggestion,
         # which never considers the convert-time codec case either (see
@@ -697,7 +691,7 @@ async def _build_edition_rows(
         slug_taken = await queries.edition_slug_taken_on_episode(
             conn, episode_id, suggested_slug
         )
-        # D-176: a problem of any of the four named kinds unticks the row by
+        # A problem of any of the four named kinds unticks the row by
         # default -- "every file participates" is the default, not a
         # constraint, but a row this screen already knows is wrong never
         # starts checked.
@@ -776,7 +770,7 @@ def _render_edition_folder_screen(
     refusal_message_key: str | None = None,
     estimate_seconds: float = 0.0,
 ):
-    """Screen B' (05-UI-SPEC.md), the GET render and the refused-POST
+    """The edition screen: the GET render and the refused-POST
     re-render both go through this one function -- the same "refusal
     re-renders this same screen with every choice preserved" mechanism
     `_render_refused_folder_screen` gives the ordinary screen, narrowed:
@@ -843,7 +837,7 @@ async def folder_confirm_route(request: Request, path: str, group: str = "", mod
 
     # `_resolve_share_path` is the identical `safe_join`-backed containment
     # check every other share route in this project runs -- a second entry
-    # point into one mechanism, not a second mechanism (T-05-27).
+    # point into one mechanism, not a second mechanism.
     try:
         target, rel_path, is_file = await _resolve_share_path(root, path)
     except ShareEscape:
@@ -862,19 +856,19 @@ async def folder_confirm_route(request: Request, path: str, group: str = "", mod
         key=lambda e: e.name.casefold(),
     )
     if len(video_entries) < MIN_VIDEO_FILES_FOR_FOLDER_ADD:
-        # The same answer an unopenable path already gives (D-166's own
-        # gate, re-checked here since the route is reachable directly by
-        # address, not only through the button that already hides itself
-        # below this bound) -- never an empty screen.
+        # The same answer an unopenable path already gives (the button's
+        # own minimum-files gate, re-checked here since the route is
+        # reachable directly by address, not only through the button that
+        # already hides itself below this bound) -- never an empty screen.
         return _unreachable_response(request, status_code=400)
 
-    # D-169: recognised once, up front -- every step below (grouping, the
+    # Recognised once, up front -- every step below (grouping, the
     # season, the title, the number) reads this same result.
     recognised_by_path = {e.rel_path: recognize_filename(e.name) for e in video_entries}
 
     groups_list = _group_files(video_entries, recognised_by_path)
 
-    # T-05-28: the group-scope query parameter is validated against the
+    # The group-scope query parameter is validated against the
     # groups this request just computed, never used as a filter
     # expression or a path -- a crafted value out of range refuses the
     # same way an unopenable path already does, selecting nothing rather
@@ -919,7 +913,7 @@ async def folder_confirm_route(request: Request, path: str, group: str = "", mod
                 settings=settings,
                 estimate_seconds=estimate_seconds,
             )
-        # D-176's own precondition (every file already an episode of one
+        # Edition mode's precondition (every file already an episode of one
         # title) stopped holding between the click and this render (a
         # stale page, or a crafted ?mode=edition) -- falls through to the
         # ordinary screen below rather than a dead end.
@@ -957,12 +951,11 @@ async def folder_confirm_route(request: Request, path: str, group: str = "", mod
         "2d",
     )
 
-    # T-05-27-adjacent, deferred here by 05-07: the as-is button's own
-    # disabled-with-reason state (05-UI-SPEC.md's folder-wide action row
-    # table), server-known and unchanged by any checkbox -- the required
-    # bytes summed once over the *initially checked* unmoved set, the same
-    # `required_free_bytes` formula every other add path shares (D-52). A
-    # moved row costs nothing here: it is a repoint, never a scratch write.
+    # The as-is button's own disabled-with-reason state, server-known and
+    # unchanged by any checkbox -- the required bytes summed once over the
+    # *initially checked* unmoved set, the same `required_free_bytes`
+    # formula every other add path shares. A moved row costs nothing here:
+    # it is a repoint, never a scratch write.
     not_enough_space = False
     required_total = sum(
         required_free_bytes(
@@ -1008,7 +1001,7 @@ async def folder_confirm_route(request: Request, path: str, group: str = "", mod
     )
 
 
-# --- The save (Task 1/2/3): validation, the write, and the move -----------
+# --- The save: validation, the write, and the move ------------------------
 
 
 def _parse_option_choice(value: str) -> tuple[str, int] | None:
@@ -1022,9 +1015,9 @@ def _parse_option_choice(value: str) -> tuple[str, int] | None:
     unlike the single-file form's `audio_choice`/`subtitle_choice`
     (`orchestrator.media.add.parse_audio_choice`/`parse_subtitle_choice`),
     which this screen does not use, since one file's embedded index can
-    differ from another's for the identical language/title signature
-    (D-171). `None` for anything malformed; the caller answers its own
-    refusal shape.
+    differ from another's for the identical language/title signature.
+    `None` for anything malformed; the caller answers its own refusal
+    shape.
     """
     if ":" not in value:
         return None
@@ -1059,20 +1052,20 @@ def _resolve_audio_selection(
     it exists in *this one file's* own probe result -- the write-time twin
     of `_file_audio_signatures`/`_build_audio_options`: the same
     (`"embedded"`, language, title) or (`"external"`, folder_label)
-    identity that matches across files by D-171's own rule can sit at a
-    different absolute stream index, or in a different sidecar file,
-    file to file, so resolving "which track" always happens against this
-    file's own probe, never the folder-wide option list directly.
+    identity that matches across files can sit at a different absolute
+    stream index, or in a different sidecar file, file to file, so
+    resolving "which track" always happens against this file's own probe,
+    never the folder-wide option list directly.
 
     `external_path` is the absolute, already-contained path
     `mytube_media.subtitles.external_audio_tracks`/`walk_sidecars` already
-    resolved (T-04-01) -- the caller still turns it into a share-relative
+    resolved -- the caller still turns it into a share-relative
     string via `relative_to_root` before it reaches a job row. Returns
     `None` when `signature` is `None` (no folder-wide choice at all) or
     cannot be found in this file's own tracks/candidates at all -- the
     caller falls back to the file's own first embedded track in that case,
     the same "something must be selected" floor the single-file form's own
-    `audio_choice` gives (D-42: never optional).
+    `audio_choice` gives (an audio choice is never optional).
     """
     if signature is None:
         return None
@@ -1095,7 +1088,7 @@ def _resolve_audio_selection(
 def _fallback_audio_selection(result: dict) -> tuple[str, int | None, str | None, int | None]:
     """The floor `_resolve_audio_selection` falls back to when a
     signature cannot be found in this file at all: this file's own first
-    embedded track, since an audio choice is never optional (D-42) and a
+    embedded track, since an audio choice is never optional and a
     file with no embedded track at all could never have been marked
     compatible to begin with.
     """
@@ -1111,7 +1104,7 @@ def _resolve_subtitle_selection(
 ) -> tuple[str, int | None, str | None]:
     """The subtitle twin of `_resolve_audio_selection`: `(kind,
     stream_index, external_path)`, `("none", None, None)` when `signature`
-    is `None` (no burn-in chosen, D-140's own default) or cannot be found
+    is `None` (no burn-in chosen, the default) or cannot be found
     in this file's own embedded/sidecar candidates at all.
     """
     if signature is None:
@@ -1148,8 +1141,8 @@ def _render_refused_folder_screen(
     active_index: int,
     group_summaries: list[dict],
 ):
-    """The refusal half of Screen B item 10: the identical screen the GET
-    route renders, with every value the operator actually submitted --
+    """The refusal half of the save: the identical screen the GET route
+    renders, with every value the operator actually submitted --
     every tick, every typed number, every folder-wide and per-row track
     choice -- carried back in place of what `_build_rows` freshly
     recognised, plus the one save-blocked sentence naming what to fix.
@@ -1255,8 +1248,8 @@ async def _handle_edition_folder_submit(
     settings,
     root: Path,
 ):
-    """The write side of Screen B' (plan 11, D-176): one edition per ticked
-    row, one ordinary job each, in a single transaction under the same
+    """The write side of the edition screen: one edition per ticked row,
+    one ordinary job each, in a single transaction under the same
     address-claim lock every other folder write already takes. Mirrors
     `folder_confirm_submit_route`'s own per-row resolution and refusal
     shape, narrowed the same way `_build_edition_rows` narrows the read
@@ -1447,7 +1440,7 @@ async def _handle_edition_folder_submit(
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock($1)", queries.SLUG_CLAIM_LOCK_KEY)
 
-        # Re-checked inside the lock (T-05-33/race safety): two folder
+        # Re-checked inside the lock: two folder
         # saves racing for the same episode and the same slug must never
         # both succeed -- the second loses the race here, the same
         # "re-check under the lock" shape create_title_with_edition's own
@@ -1522,10 +1515,10 @@ async def _handle_edition_folder_submit(
 
 @router.post("/add-folder/{path:path}")
 async def folder_confirm_submit_route(request: Request, path: str):
-    """The write this whole screen exists for (Task 2/3): validate the
-    operator's submission against the folder's own state read fresh
-    inside this request (T-05-33 -- never against what the GET route
-    computed minutes ago), then either write the whole folder -- every new
+    """The write this whole screen exists for: validate the operator's
+    submission against the folder's own state read fresh inside this
+    request (never against what the GET route computed minutes ago), then
+    either write the whole folder -- every new
     episode, every moved episode, and one ordinary job per new edition --
     in a single transaction under the address-claim lock, or refuse and
     re-render the identical screen with every choice preserved
@@ -1621,7 +1614,7 @@ async def folder_confirm_submit_route(request: Request, path: str):
             if submitted_title_mode in ("new", "existing")
             else ("existing" if built["title_match"] is not None else "new")
         )
-        # T-05-36: a crafted (or stale) existing-title mode naming a title
+        # A crafted (or stale) existing-title mode naming a title
         # that is no longer real or no longer active refuses -- checked
         # against what was just read, not what the operator's page showed.
         submitted_target_title_id = form.get("target_title_id", "")
@@ -1635,7 +1628,7 @@ async def folder_confirm_submit_route(request: Request, path: str):
         submitted_name = form.get("name", "").strip()
         submitted_slug = form.get("slug", "").strip()
 
-        # T-05-33: the folder-wide audio/subtitle choice is re-derived from
+        # The folder-wide audio/subtitle choice is re-derived from
         # the submission and re-checked against the option list this same
         # request just rebuilt -- an index out of range only ever comes
         # from a crafted request, refused outright rather than clamped.
@@ -1669,7 +1662,7 @@ async def folder_confirm_submit_route(request: Request, path: str):
                 "signature"
             ]
 
-        # D-140: a stereo source refuses a burn-in outright, the identical
+        # A stereo source refuses a burn-in outright, the identical
         # check the single-file form already makes, folder-wide here.
         if stereo_layout != "2d" and default_subtitle_signature is not None:
             return _unreachable_response(request, status_code=400)
@@ -1828,11 +1821,11 @@ async def folder_confirm_submit_route(request: Request, path: str):
         move_rows = [r for r in resolved_rows if r["ticked"] and r["moved"]]
 
         # The as-is free-space precheck, applied once over the whole
-        # ticked-and-new set (D-52) -- unchanged by 04-22's own decision
-        # that conversion carries no interface-side precheck of its own.
-        # Reachable here only by a request bypassing the already-disabled
-        # button the GET render shows for the identical condition, so a
-        # plain refusal is answered rather than a friendly re-render.
+        # ticked-and-new set; conversion carries no interface-side
+        # precheck of its own. Reachable here only by a request
+        # bypassing the already-disabled button the GET render shows for
+        # the identical condition, so a plain refusal is answered rather
+        # than a friendly re-render.
         if action == "add":
             required_total = 0
             for r in new_rows:
@@ -1911,7 +1904,7 @@ async def folder_confirm_submit_route(request: Request, path: str):
                     number=r["number"],
                 )
 
-            # One ordinary job per new edition (D-119) -- a moved row
+            # One ordinary job per new edition -- a moved row
             # enqueues nothing, nothing is being processed for it, only
             # repointed.
             for r, spec in zip(new_rows, edition_specs):

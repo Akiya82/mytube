@@ -1,13 +1,13 @@
 """Share browsing: GET /, GET /add/{path:path}, GET /lang/{code}.
 
 Every request path that turns into a filesystem call goes through
-`safe_join` first (T-02-01) -- a rejected path renders the
-"cannot reach the share" state, never a raw exception page. Breadcrumb and
-row links are always built here, from the server-validated relative path,
-never by echoing the raw request path back into a link (T-02-01).
+`safe_join` first -- a rejected path renders the "cannot reach the share"
+state, never a raw exception page. Breadcrumb and row links are always
+built here, from the server-validated relative path, never by echoing the
+raw request path back into a link.
 
-The file branch of `share_listing_route` is where `ffprobe` runs (D-56):
-once, when the add form opens, and never while drawing a listing. The
+The file branch of `share_listing_route` is where `ffprobe` runs: once,
+when the add form opens, and never while drawing a listing. The
 directory branch never imports or calls anything from
 `mytube_media.compat` for exactly that reason.
 
@@ -62,7 +62,7 @@ from orchestrator.web.templates import LOCALES, render
 
 router = APIRouter()
 
-# T-05-14's closed vocabulary for the sidecar picker route -- a kind
+# The closed vocabulary for the sidecar picker route -- a kind
 # outside this set is refused outright rather than defaulting to one of
 # the two searches.
 _PICKER_KINDS = frozenset({"subtitle", "audio"})
@@ -99,8 +99,8 @@ def _folder_href(rel_path: str) -> str:
 
 
 def _folder_button_context(rel_path: str, entries, already_added_by_path: dict) -> dict | None:
-    """`None` when the folder button does not render at all (T-05-27's own
-    gate, D-166): fewer than `MIN_VIDEO_FILES_FOR_FOLDER_ADD` video files
+    """`None` when the folder button does not render at all: fewer than
+    `MIN_VIDEO_FILES_FOR_FOLDER_ADD` video files
     directly in this listing. Otherwise the button's own label key, href
     and file count -- computed once, here, from data
     `share_listing_route` already has (its own entries and the
@@ -108,15 +108,14 @@ def _folder_button_context(rel_path: str, entries, already_added_by_path: dict) 
     gate costs no extra filesystem or database read and nothing is probed
     before the click.
 
-    D-176: the label switches to the edition-folder variant only when
+    The label switches to the edition-folder variant only when
     *every* video file in this listing already resolves to an episode of
     one and the same title -- decided here, once, as the `is_edition`
-    flag, so the gate is decided in one place even though the screen it
-    reaches is a later plan's own work.
+    flag, so the gate is decided in one place.
 
     **The href never carries the mode.** It used to have the edition mode
     appended to it as a query string, but the button is the submit of a
-    `<form method="get">` (Screen A), and a GET form discards whatever
+    `<form method="get">`, and a GET form discards whatever
     query its own action carries and rebuilds one from its own fields on
     submit -- so a query appended here never survived a click. `is_edition`
     is returned instead, and `share_listing.html` renders it as a hidden
@@ -159,10 +158,10 @@ def _folder_segments_relative_to(source: Path, candidate: Path) -> tuple[str, ..
 
 
 def _resolve_sidecar_language(*tokens: str | None) -> str | None:
-    """D-184's chain -- a tag, then a filename suffix, then folder tokens,
-    in that order -- as one call: `None` entries (a tag or suffix the
-    candidate simply does not carry) are dropped before the resolver ever
-    sees them, since `resolve_language` has no real token to check a
+    """The language chain -- a tag, then a filename suffix, then folder
+    tokens, in that order -- as one call: `None` entries (a tag or suffix
+    the candidate simply does not carry) are dropped before the resolver
+    ever sees them, since `resolve_language` has no real token to check a
     missing one against.
     """
     tag, _source_token = language_from_tokens([token for token in tokens if token])
@@ -170,7 +169,7 @@ def _resolve_sidecar_language(*tokens: str | None) -> str | None:
 
 
 def _resolve_track_kind_from_folders(folder_segments) -> str | None:
-    """D-186: signs-only versus full, read from the folder tokens between
+    """Signs-only versus full, read from the folder tokens between
     the source and the sidecar. The first token that resolves to either
     word wins; a folder that names neither is neither invented.
     """
@@ -237,13 +236,13 @@ def _unreachable_response(request: Request, status_code: int):
 
 
 async def _render_add_form(request: Request, target: Path, rel_path: str):
-    """Screen 2 (02-UI-SPEC.md): the verdict, the tracks, the address, and
-    whether this exact source has been added before. `ffprobe` runs once,
-    right here, for this one file -- D-56.
+    """The verdict, the tracks, the address, and whether this exact source
+    has been added before. `ffprobe` runs once, right here, for this one
+    file.
     """
     settings = get_settings()
     entry_name = target.name
-    # D-169: recognised once, up front -- the name field, the episode
+    # Recognised once, up front -- the name field, the episode
     # number field and the title-match lookup below all read this same
     # result, never a second parse of the same filename.
     recognised = recognize_filename(entry_name)
@@ -266,11 +265,11 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
             moov_first = False
         verdict = analyze(probe_json, moov_first=moov_first, filename=entry_name)
 
-    # External subtitle sidecars (D-122) -- a filesystem-only search, no
-    # probe needed, but scoped to a readable/probed source anyway (Screen
-    # 2 hierarchy item 2: an unprobed file shows no track picker of any
-    # kind, embedded or external). Runs off the event loop like every
-    # other filesystem walk this route makes.
+    # External subtitle sidecars -- a filesystem-only search, no probe
+    # needed, but scoped to a readable/probed source anyway (an unprobed
+    # file shows no track picker of any kind, embedded or external). Runs
+    # off the event loop like every other filesystem walk this route
+    # makes.
     root = Path(settings.share_root)
     subtitle_tracks_external: list[dict] = []
     audio_tracks_external: list[dict] = []
@@ -281,9 +280,7 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
             # Best-effort: a sidecar scan going wrong (an unreadable
             # directory, or -- in one existing test's own deliberate
             # dangerous-path double -- a stand-in object that is not a
-            # real Path) never breaks the rest of the form (T-04-01
-            # already covers the containment side of this, not the
-            # filesystem-availability side).
+            # real Path) never breaks the rest of the form.
             found = []
         for track in found:
             candidate_path = Path(track.path)
@@ -297,7 +294,7 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
                     "rel_path": rel,
                     "name": candidate_path.name,
                     "folder_label": "/".join(folder_segments),
-                    # D-184: the tag inside the file first -- a bare
+                    # The tag inside the file first -- a bare
                     # sidecar text file carries none, so only the suffix
                     # (`track.language`, `_match_sidecar`'s own raw
                     # return) and the folder tokens are real candidates
@@ -307,9 +304,9 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
                 }
             )
 
-        # External audio dubs (D-180, D-181): matched by the episode
-        # number this single file's own name recognises, the same D-173
-        # number match the folder-wide flow will later reuse. A file
+        # External audio dubs: matched by the episode number this single
+        # file's own name recognises, the same number match the
+        # folder-wide flow reuses. A file
         # nothing recognises an episode number from has no number to pair
         # a dub against, so the search is simply not run for it rather
         # than guessed -- an empty audio_tracks_external list, not an
@@ -375,14 +372,13 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         already_added_rows = await queries.editions_by_source_paths(conn, [rel_path])
         already_added = already_added_rows[0] if already_added_rows else None
 
-        # D-159: a title-level match can only ever apply to a path that
+        # A title-level match can only ever apply to a path that
         # was never added before -- once the exact source is already an
         # edition of something, that IS the match, and it is always the
         # stronger (exact-source) one of the two (the four banner states
         # are mutually exclusive by construction, not by a later check).
-        # D-169: "Clips without a number behave exactly as today" -- with
-        # no parsed episode number there is nothing to attach this file
-        # at, so the lookup does not even run.
+        # With no parsed episode number there is nothing to attach this
+        # file at, so the lookup does not even run.
         if already_added is None and recognised.episode is not None:
             try:
                 candidate_title_slug = normalize_slug(recognised.name)
@@ -395,11 +391,11 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
                     conn, title_match["title_id"], recognised.episode
                 )
 
-        # T-05-xx: the "add an edition" entry point (a click on this same
-        # page's own confirm-gate CTA, or a deep link the library's own
-        # "Add edition" action will produce in a later plan) -- a GET
-        # query param, resolved fresh against the database every time,
-        # never trusted as a bare string past this point.
+        # The "add an edition" entry point (a click on this same page's
+        # own confirm-gate CTA, or a deep link from the library's own
+        # "Add edition" action) -- a GET query param, resolved fresh
+        # against the database every time, never trusted as a bare string
+        # past this point.
         mode = "new"
         target_episode_id = None
         raw_target_episode = request.query_params.get("target_episode_id")
@@ -485,12 +481,12 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
     if settings.add_estimate_mb_per_second > 0:
         estimate_seconds = size_bytes / (settings.add_estimate_mb_per_second * 1024 * 1024)
 
-    # D-176 supersedes D-147: a title-level match cannot occur any more --
-    # every already-added source or already-taken episode number is
-    # offered as an edition instead, gating the two primary actions until
-    # the operator either accepts that offer (mode == "edition") or picks
-    # a different file. The tombstone gate only applies while a brand new
-    # title's own slug is actually being claimed (mode == "new").
+    # A title-level match cannot occur any more -- every already-added
+    # source or already-taken episode number is offered as an edition
+    # instead, gating the two primary actions until the operator either
+    # accepts that offer (mode == "edition") or picks a different file.
+    # The tombstone gate only applies while a brand new title's own slug
+    # is actually being claimed (mode == "new").
     gate_pending = (
         (already_added is not None or title_match_episode is not None) and mode != "edition"
     )
@@ -508,8 +504,8 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         verdict is not None
         and verdict.tracks
         # A conversion needs an audio track chosen exactly as a copy does
-        # (Amendment 2) -- a source with none has no add path either way
-        # (see analyze()'s own reason.no_audio branch).
+        # -- a source with none has no add path either way (see
+        # analyze()'s own reason.no_audio branch).
         and not tombstone_blocks
         and not gate_pending
     )
@@ -599,7 +595,7 @@ async def share_listing_route(request: Request, path: str = ""):
     except ShareUnavailable:
         return _unreachable_response(request, status_code=503)
 
-    # One query for the whole folder (never one per row, D-48): which of
+    # One query for the whole folder (never one per row): which of
     # these files already have an edition, keyed by source path.
     file_paths = [entry.rel_path for entry in entries if not entry.is_dir]
     pool = request.app.state.db_pool
@@ -631,7 +627,7 @@ async def share_listing_route(request: Request, path: str = ""):
 @router.get("/sidecar-picker/{path:path}")
 async def sidecar_picker_route(request: Request, path: str, kind: str = ""):
     """The candidate-list fragment for the add form's manual audio/
-    subtitle field (T-05-14): reuses the exact same walk the form itself
+    subtitle field: reuses the exact same walk the form itself
     already ran to draw the track lists -- `external_tracks` or
     `external_audio_tracks` -- never a second scan of its own. `kind` is a
     closed vocabulary (`subtitle` or `audio`); anything else is refused

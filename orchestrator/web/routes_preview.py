@@ -1,4 +1,4 @@
-"""The on-demand preview frame (CONV-04, D-125, D-126, D-140).
+"""The on-demand preview frame.
 
 `POST /preview/{path:path}` renders one real frame, with the operator's
 currently-chosen subtitle track burned in, through the exact same filter
@@ -13,8 +13,8 @@ Each render gets its own scratch directory, `previews/<token>/`, never a
 directory shared across previews: the subtitle extraction, the operator's
 external file (copied in rather than read from the share), the collected
 fonts and the frame itself all live under that one path, and nothing one
-request writes there is reachable by another (T-04-50). Bounded to two
-renders at once (`_RENDER_SEMAPHORE`, T-04-49) -- this route shares its
+request writes there is reachable by another. Bounded to two
+renders at once (`_RENDER_SEMAPHORE`) -- this route shares its
 pod with the public video address, and nothing else limits how many
 20-second CPU decodes can run at the same time.
 
@@ -24,7 +24,7 @@ fetched exactly once, by the `<img>` tag the rendered fragment carries,
 and there is nothing left to keep after that. The identifier is never a
 caller-supplied path -- it is the freshly generated name this route
 itself gave the directory when it rendered, and the route accepts only
-that shape (T-04-29). A request that never completes its own cleanup (a
+that shape. A request that never completes its own cleanup (a
 crash mid-render, a frame the browser never fetched) is caught by the
 age-based sweep below, extended to remove a stale directory the same way
 it already removes a stale file -- a backstop now, not the primary
@@ -33,8 +33,8 @@ mechanism.
 **A failed preview never blocks a conversion.** It renders the panel's own
 error state and nothing else -- a broken preview does not prove the burn
 itself will fail (a corrupt subtitle stream, an unreadable font), and
-refusing the conversion over it would trade a real capability (CONV-05/06)
-for a cosmetic one (CONV-04). The route's own POST answers `200` in every
+refusing the conversion over it would trade a real capability for a
+cosmetic one. The route's own POST answers `200` in every
 case for exactly this reason: the response is always a fragment to swap
 in, never an error page, and the fragment's own state (rendered/refused/
 error) is what tells the story.
@@ -84,7 +84,7 @@ from orchestrator.web.templates import render
 
 router = APIRouter()
 
-# T-04-29: the frame route accepts only an identifier of this shape -- the
+# The frame route accepts only an identifier of this shape -- the
 # same alphabet secrets.token_urlsafe produces -- and refuses anything
 # else outright. A generated identifier with a strict pattern needs no
 # other check to be safe to open inside the scratch directory.
@@ -92,17 +92,17 @@ _FRAME_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 
 # Generous for a real film's subprocess start-up plus one frame's worth of
 # decode -- and finite, so a genuinely wedged ffmpeg cannot occupy the api
-# pod's own request loop forever (T-04-30).
+# pod's own request loop forever.
 PREVIEW_TIMEOUT_SECONDS = 20
 
 # How long a rendered frame's own directory is kept before the sweep
 # removes it -- long enough that a slow operator still sees "Try another
 # frame" work, short enough that the scratch directory cannot grow without
-# bound across a whole evening of adds (T-04-30). The primary cleanup path
+# bound across a whole evening of adds. The primary cleanup path
 # is now per-request (see module docstring); this is its backstop.
 PREVIEW_FRAME_LIFETIME_SECONDS = 300
 
-# T-04-49: at most this many renders run at once, held across the
+# At most this many renders run at once, held across the
 # subprocess call alone -- a request that waits needs no message of its
 # own, the panel's existing loading state already covers it.
 MAX_CONCURRENT_PREVIEWS = 2
@@ -192,7 +192,7 @@ async def preview_render_route(
         return panel_error()
 
     if stereo_layout != "2d":
-        # D-140: a preview of a burn-in that will be refused is not worth
+        # A preview of a burn-in that will be refused is not worth
         # rendering -- this is the same refusal build_filter_chain would
         # raise, answered here before any process runs.
         return panel_error(state="refused")
@@ -209,7 +209,7 @@ async def preview_render_route(
     # Generated before anything is extracted, and this render's own
     # scratch directory made from it -- the extraction, the external
     # copy, the fonts and the frame all live under this one path, reached
-    # by nothing else (T-04-50). Removed in the `finally` below on every
+    # by nothing else. Removed in the `finally` below on every
     # path except a genuine render, where the frame route removes it once
     # the frame has actually been fetched.
     token = secrets.token_urlsafe(16)
@@ -246,7 +246,7 @@ async def preview_render_route(
                     return panel_error()
                 # Burn from the file this request just extracted, never
                 # from the source container -- the same single-track file
-                # the conversion will also read (CR-05).
+                # the conversion will also read.
                 subtitle_path_for_burn = str(extracted)
                 cues = cue_times(text)
                 at_seconds = first_cue_after(cues, after_seconds)

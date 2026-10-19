@@ -1,38 +1,35 @@
-"""POST of the add form and the Library screen (D-45..D-53, D-58..D-61,
-D-67, D-72).
+"""POST of the add form and the Library screen.
 
-`POST /add/{path:path}` is the confirm action Screen 2's form submits to
-(`orchestrator/web/templates/add_form.html`, built in plan 03): it writes
-the 'preparing' row and a queued `remux` job row in one transaction and
-returns immediately (D-49) -- the actual remux/upload work happens in the
-background, claimed off the durable `jobs` table by
+`POST /add/{path:path}` is the confirm action the add form submits to
+(`orchestrator/web/templates/add_form.html`): it writes the 'preparing'
+row and a queued `remux` job row in one transaction and returns
+immediately -- the actual remux/upload work happens in the background,
+claimed off the durable `jobs` table by
 `orchestrator.media.queue.run_add_consumer`, started in
 `orchestrator.main`'s lifespan.
 
-There is deliberately no `confirm_duplicate` form field: the design
-contract settles that a duplicate source path is disclosed by the share
-listing's chip and the add form's banner and is not blocked (D-48), so
-this route never looks for one -- a route that required a field no
-template produces would make adding a duplicate unreachable through the
-interface while a test that posts the field by hand would pass for
-nothing.
+There is deliberately no `confirm_duplicate` form field: a duplicate
+source path is disclosed by the share listing's chip and the add form's
+banner and is not blocked, so this route never looks for one -- a route
+that required a field no template produces would make adding a duplicate
+unreachable through the interface while a test that posts the field by
+hand would pass for nothing.
 
-The rest of this module is Screen 3 (02-UI-SPEC.md): `GET /library` (the
+The rest of this module is the Library screen: `GET /library` (the
 full page), `GET /library/{id}/row` (the same row partial, polled every 4
 seconds by `static/app.js` for an in-progress title), `GET
 /poster/{edition_id}` (the poster frame, served through the orchestrator
 rather than edge -- see that route's own docstring for why), and `POST
 /library/{id}/dismiss` (hard-deletes a failed title and frees its slug).
 
-This plan adds the three actions the row partial's states were already
-built for: `GET`/`POST /library/{id}/rename` (drives the same
+Also here: `GET`/`POST /library/{id}/rename` (drives the same
 `plan_slug`/`rename_slug` pair the CLI's own `_rename` uses, so the old
 address stays in slug_history exactly as it always has), `POST
 /library/{id}/delete`, `/undo` and `/purge` (the grace window `reaper.py`
-already runs, finally reachable from both ends), and `GET /check/{slug}`
-(Screen 4 -- a video element pointed at the public address, not a direct
-storage URL, so this page proves the whole delivery chain rather than just
-that a file exists somewhere).
+already runs, reachable from both ends), and `GET /check/{slug}` (a video
+element pointed at the public address, not a direct storage URL, so this
+page proves the whole delivery chain rather than just that a file exists
+somewhere).
 
 Every blocking call here -- the share probe, the source stat behind the
 Working estimate, the bucket listing behind the usage figure, the poster
@@ -81,13 +78,12 @@ from orchestrator.web.templates import humanize_seconds, render, resolve_lang, t
 
 
 def _resolve_signs_only(source: Path, subtitle_target: Path) -> bool | None:
-    """D-186 at add time: the first folder token between the source and
-    the chosen external subtitle file that resolves to signs-only or
-    full, or `None` when nothing in the path resolves either word -- the
-    exact same resolution `routes_share._render_add_form` already applies
-    when it draws the caption for this same file, re-run here because the
-    route validates the choice fresh rather than trusting what the form
-    last rendered (T-02-06's own discipline, applied to this new field).
+    """The first folder token between the source and the chosen external
+    subtitle file that resolves to signs-only or full, or `None` when
+    nothing in the path resolves either word -- the exact same resolution
+    `routes_share._render_add_form` already applies when it draws the
+    caption for this same file, re-run here because the route validates
+    the choice fresh rather than trusting what the form last rendered.
     """
     folder_segments = _folder_segments_relative_to(source, subtitle_target)
     for token in folder_segments:
@@ -99,7 +95,7 @@ def _resolve_signs_only(source: Path, subtitle_target: Path) -> bool | None:
 
 def _parse_optional_uuid(value: str) -> uuid.UUID | None:
     """A `target_title_id`/`target_episode_id` hidden field, re-derived and
-    re-validated on every submission (T-05-18) -- an empty, malformed, or
+    re-validated on every submission -- an empty, malformed, or
     otherwise untrustworthy value is simply "not naming a target", never
     an error the operator sees; the branch that reads it falls back to
     the new-title path exactly as if the field had never been present.
@@ -114,9 +110,9 @@ def _parse_optional_uuid(value: str) -> uuid.UUID | None:
 
 
 def _parse_episode_number(value: str) -> int | None:
-    """D-168: episode numbers stay integers. `None` for a blank field
-    (D-169's "leave blank to add as a standalone title") or anything not
-    a plain non-negative integer -- never a guess, never a raise.
+    """Episode numbers stay integers. `None` for a blank field (blank
+    means add as a standalone title) or anything not a plain
+    non-negative integer -- never a guess, never a raise.
     """
     value = (value or "").strip()
     if not value or not value.isdigit():
@@ -131,13 +127,13 @@ router = APIRouter()
 _EPOCH_FALLBACK = datetime.min.replace(tzinfo=timezone.utc)
 
 async def convert_estimate_seconds(conn, duration_seconds, settings) -> float | None:
-    """D-148's pre-start time estimate: source duration divided by the
+    """The pre-start time estimate: source duration divided by the
     median realtime factor of recent finished conversions, falling back
     to the configured constant when no conversion has finished yet. A
     median, not a mean -- one pathological source must not poison the
     estimate for weeks. Reads through `queries.median_realtime_factor`
     rather than any SQL of its own, since the query module is what owns
-    this table (D-148); this function exists so both the GET-rendered
+    this table; this function exists so both the GET-rendered
     form (`routes_share._render_add_form`) and this route's own
     free-space precheck compute the estimate identically instead of two
     slightly different formulas drifting apart.
@@ -173,17 +169,15 @@ async def add_confirm_route(
     convert: str | None = Form(None),
 ):
     """Three branches, decided by the form's own target fields, re-derived
-    and re-validated server-side, never trusted from the page that opened
-    (T-05-18): naming a real, currently-free episode number of an
-    existing title attaches a new episode to it (D-159); naming a real
-    episode adds a new edition to it (D-176); naming neither takes the
-    existing new-title branch, unchanged since before this plan except
-    that it now claims `episode_number` for its own single episode
-    instead of always claiming 1.
+    and re-validated server-side, never trusted from the page that
+    opened: naming a real, currently-free episode number of an existing
+    title attaches a new episode to it; naming a real episode adds a new
+    edition to it; naming neither takes the new-title branch, which
+    claims `episode_number` (1 when blank) for its own single episode.
 
     Within whichever branch runs, `add`/`convert` (the two buttons' own
-    `name`) still decides remux vs transcode exactly as before (D-145) --
-    a POST naming neither still takes the as-is branch, unchanged.
+    `name`) decides remux vs transcode -- a POST naming neither takes
+    the as-is branch.
     """
     settings = get_settings()
     root = Path(settings.share_root)
@@ -218,8 +212,8 @@ async def add_confirm_route(
         if not clean_name:
             return _unreachable_response(request, status_code=400)
 
-    # T-05-13: the compound audio choice is re-derived from the form on
-    # every submission, never trusted from an earlier page render -- a
+    # The compound audio choice is re-derived from the form on every
+    # submission, never trusted from an earlier page render -- a
     # submission bypassing the page's own controls gets exactly the same
     # scrutiny a normal one does.
     try:
@@ -230,10 +224,10 @@ async def add_confirm_route(
     if stereo_layout not in STEREO_LAYOUTS:
         return _unreachable_response(request, status_code=400)
 
-    # Re-probed here, not trusted from the form that opened the page
-    # (T-02-06): the embedded audio index and the subtitle choice both end
-    # up as ffmpeg stream selectors, so both are checked against the file
-    # as it is right now, not as it was when the form drew.
+    # Re-probed here, not trusted from the form that opened the page: the
+    # embedded audio index and the subtitle choice both end up as ffmpeg
+    # stream selectors, so both are checked against the file as it is
+    # right now, not as it was when the form drew.
     try:
         probe_json = await asyncio.to_thread(probe, target)
     except ProbeError:
@@ -250,7 +244,7 @@ async def add_confirm_route(
         # An external audio choice is contained against the share root the
         # same way an external subtitle choice already is, and must exist
         # right now -- a missing or out-of-bounds choice fails the request
-        # with its own refusal (T-05-16), never a silent fall back to the
+        # with its own refusal, never a silent fall back to the
         # embedded track, since the operator specifically asked for the
         # dub (add.audio_choice.missing / add.audio_choice.outside_share).
         try:
@@ -283,7 +277,7 @@ async def add_confirm_route(
         except SubtitleChoiceRefused:
             return _unreachable_response(request, status_code=400)
 
-        # D-140: a stereo source refuses a burn-in outright -- a job that
+        # A stereo source refuses a burn-in outright -- a job that
         # will refuse itself minutes later on a shared card is a waste of
         # the operator's time and the card's, so this is checked before
         # anything is queued, not left to the converter to discover.
@@ -306,7 +300,7 @@ async def add_confirm_route(
                 return _unreachable_response(request, status_code=400)
             clean_subtitle_kind = "external"
             clean_subtitle_path = relative_to_root(root, subtitle_target)
-            # D-186: the editions.subtitle_burned_signs_only column is
+            # The editions.subtitle_burned_signs_only column is
             # written below, once the edition exists, only when a folder
             # token between the source and this file actually resolved
             # one of the two words -- left unset (NULL) otherwise, since
@@ -332,7 +326,7 @@ async def add_confirm_route(
 
             edition_id = uuid.uuid4()
             object_key = f"{edition_id}.mp4"
-            # D-139: both actions carry the layout selector and both store
+            # Both actions carry the layout selector and both store
             # what it says for the as-is branch -- a file that arrives
             # already stereo-compatible takes this path, and it is the one
             # that most needs the badge. The convert branch stores its own
@@ -343,7 +337,7 @@ async def add_confirm_route(
             edition_stereo_layout = None if is_convert else stereo_layout
 
             if is_edition:
-                # D-176: an edition of an episode the operator already
+                # An edition of an episode the operator already
                 # named (this page's own confirm-gate CTA, or a deep link
                 # from the library's own "Add edition" action).
                 edition_target = await queries.episode_with_title(conn, target_episode_uuid)
@@ -373,7 +367,7 @@ async def add_confirm_route(
                 title_id = edition_target["title_id"]
 
             elif is_attach:
-                # D-159: a new episode of an existing title, at the number
+                # A new episode of an existing title, at the number
                 # the operator confirmed (or typed by hand) -- re-derived
                 # from the form field, never trusted from an earlier page
                 # render.
@@ -397,11 +391,9 @@ async def add_confirm_route(
                 title_id = target_title_uuid
 
             else:
-                # The existing new-title branch, unchanged except for one
-                # argument: the number a lone numbered file carries (D-169)
-                # now rides straight through to create_title_with_edition,
-                # which plan 02 already taught to claim it in the same
-                # transaction -- no second number claim here.
+                # The number a lone numbered file carries rides straight
+                # through to create_title_with_edition, which claims it in
+                # the same transaction -- no second number claim here.
                 try:
                     slug_plan: SlugPlan = await plan_slug(conn, clean_name, explicit_slug=slug)
                 except SlugError:
@@ -416,17 +408,17 @@ async def add_confirm_route(
                     # the CLI's --reuse-slug refuses it.
                     return _unreachable_response(request, status_code=400)
 
-                # D-147's second-edition gate, enforced here too -- a form
+                # The second-edition gate, enforced here too -- a form
                 # can be submitted with no page's own control at all, and
                 # this is the check that actually decides. Only fires when
                 # the existing edition's own kind is known and differs from
-                # the action about to be taken; a title this phase never
-                # queued a job for (edition_kind None) is not treated as a
-                # mismatch. D-176 supersedes this gate on the page itself
-                # (an exact match is now always offered as an edition, the
-                # branch above), but the check stays here, unreachable from
-                # the current UI, as a defensive re-check against a
-                # submission bypassing the page entirely.
+                # the action about to be taken; a title created without any
+                # job (edition_kind None) is not treated as a mismatch. The
+                # edition branch above supersedes this gate on the page
+                # itself (an exact match is always offered as an edition),
+                # but the check stays here, unreachable from the current
+                # UI, as a defensive re-check against a submission
+                # bypassing the page entirely.
                 existing_rows = await queries.editions_by_source_paths(conn, [rel_path])
                 existing = existing_rows[0] if existing_rows else None
                 actioned_kind = "transcode" if is_convert else "remux"
@@ -458,12 +450,12 @@ async def add_confirm_route(
                 )
 
             # The row is written and the response returns before the
-            # actual work happens (D-49) -- the durable `jobs` table row
+            # actual work happens -- the durable `jobs` table row
             # is what the matching consumer claims, not an in-memory
             # handle. Inserted inside the same transaction as the
             # title/episode/edition themselves, so a crash between the two
             # can never leave a 'preparing' row with nothing queued to
-            # work it. `make_default_when_ready` (D-178) is stored, never
+            # work it. `make_default_when_ready` is stored, never
             # applied here -- the pointer only moves once the job's own
             # terminal write finds this edition actually ready.
             if is_convert:
@@ -500,7 +492,7 @@ async def _rename_target_row(conn, title_id):
     """The one Library row a rename can act on -- reusing `queries.library_row`
     rather than a new query, since it already has everything the rename
     form needs (title name, current slug). Only an 'active' title may be
-    renamed (T-02-10): a title mid-flight, already failed, or already
+    renamed: a title mid-flight, already failed, or already
     counting down to deletion has no address worth correcting.
     """
     row = await queries.library_row(conn, title_id)
@@ -541,11 +533,11 @@ async def rename_confirm_route(
     confirm_reuse: str = Form("false"),
 ):
     """Wraps the exact same `plan_slug` / `rename_slug` pair
-    `cli/__main__.py`'s `_rename` already calls (D-63) -- nothing about
+    `cli/__main__.py`'s `_rename` already calls -- nothing about
     slug_history changes here, `rename_slug` alone still owns that. The one
     behavior `plan_slug` adds beyond the CLI's own rename (which never
-    checked for a tombstone at all, see `_rename`) is D-64: a rename onto a
-    tombstoned slug now gets the same explicit-confirmation gate the add
+    checked for a tombstone at all, see `_rename`) is that a rename onto a
+    tombstoned slug gets the same explicit-confirmation gate the add
     form's `confirm_reuse` already gives the CLI's `--reuse-slug` flag,
     rather than silently getting suffixed away by collision handling.
     """
@@ -607,7 +599,7 @@ def derive_job_ui(data: dict, settings, t) -> None:
     """Turn the raw job/converter columns `queries._LIBRARY_ROW_FROM` and
     `queries._PLAYLIST_ROW_FROM` already joined in into the one value the
     template dispatches on (`job_stage`) plus the small set of pre-
-    formatted strings it renders (04-UI-SPEC.md States -> Job progress).
+    formatted strings it renders.
     Mutates `data` in place; pure and synchronous, since every fact it
     needs already rode in on the one row query -- this only ever
     recombines them, never queries again (the same "one query per screen"
@@ -616,11 +608,11 @@ def derive_job_ui(data: dict, settings, t) -> None:
     `t` is the per-request catalog lookup `render()` builds, threaded
     down to `humanize_seconds` so the remaining-time and time-since-seen
     phrases this function pre-formats come out in the language of the
-    page being rendered, not hardcoded English (D-188 gap closure).
+    page being rendered, not hardcoded English.
 
     Shared by both row kinds (`_row_context` below and
     `routes_playlists._playlist_row_context`) -- one status model, one
-    place that reads it (D-132).
+    place that reads it.
     """
     data["job_stage"] = None
     data["job_percent"] = 0
@@ -650,7 +642,7 @@ def derive_job_ui(data: dict, settings, t) -> None:
 
     # db_stage == "queued" (or an unrecognised value -- falls back the
     # same way, never a raised error over a row the operator is looking
-    # at). Only a transcode job has a converter to wait on at all (D-113);
+    # at). Only a transcode job has a converter to wait on at all;
     # remux and playlist both run in-process the instant this service
     # itself claims them.
     if data.get("job_kind") != "transcode":
@@ -675,21 +667,20 @@ def derive_job_ui(data: dict, settings, t) -> None:
 
 
 def derive_series_ui(data: dict) -> None:
-    """Turn `library_rows`/`library_row`'s new aggregate columns
+    """Turn `library_rows`/`library_row`'s aggregate columns
     (`episode_count`, `ready_count`, `failed_count`, `job_episode_number`)
-    into what the row renders for a series (D-162/D-163). Mutates `data`
+    into what the row renders for a series. Mutates `data`
     in place, the same pure/synchronous shape `derive_job_ui` already
     establishes -- every fact this needs already rode in on the one row
     query, this only ever recombines them.
 
     `is_series` is the one flag the template actually branches on: a
-    one-episode title (a film, or any title before this phase) always has
-    `episode_count == 1` and renders exactly as it did before this plan
-    (D-162's "a film looks exactly as it does today") -- nothing else
-    this function sets is even read in that case. The three counts
-    default to the film-shaped values (1/0/0) for a row from a stub or a
-    pre-migration read that never populated them, rather than raising on
-    a missing key the way a bare `data["episode_count"]` would.
+    one-episode title (a film, or any title from before series existed)
+    always has `episode_count == 1` and renders exactly as a film always
+    did -- nothing else this function sets is even read in that case. The
+    three counts default to the film-shaped values (1/0/0) for a row from
+    a stub or a pre-migration read that never populated them, rather than
+    raising on a missing key the way a bare `data["episode_count"]` would.
     """
     data["episode_count"] = data.get("episode_count") or 1
     data["ready_count"] = data.get("ready_count") or 0
@@ -708,7 +699,7 @@ async def _row_context(conn, settings, row, t) -> dict:
     data = dict(row)
     derive_job_ui(data, settings, t)
     derive_series_ui(data)
-    # The converted-detail line's own bitrate (D-146), formatted the same
+    # The converted-detail line's own bitrate, formatted the same
     # way every other size on this row already is (`filesizeformat_binary`,
     # applied in the template) -- reusing that filter on bytes-per-second
     # rather than a new bits-per-second formatter. Only meaningful once a
@@ -728,9 +719,9 @@ def _group_episodes_by_title(rows, settings, t) -> dict:
     episode's stage chip is composed from the identical six keys a
     title's own job chip already uses), `failed` (its own default
     edition's status, the fact the episode row's failed variant and the
-    series summary's failed count both read), and `add_edition_href`
-    (plan 11, D-176): the add form's own address for this episode's
-    default edition's source file, `_href` (`routes_share.py`, the exact
+    series summary's failed count both read), and `add_edition_href`:
+    the add form's own address for this episode's default edition's
+    source file, `_href` (`routes_share.py`, the exact
     percent-encoding every other share-opened address in this project
     already goes through) plus `target_episode_id` so the form opens
     already in edition mode on the same file, one click from this row.
@@ -750,11 +741,10 @@ def _group_episodes_by_title(rows, settings, t) -> dict:
 def _group_editions_by_episode(rows) -> dict:
     """`editions_for_library`'s flat rows, turned into one list per episode
     in the creation order that query already sorted them in -- the nested
-    edition disclosure's own data source (plan 11, D-164). No `derive_job_
-    ui` here: a non-default edition's own in-flight job is the documented
-    gap 05-09's own summary already carries forward (an episode's stage
-    chip is scoped to its *default* edition only), so an edition row never
-    reads a job_stage at all.
+    edition disclosure's own data source. No `derive_job_ui` here: a
+    non-default edition's own in-flight job is a known gap (an episode's
+    stage chip is scoped to its *default* edition only), so an edition
+    row never reads a job_stage at all.
     """
     by_episode: dict = {}
     for row in rows:
@@ -770,7 +760,7 @@ async def _attach_series_episodes(
     (`derive_series_ui`'s own `is_series` flag) in the one batched
     `episodes_for_library` call this screen makes, regardless of how many
     rows are series and how many episodes any of them has. Also fetches
-    and attaches `episode["editions"]` (plan 11) for every episode whose
+    and attaches `episode["editions"]` for every episode whose
     own `edition_count` is more than one, in one further batched
     `editions_for_library` call -- an episode with a single edition never
     triggers that call's own round trip, and a screen with no such episode
@@ -781,11 +771,10 @@ async def _attach_series_episodes(
     is set at all -- true only for the full page's initial render. A poll
     fragment (`library_row_fragment_route`) passes `False`, so the
     `<details>` this function's caller renders never carries the `open`
-    attribute on a fragment (05-UI-SPEC.md Screen D item 3: the operator's
-    own choice, which `static/app.js` already copied onto the fragment
-    before the swap, must win from the first poll tick onward -- a
-    fragment that reasserted its own opinion would fight that copy on
-    every single tick).
+    attribute on a fragment (the operator's own choice, which
+    `static/app.js` already copied onto the fragment before the swap, must
+    win from the first poll tick onward -- a fragment that reasserted its
+    own opinion would fight that copy on every single tick).
     """
     series_title_ids = [row["title_id"] for row in rows if row.get("is_series")]
     raw_episodes = await queries.episodes_for_library(conn, series_title_ids)
@@ -814,7 +803,7 @@ async def _attach_series_episodes(
 
 @router.get("/library")
 async def library_route(request: Request):
-    """The library merges two sources into one newest-first list (D-108):
+    """The library merges two sources into one newest-first list:
     every video row from `library_rows` and every playlist row from
     `playlist_rows`, each tagged with a `kind` the row partial dispatches
     on. Sorting falls back to the earliest possible timestamp for a row
@@ -866,14 +855,14 @@ async def library_route(request: Request):
 @router.get("/library/{title_id}/row")
 async def library_row_fragment_route(title_id: str, request: Request):
     """The exact row partial `library.html` includes, rendered standalone
-    -- what `static/app.js` polls every 4 seconds for an in-progress row
-    (D-49). Never anything but the one `<li>` element: the poller swaps
+    -- what `static/app.js` polls every 4 seconds for an in-progress row.
+    Never anything but the one `<li>` element: the poller swaps
     only the row it fetched, so a page's scroll position and any other
     row's focus survive every poll.
 
     Never sets `episode_list_default_open` (`_attach_series_episodes`'s
     own `apply_default_open=False`): the default-open rule applies to the
-    initial page render only (05-UI-SPEC.md Screen D item 3), and the
+    initial page render only, and the
     poller in `static/app.js` already copies the operator's own open
     state onto this fragment client-side before it ever replaces the row.
     """
@@ -897,14 +886,14 @@ async def library_row_fragment_route(title_id: str, request: Request):
 
 @router.get("/poster/{edition_id}")
 async def poster_route(edition_id: str):
-    """The poster frame extracted at add time (D-72), served through the
+    """The poster frame extracted at add time, served through the
     orchestrator rather than edge: the edge blob path is bound to the
-    UUID-and-`.mp4` pattern the previous phase spent seven plans proving,
-    and widening that component to serve a thumbnail on a LAN-only page is
-    not a trade worth making for a few tens of KB.
+    UUID-and-`.mp4` pattern, and widening that component to serve a
+    thumbnail on a LAN-only page is not a trade worth making for a few
+    tens of KB.
 
-    The identifier is parsed as a UUID before any storage call (T-02-09),
-    so this route can never be turned into an arbitrary-key reader -- a
+    The identifier is parsed as a UUID before any storage call, so this
+    route can never be turned into an arbitrary-key reader -- a
     non-UUID is a 404. The object key itself is never looked up in the
     catalog: it is derived deterministically from the UUID exactly as
     `orchestrator.media.queue.process_add` names it
@@ -933,14 +922,14 @@ async def poster_route(edition_id: str):
 
 @router.post("/library/{title_id}/dismiss")
 async def dismiss_route(title_id: str, request: Request):
-    """Hard-delete a failed title and free its slug immediately (D-61):
+    """Hard-delete a failed title and free its slug immediately:
     nothing was ever published under it, so there is no old link to
     protect and no confirmation to ask for.
 
     **Objects before rows.** `queries.failed_title_object_keys` only
     reads; the objects it names are deleted here first, and only then
     does `queries.delete_failed_title` destroy the rows that were the
-    only record of those keys (T-02-08) -- a crash between the two steps
+    only record of those keys -- a crash between the two steps
     leaves the row there to retry dismiss against, rather than an object
     nothing can ever find again. `delete_object` on an already-absent key
     is a no-op, so a retry after a partial failure costs one extra S3
@@ -959,7 +948,7 @@ async def dismiss_route(title_id: str, request: Request):
             return Response(status_code=404)
         except ValueError:
             # Refused: this title is not 'failed' -- nothing was deleted,
-            # on either side (T-02-10).
+            # on either side.
             return Response(status_code=400)
 
         for key in keys:
@@ -971,9 +960,9 @@ async def dismiss_route(title_id: str, request: Request):
 
 
 async def _cancel_never_active_title(conn, title_id) -> None:
-    """The immediate half of a cancellation's hard delete (T-04-32):
-    objects before rows, the same ordering `dismiss_route` already uses
-    for the same reason (T-02-08). Swallows the guard's own refusal --
+    """The immediate half of a cancellation's hard delete: objects
+    before rows, the same ordering `dismiss_route` already uses for the
+    same reason. Swallows the guard's own refusal --
     called from more than one place (a queued cancel finishing on the
     spot here, a running job's cancel completing later through the
     worker/consumer/reaper paths this same function does not cover) and
@@ -1048,14 +1037,14 @@ async def cancel_route(title_id: str, request: Request):
 
 @router.post("/library/{title_id}/retry")
 async def retry_route(title_id: str, request: Request):
-    """Requeue a failed title with the same choices and the same address
-    (D-130): reads the failed row's own last job -- whichever kind it
+    """Requeue a failed title with the same choices and the same address:
+    reads the failed row's own last job -- whichever kind it
     was, remux or transcode -- and enqueues a fresh one carrying exactly
     the same payload, then puts the title back to 'preparing' so the row
     renders queued, visually indistinguishable from a first attempt.
 
     Only a 'failed' title has a Retry control to reach this from (the
-    same T-02-10 shape every other action route in this module already
+    same shape every other action route in this module already
     follows) -- a title in any other status is refused.
     """
     try:
@@ -1093,11 +1082,10 @@ async def retry_route(title_id: str, request: Request):
 
 @router.post("/library/{title_id}/delete")
 async def delete_route(title_id: str, request: Request):
-    """Start the grace window (D-13, D-62): `GET /v/{slug}` answers 410
-    immediately, unchanged from phase 1. Only an 'active' title can be
-    marked for deletion -- the same guard rename uses, for the same
-    reason (T-02-10): a title that is not active has no live address to
-    protect a mouse slip against.
+    """Start the grace window: `GET /v/{slug}` answers 410 immediately.
+    Only an 'active' title can be marked for deletion -- the same guard
+    rename uses, for the same reason: a title that is not active has no
+    live address to protect a mouse slip against.
     """
     try:
         parsed = uuid.UUID(title_id)
@@ -1117,9 +1105,9 @@ async def delete_route(title_id: str, request: Request):
 
 @router.post("/library/{title_id}/undo")
 async def undo_route(title_id: str, request: Request):
-    """D-62's cancel: only a title currently pending deletion may be
-    undone (T-02-10) -- a stale page cannot revive a title that was
-    already purged or was never marked for deletion in the first place.
+    """Cancel the grace window: only a title currently pending deletion
+    may be undone -- a stale page cannot revive a title that was already
+    purged or was never marked for deletion in the first place.
     """
     try:
         parsed = uuid.UUID(title_id)
@@ -1140,13 +1128,13 @@ async def undo_route(title_id: str, request: Request):
 
 @router.post("/library/{title_id}/purge")
 async def purge_route(title_id: str, request: Request):
-    """D-62's skip-the-wait: reuses `mark_for_delete` with a zero-second
+    """Skip the wait: reuses `mark_for_delete` with a zero-second
     window rather than a second deletion path (so it can never drift from
     the one the reaper already runs), then awaits one `reap_once` cycle
     inline so the object is actually gone -- and the title actually
     'deleted' -- before this response returns, rather than sometime within
     the next 30-second poll. Only a title already pending deletion may be
-    purged (T-02-10): purge is reached from the countdown UI, which only
+    purged: purge is reached from the countdown UI, which only
     ever shows for a title already in that state.
     """
     try:
@@ -1170,13 +1158,13 @@ async def purge_route(title_id: str, request: Request):
 
 @router.get("/check/{slug}")
 async def check_page_route(slug: str, request: Request):
-    """Screen 4 (D-65): a `<video>` pointed at the public address for this
-    exact slug, never a direct storage URL (T-02-12) -- the point is to
-    prove the whole delivery chain (resolve, sign, redirect, range-serve),
-    not that an object exists somewhere. A slug that does not resolve at
-    all is a 404; a slug that resolves to a non-active title renders the
-    same page with the video element omitted, since the address is real
-    but does not currently play.
+    """A `<video>` pointed at the public address for this exact slug,
+    never a direct storage URL -- the point is to prove the whole
+    delivery chain (resolve, sign, redirect, range-serve), not that an
+    object exists somewhere. A slug that does not resolve at all is a
+    404; a slug that resolves to a non-active title renders the same
+    page with the video element omitted, since the address is real but
+    does not currently play.
     """
     settings = get_settings()
     pool = request.app.state.db_pool
@@ -1189,7 +1177,7 @@ async def check_page_route(slug: str, request: Request):
     title_name = row["title_name"] if row is not None else slug
     address = f"{settings.public_base_url}/v/{slug}"
 
-    # The stereo-mode sentence (04-UI-SPEC.md Screen 4 addendum): read
+    # The stereo-mode sentence: read
     # straight off the stored edition, never re-derived here -- the
     # layout was decided once, when the file was added or converted, and
     # a page that re-derived it from the file itself could disagree with

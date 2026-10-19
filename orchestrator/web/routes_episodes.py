@@ -1,18 +1,16 @@
-"""Per-episode actions and per-episode/edition check pages (plan 10,
-D-158, D-164).
+"""Per-episode actions and per-episode/edition check pages.
 
-A twelve-episode season is twelve things that can go wrong independently
--- until this module the only controls that exist are cancel/retry/
-dismiss/delete for a whole title, which is the wrong granularity the
-moment a title holds more than one episode. Every route below is a scoped
-copy of the identical title-level route in `routes_titles.py`, keeping
-the exact protection the original has (the same countdown, the same
-confirmation, the same objects-before-rows ordering) rather than opening
-a second deletion mechanism: `mark_episode_for_delete`/
-`cancel_delete_episode`/`finish_delete_episode` are the episode-scoped
-twins plan 02 already wrote, and `reaper.reap_once` (extended by this
-plan) is the one sweep that collects both a title's own countdown and
-every episode's.
+A twelve-episode season is twelve things that can go wrong independently,
+and cancel/retry/dismiss/delete for a whole title is the wrong
+granularity the moment a title holds more than one episode. Every route
+below is a scoped copy of the identical title-level route in
+`routes_titles.py`, keeping the exact protection the original has (the
+same countdown, the same confirmation, the same objects-before-rows
+ordering) rather than opening a second deletion mechanism:
+`mark_episode_for_delete`/`cancel_delete_episode`/`finish_delete_episode`
+are the episode-scoped twins of the title-level ones, and
+`reaper.reap_once` is the one sweep that collects both a title's own
+countdown and every episode's.
 
 The two check routes are the other half: an episode or an edition's own
 verification page, reached one path segment deeper than the public
@@ -48,14 +46,14 @@ def _parse_uuid(value: str) -> uuid.UUID | None:
         return None
 
 
-# --- Task 1: an episode can be cancelled, retried and deleted on its own --
+# --- An episode can be cancelled, retried and deleted on its own ----------
 
 
 @router.post("/library/episode/{episode_id}/delete")
 async def delete_episode_route(episode_id: str, request: Request):
-    """Start the grace window on one episode alone (D-13, D-164) -- the
+    """Start the grace window on one episode alone -- the
     episode-scoped twin of routes_titles.delete_route. Only an 'active'
-    episode may be marked for deletion, the same T-02-10 guard the title-
+    episode may be marked for deletion, the same guard the title-
     level route already applies one level up: an episode already counting
     down, already failed-and-dismissable, or already gone has no live
     address to protect a mouse slip against.
@@ -77,9 +75,6 @@ async def delete_episode_route(episode_id: str, request: Request):
 
 @router.post("/library/episode/{episode_id}/undo")
 async def undo_episode_route(episode_id: str, request: Request):
-    """D-62's cancel, scoped to one episode -- only an episode currently
-    pending deletion may be undone (T-02-10).
-    """
     parsed = _parse_uuid(episode_id)
     if parsed is None:
         return Response(status_code=404)
@@ -98,14 +93,14 @@ async def undo_episode_route(episode_id: str, request: Request):
 
 @router.post("/library/episode/{episode_id}/purge")
 async def purge_episode_route(episode_id: str, request: Request):
-    """D-62's skip-the-wait, scoped to one episode: reuses
+    """Skip the wait, scoped to one episode: reuses
     `mark_episode_for_delete` with a zero-second window rather than a
     second deletion path, then awaits one `reap_once` cycle inline -- the
-    same sweep the title-level purge already awaits, extended by this
-    plan to also collect episodes -- so the object is actually gone before
-    this response returns. Only an episode already pending deletion may be
-    purged (T-02-10): purge is reached from the countdown UI, which only
-    ever shows for an episode already in that state.
+    same sweep the title-level purge already awaits, which also collects
+    episodes -- so the object is actually gone before this response
+    returns. Only an episode already pending deletion may be purged:
+    purge is reached from the countdown UI, which only ever shows for an
+    episode already in that state.
     """
     parsed = _parse_uuid(episode_id)
     if parsed is None:
@@ -199,13 +194,12 @@ async def cancel_episode_route(episode_id: str, request: Request):
 @router.post("/library/episode/{episode_id}/retry")
 async def retry_episode_route(episode_id: str, request: Request):
     """Requeue one episode's own failed edition with the same choices and
-    the same address (D-130, D-164) -- reads the failed default edition's
+    the same address -- reads the failed default edition's
     own last job and enqueues a fresh one carrying the identical payload,
     then puts that edition back to 'preparing' via `queries.requeue_edition`
     (which also lifts the *title* out of 'failed' when every episode had
     failed -- see that function's own docstring). Only an episode whose
-    own default edition is 'failed' has a Retry control to reach this from
-    (T-02-10, one level down).
+    own default edition is 'failed' has a Retry control to reach this from.
     """
     parsed = _parse_uuid(episode_id)
     if parsed is None:
@@ -243,18 +237,18 @@ async def retry_episode_route(episode_id: str, request: Request):
 @router.post("/library/episode/{episode_id}/dismiss")
 async def dismiss_episode_route(episode_id: str, request: Request):
     """Hard-delete a failed episode and free every address it held
-    immediately (D-61, D-164): nothing was ever published for it, so
+    immediately: nothing was ever published for it, so
     there is no old link to protect and no confirmation to ask for.
 
     **Objects before rows**, the same ordering
-    routes_titles.dismiss_route already establishes for the same reason
-    (T-02-08): `queries.episode_object_keys` only reads, the objects it
+    routes_titles.dismiss_route already establishes for the same reason:
+    `queries.episode_object_keys` only reads, the objects it
     names are deleted here first, and only then does
     `queries.finish_delete_episode` remove or tombstone the rows that were
     the only record of those keys. Only an episode whose own default
-    edition is 'failed' may be dismissed (T-02-10, one level down).
-    `sync_title_status` re-derives the title's own aggregate afterwards,
-    the single place that rule lives (D-157).
+    edition is 'failed' may be dismissed. `sync_title_status` re-derives
+    the title's own aggregate afterwards, the single place that rule
+    lives.
     """
     parsed = _parse_uuid(episode_id)
     if parsed is None:
@@ -276,13 +270,13 @@ async def dismiss_episode_route(episode_id: str, request: Request):
     return RedirectResponse("/library", status_code=302)
 
 
-# --- Plan 11: an edition can be made default, cancelled, and deleted on its
-# --- own, one level down from the episode routes above ---------------------
+# --- An edition can be made default, cancelled, and deleted on its own,
+# --- one level down from the episode routes above --------------------------
 
 
 @router.post("/library/edition/{edition_id}/make-default")
 async def make_default_edition_route(edition_id: str, request: Request):
-    """Move an episode's default-edition pointer to `edition_id` (D-178) --
+    """Move an episode's default-edition pointer to `edition_id` --
     the operator's own explicit "Make default" click, the only other
     caller of `queries.set_default_edition` besides a job's own terminal
     write with `make_default_when_ready` set. Refused for anything but a
@@ -306,11 +300,11 @@ async def make_default_edition_route(edition_id: str, request: Request):
 
 @router.post("/library/edition/{edition_id}/delete")
 async def delete_edition_route(edition_id: str, request: Request):
-    """Start the grace window on one non-default edition alone (D-178) --
+    """Start the grace window on one non-default edition alone --
     the edition-scoped twin of `delete_episode_route`, one level down.
     Refused for the default edition (the control is disabled with its
-    reason in the template, but the server refuses a crafted POST too,
-    T-05-43) and for anything not currently `active`: a still-converting
+    reason in the template, but the server refuses a crafted POST too)
+    and for anything not currently `active`: a still-converting
     or already-failed non-default edition has no live address this
     countdown protects.
     """
@@ -331,9 +325,6 @@ async def delete_edition_route(edition_id: str, request: Request):
 
 @router.post("/library/edition/{edition_id}/undo")
 async def undo_edition_route(edition_id: str, request: Request):
-    """D-62's cancel, scoped to one edition -- only an edition currently
-    pending deletion may be undone.
-    """
     parsed = _parse_uuid(edition_id)
     if parsed is None:
         return Response(status_code=404)
@@ -352,13 +343,13 @@ async def undo_edition_route(edition_id: str, request: Request):
 
 @router.post("/library/edition/{edition_id}/purge")
 async def purge_edition_route(edition_id: str, request: Request):
-    """D-62's skip-the-wait, scoped to one edition: reuses
+    """Skip the wait, scoped to one edition: reuses
     `mark_edition_for_delete` with a zero-second window rather than a
     second deletion path, then awaits one `reap_once` cycle inline -- the
-    same sweep the title- and episode-level purges already await, extended
-    by this plan to also collect editions -- so the object is actually
-    gone before this response returns. Only an edition already pending
-    deletion may be purged.
+    same sweep the title- and episode-level purges already await, which
+    also collects editions -- so the object is actually gone before this
+    response returns. Only an edition already pending deletion may be
+    purged.
     """
     parsed = _parse_uuid(edition_id)
     if parsed is None:
@@ -379,19 +370,19 @@ async def purge_edition_route(edition_id: str, request: Request):
 
 
 # --- An episode's own number can be corrected without breaking its own
-# --- link (D-161), and a standalone one-episode title can move into a
-# --- series from the library (D-160) ---------------------------------------
+# --- link, and a standalone one-episode title can move into a series
+# --- from the library ------------------------------------------------------
 
 
 async def _renumber_target_row(conn, episode_id) -> dict | None:
-    """The renumber form's own read (Screen F), fresh on every request
-    (T-05-43): only an episode whose own status is 'active', belonging to
-    a title that is itself 'active', has a live numbered address worth
-    correcting -- the same T-02-10 guard `routes_titles._rename_target_
-    row` already applies one action over. `queries.episode_with_title`
-    gives the episode's own current number and title id; `queries.
-    library_row` gives that title's own current slug and status -- no
-    single existing query carries both facts together.
+    """The renumber form's own read, fresh on every request: only an
+    episode whose own status is 'active', belonging to a title that is
+    itself 'active', has a live numbered address worth correcting -- the
+    same guard `routes_titles._rename_target_row` already applies one
+    action over. `queries.episode_with_title` gives the episode's own
+    current number and title id; `queries.library_row` gives that title's
+    own current slug and status -- no single existing query carries both
+    facts together.
     """
     row = await queries.episode_with_title(conn, episode_id)
     if row is None or row["episode_status"] != "active":
@@ -409,10 +400,10 @@ async def _renumber_target_row(conn, episode_id) -> dict | None:
 
 @router.get("/library/episode/{episode_id}/renumber")
 async def renumber_form_route(episode_id: str, request: Request):
-    """Screen F (05-UI-SPEC.md): the episode's current address, its number
-    field prefilled with its own current number, and a preview of the
-    resulting address, all rendered before anything is saved -- address
-    continuity is the whole point of this form (D-161).
+    """The episode's current address, its number field prefilled with its
+    own current number, and a preview of the resulting address, all
+    rendered before anything is saved -- address continuity is the whole
+    point of this form.
     """
     parsed = _parse_uuid(episode_id)
     if parsed is None:
@@ -444,18 +435,17 @@ async def renumber_confirm_route(
     number: str = Form(""),
     confirm_reuse: str = Form("false"),
 ):
-    """Save Screen F (D-161, T-05-53): claim the new number through
-    `queries.renumber_episode`, which never deletes the superseded
-    `episode_number_history` row -- the old number keeps resolving to
-    this same episode until a different episode's own later claim
-    outranks it (the identical newest-wins rule slug reuse already
-    follows).
+    """Claim the new number through `queries.renumber_episode`, which
+    never deletes the superseded `episode_number_history` row -- the old
+    number keeps resolving to this same episode until a different
+    episode's own later claim outranks it (the identical newest-wins rule
+    slug reuse already follows).
 
     Refuses inline when a sibling episode currently holds the submitted
     number. Gates, rather than refuses, a number that is only a sibling's
     **former** number: the tombstone-shaped warning banner, unlocked by
     the same `confirm_reuse` hidden-field mechanic a reused slug already
-    uses (D-10). The gate is enforced here, in the route, before
+    uses. The gate is enforced here, in the route, before
     `queries.renumber_episode` is ever called -- never only by which
     banner the template happens to show.
     """
@@ -519,11 +509,10 @@ async def renumber_confirm_route(
 
 
 async def _move_target_row(conn, title_id) -> dict | None:
-    """The move form's own target row (Screen G, D-160), fresh on every
-    request (T-05-43): only a standalone, one-episode, 'active' title has
-    a live "Move into title..." action to reach this from -- the same
-    T-02-10 guard `_renumber_target_row` above already applies to a
-    sibling action.
+    """The move form's own target row, fresh on every request: only a
+    standalone, one-episode, 'active' title has a live "Move into
+    title..." action to reach this from -- the same guard
+    `_renumber_target_row` above already applies to a sibling action.
     """
     row = await queries.library_row(conn, title_id)
     if row is None or row["title_status"] != "active" or (row["episode_count"] or 1) != 1:
@@ -554,10 +543,10 @@ async def _render_move_form(
     error_key: str | None = None,
     slug_plan=None,
 ) -> Response:
-    """Shared render for Screen G's not-done state -- the GET route's
+    """Shared render for the move form's not-done state -- the GET route's
     first render and every re-render a POST refusal produces. The
     recogniser is re-run over the edition's own stored `source_path` and
-    the candidate list is re-read on every call (T-05-43): a fresh
+    the candidate list is re-read on every call: a fresh
     server-side read decides what the page offers, never the client's own
     submitted values alone (those only fill in what the operator was
     already typing, via the `*_value`/`mode`/`selected_target_title_id`
@@ -621,13 +610,13 @@ async def move_form_route(
     number: str | None = None,
     target_title_id: str | None = None,
 ):
-    """Screen G (05-UI-SPEC.md): arrives prefilled from the recogniser run
-    over the edition's own stored source file (D-160). Every field name
-    read here as a query parameter is the identical name the POST form
-    below reads from its body -- the "Filter titles" button overrides the
-    form's own method to `get` (native `formmethod`, no script), so a
-    filter submission is a plain browser GET carrying the form's whole
-    current state, this route's own job is only to echo it back.
+    """Arrives prefilled from the recogniser run over the edition's own
+    stored source file. Every field name read here as a query parameter
+    is the identical name the POST form below reads from its body -- the
+    "Filter titles" button overrides the form's own method to `get`
+    (native `formmethod`, no script), so a filter submission is a plain
+    browser GET carrying the form's whole current state, this route's own
+    job is only to echo it back.
     """
     parsed = _parse_uuid(title_id)
     if parsed is None:
@@ -662,15 +651,15 @@ async def move_confirm_route(
     filter: str = Form(""),
     confirm_reuse: str = Form("false"),
 ):
-    """Save Screen G (D-160, T-05-54): writes through the identical
-    `queries.reparent_edition_to_episode` transaction the folder screen's
-    own single-row move already calls (T-05-37) -- one implementation,
-    two callers, and neither the object key nor the bytes it names are
-    ever touched. The existing-title branch re-reads the submitted target
-    title inside this same request and requires it to still be `active`
-    before repointing anything (T-05-54); the new-title branch creates a
-    bare, already-`active` title first (`queries.create_title_shell`)
-    then repoints into it exactly the same way.
+    """Writes through the identical `queries.reparent_edition_to_episode`
+    transaction the folder screen's own single-row move already calls --
+    one implementation, two callers, and neither the object key nor the
+    bytes it names are ever touched. The existing-title branch re-reads
+    the submitted target title inside this same request and requires it
+    to still be `active` before repointing anything; the new-title branch
+    creates a bare, already-`active` title first
+    (`queries.create_title_shell`) then repoints into it exactly the same
+    way.
     """
     parsed = _parse_uuid(title_id)
     if parsed is None:
@@ -773,15 +762,15 @@ async def move_confirm_route(
     )
 
 
-# --- Task 2: a check page for every episode and every edition --------------
+# --- A check page for every episode and every edition ----------------------
 
 
 def _layout_hint_key(stereo_layout: str | None) -> str | None:
-    """The stereo-mode sentence's own catalog key (04-UI-SPEC.md Screen 4
-    addendum), read straight off the resolved edition rather than
-    re-derived from the file -- the identical rule
-    routes_titles.check_page_route already applies to a title's default
-    edition, applied here to whichever edition this exact address names.
+    """The stereo-mode sentence's own catalog key, read straight off the
+    resolved edition rather than re-derived from the file -- the
+    identical rule routes_titles.check_page_route already applies to a
+    title's default edition, applied here to whichever edition this exact
+    address names.
     """
     if stereo_layout and stereo_layout.startswith("sbs"):
         return "check.layout_hint.sbs"
@@ -801,12 +790,12 @@ async def _render_episode_check(
 ) -> Response:
     """Shared body of both routes below -- an episode's own check page, or
     an edition's, reached one path segment apart. Mirrors
-    routes_titles.check_page_route's own shape (D-65: the video points at
-    the public address, never a direct storage URL) one level down, and
+    routes_titles.check_page_route's own shape (the video points at the
+    public address, never a direct storage URL) one level down, and
     reuses that exact template rather than a second one.
 
     The navigation walks every episode of the title in number order,
-    ready or not (D-158): no ready range is computed anywhere, so the
+    ready or not: no ready range is computed anywhere, so the
     links can never skip an episode the operator wanted to look at. It
     renders only when the title has more than one episode -- a film's
     check page (bare, or its own edition address) never gets it.
@@ -862,8 +851,8 @@ async def check_episode_route(slug: str, segment: str, request: Request):
     """A numbered episode's check page (.../check/{slug}/{number}), or a
     film's own alternative edition's (.../check/{slug}/{edition_slug}) --
     decided by `parse_public_address` from `segment`'s own shape, the
-    identical grammar `orchestrator.resolve`'s public route reads (D-156,
-    D-158), so a check address and a playing address can never disagree
+    identical grammar `orchestrator.resolve`'s public route reads, so a
+    check address and a playing address can never disagree
     about what a segment means. Stays behind the session gate: the check
     page is the operator's own verification step and has never been
     public.
@@ -903,7 +892,7 @@ async def check_episode_route(slug: str, segment: str, request: Request):
 async def check_episode_edition_route(
     slug: str, number: str, edition_slug: str, request: Request
 ):
-    """An episode's own alternative edition's check page (D-158) -- the
+    """An episode's own alternative edition's check page -- the
     three-segment address a series episode gets once it, too, carries more
     than one edition. Read through `parse_public_address` exactly as the
     two-segment route above is.

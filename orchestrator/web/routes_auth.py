@@ -146,7 +146,7 @@ async def login_form_route(request: Request):
 
 async def _reject_login(request: Request, username: str, next_value: str):
     """The one failure branch both a wrong credential and a `create_session`
-    race land on (D-80): identical message, identical delay, whichever
+    race land on: identical message, identical delay, whichever
     reason produced it. Logs the submitted username through `%r` (never
     bare -- `repr` escapes newlines, and an unescaped value in a log line
     is how a caller writes their own log entries), then sleeps the
@@ -255,7 +255,7 @@ async def login_submit_route(
 
 @router.post("/logout")
 async def logout_route(request: Request):
-    """Ends this device's session and no other (D-82) -- the CLI reset is
+    """Ends this device's session and no other -- the CLI reset is
     the answer to a lost device, and a sign-out-everywhere button would be
     a new screen element for a situation a single operator meets once.
     Not in the public path list, so it already requires a session to

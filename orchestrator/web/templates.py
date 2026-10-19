@@ -20,8 +20,8 @@ _CATALOGS: dict[str, dict[str, str]] = {
 
 # Never pass autoescape=False here, and never flip an environment option
 # that would disable it -- Jinja2Templates leaves autoescaping at its
-# default, which is what keeps every raw, unsanitized filename this phase
-# renders (D-46) inert text instead of live HTML (T-02-02).
+# default, which is what keeps every raw, unsanitized filename it renders
+# inert text instead of live HTML.
 _templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
@@ -92,8 +92,8 @@ def humanize_seconds(seconds, t) -> str:
 
 
 def pad_episode_number(value) -> str:
-    """The renumber and move forms' own display filter for D-155's
-    canonical zero-padded number -- every address either form prints goes
+    """The renumber and move forms' own display filter for the canonical
+    zero-padded number -- every address either form prints goes
     through this, never the raw column value. Tolerant of a value that
     is not a plain non-negative integer (a form re-rendering a refused,
     still-being-typed number) rather than raising mid-template: an address

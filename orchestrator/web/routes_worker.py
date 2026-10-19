@@ -1,10 +1,10 @@
 """The converter's only way to reach the queue.
 
-The database is not reachable from where the converter runs (D-110): a
+The database is not reachable from where the converter runs: a
 worker on `ml-server` talks to this process, over the interface's own
 hostname, under this one prefix, and nothing else. The video bytes never
 pass through here either -- the converter uploads them straight to storage
-with its own scoped credential (D-115); only claims, heartbeats and
+with its own scoped credential; only claims, heartbeats and
 outcomes cross this boundary.
 
 **The authorization rule, stated as a rule.** This prefix is opened by its
@@ -34,9 +34,9 @@ from orchestrator.storage import delete_object, invalidate_usage_cache
 logger = logging.getLogger(__name__)
 
 WORKER_PREFIX = "/worker/"
-# Raised to 3 in this change: the claim response grew `external_audio_path`
-# (D-180), a field an older converter does not read and a newer one
-# requires. The two images are non-interoperable across this bump -- the
+# Raised to 3 when the claim response grew `external_audio_path`, a field
+# an older converter does not read and a newer one requires. The two
+# images are non-interoperable across this bump -- the
 # converter is built from source on the GPU host by
 # `docker-compose.worker.yml`, not pulled from the registry alongside the
 # interface, so until it is rebuilt from the same commit it exits at its
@@ -44,9 +44,9 @@ WORKER_PREFIX = "/worker/"
 WORKER_PROTOCOL_VERSION = 3
 
 # The dotted catalog keys a converter is allowed to report on
-# POST .../failed. Anything else is refused (T-04-07) -- this is what keeps
+# POST .../failed. Anything else is refused -- this is what keeps
 # a converter's own text out of the sentence an operator reads. The five
-# reasons from gpu_out_of_memory through disk_full are this phase's own;
+# reasons from gpu_out_of_memory through disk_full are the converter's own;
 # crashed_converter is written by the reaper's stale-heartbeat sweep
 # (orchestrator.reaper), not by the converter itself, but belongs in the
 # same vocabulary; upload and unknown are the general-purpose fallbacks
@@ -69,7 +69,7 @@ ALLOWED_FAILURE_REASONS: frozenset[str] = frozenset(
 async def require_worker_token(
     authorization: str | None = Header(default=None),
 ) -> None:
-    """The one credential check for the whole router (D-111).
+    """The one credential check for the whole router.
 
     Compares the presented value against the configured one with the same
     constant-time, byte-encoded comparison `routes_auth._setup_token_valid`
@@ -100,28 +100,28 @@ class _WorkerRequest(BaseModel):
 
 class ClaimBody(_WorkerRequest):
     # 'idle' (ready for work) or 'waiting_for_gpu' (the shared card is
-    # below the free-memory floor, D-113) -- what worker_checkins.status
+    # below the free-memory floor) -- what worker_checkins.status
     # records on every claim, whether or not it finds work. Enumerated
-    # (WR-05/IN-13) rather than a free string: any other value would
+    # rather than a free string: any other value would
     # otherwise reach the column's own CHECK constraint and come back as
     # an unrelated database error instead of a 422 naming the field.
     status: Literal["idle", "waiting_for_gpu"] = "idle"
 
 
 class HeartbeatBody(_WorkerRequest):
-    # Bounded rather than a bare int (WR-05): the second and third
+    # Bounded rather than a bare int: the second and third
     # attempts at the same job are real, but nothing legitimate ever
     # claims a job for the zeroth or a negative time.
     attempt: int = Field(ge=1)
-    # Enumerated against `jobs.stage`'s own CHECK constraint (WR-05/
-    # IN-13): 'queued' and 'cancelling' are never valid heartbeat stages
+    # Enumerated against `jobs.stage`'s own CHECK constraint: 'queued'
+    # and 'cancelling' are never valid heartbeat stages
     # (a heartbeat only ever reports the two states a worker itself
     # observes itself in), so a converter that sends either -- or a typo
     # -- is refused by name here rather than reaching the constraint and
     # coming back as a 404 with a stack trace logged on every request.
     stage: Literal["working", "uploading"]
-    # A credential holder can reach this route with numbers alone
-    # (T-04-57): every bound below exists because the value is stored
+    # A credential holder can reach this route with numbers alone:
+    # every bound below exists because the value is stored
     # unguarded and then rendered unguarded, on the library page every
     # operator watches. `allow_inf_nan=False` refuses NaN/inf, which
     # `derive_job_ui`'s own `int(round(progress))` cannot survive.
@@ -133,13 +133,12 @@ class HeartbeatBody(_WorkerRequest):
 class DoneBody(_WorkerRequest):
     """The success report. Every field from `source_codec` onward is
     explicit and carries no default -- a converter that omits a key is
-    refused rather than answered as if it had sent a plausible value
-    (T-04-58's own prohibition against a fabricated fact).
+    refused rather than answered as if it had sent a plausible value --
+    a report never carries a fabricated fact.
 
     Which fields may still carry an explicit `null` is a decision, stated
-    here rather than left to be inferred from the type alone (recorded
-    for the next plan's own converter-side model in this plan's own
-    Summary): `size_bytes`, `duration_seconds`, `width`, `height` and
+    here rather than left to be inferred from the type alone:
+    `size_bytes`, `duration_seconds`, `width`, `height` and
     `audio_reencoded` are facts every conversion always knows, so they
     have no `| None` at all -- a report missing one of them is refused,
     never silently written as absent. `source_codec`, `fps`,
@@ -162,13 +161,13 @@ class DoneBody(_WorkerRequest):
     attempt: int = Field(ge=1)
     object_key: str
 
-    # --- what the source was, and what was done to it (D-146) ---------
+    # --- what the source was, and what was done to it ------------------
     source_codec: str
     source_profile: str | None
     subtitle_burned_language: str | None
     subtitle_burned_title: str | None
 
-    # --- what the stored object is (D-60, WR-08) -----------------------
+    # --- what the stored object is -------------------------------------
     size_bytes: int = Field(gt=0, le=10_000_000_000_000)
     duration_seconds: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
     width: int = Field(gt=0, le=100_000)
@@ -228,10 +227,10 @@ async def claim_route(request: Request, body: ClaimBody):
     one, and handing it work anyway would burn one of that job's three
     attempts on a condition that resolves itself.
 
-    Carries only the operator's own choices (D-119): the job id, the
+    Carries only the operator's own choices: the job id, the
     attempt, the kind, the catalog identifiers, the destination object
     key, the source path, the chosen audio stream, the external audio
-    choice (D-180), the subtitle choice and the stereo layout. Nothing
+    choice, the subtitle choice and the stereo layout. Nothing
     derived -- no encoder flags, no filter string, no built command. The
     converter re-reads the source file at
     the moment it starts and builds its own command with the same shared
@@ -243,8 +242,8 @@ async def claim_route(request: Request, body: ClaimBody):
     should never see a stack trace for a condition that resolves itself on
     the next poll.
 
-    The claim and the object-key lookup run inside one transaction
-    (IN-10): a failure between them used to leave the row `running` with
+    The claim and the object-key lookup run inside one transaction:
+    a failure between them used to leave the row `running` with
     no worker, burning one of the job's three attempts for nothing until
     the stale sweep resolved it 360 seconds later. Wrapping them means
     that failure rolls the claim back too, and the tolerance above still
@@ -360,12 +359,12 @@ async def _reject_superseded(pool, job_id: uuid.UUID, *, delete_key: bool) -> JS
     It knows the object key from the job row -- looked up here, never
     trusted from the request that was just refused -- and it holds the
     bucket's full credential; the converter's own storage account is
-    scoped to put and abort-multipart, with no delete beyond its own keys
-    (D-115), so asking it to clean up would either fail against its own
+    scoped to put and abort-multipart, with no delete beyond its own keys,
+    so asking it to clean up would either fail against its own
     policy or force that policy open. The converter's only remaining duty
     is to abort any multipart upload of its own that is still dangling.
 
-    **Never deletes when the job is already `done` (CR-03(b)).** Both
+    **Never deletes when the job is already `done`.** Both
     attempts of a job write the same object key, so a late report from an
     earlier attempt against a job a different attempt already finished
     points at the object an active title is serving right now, not at an
@@ -405,8 +404,8 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
     The read and every write below -- the job row, the terminal write,
     and, only when it wrote and the job carries a title, the title's own
     flip to active plus the conversion detail, the technical detail and
-    the poster key -- run inside one transaction on one connection
-    (CR-03(a)): all six commit together or none does. A superseded report
+    the poster key -- run inside one transaction on one connection: all
+    six commit together or none does. A superseded report
     (the terminal write's own clean `False`, no exception) is refused with
     the orphan already deleted (see `_reject_superseded`) -- a late report
     from an attempt the reaper has already requeued must never mark a
@@ -414,8 +413,7 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
     condition and gets a different answer: a server error, never a
     conflict, and no delete -- a conflict is the converter's signal to
     clean up and stop, and it must never be the answer to a transient
-    database error that would have resolved on a retry (the converter's
-    own retry of a 5xx is the next plan's own change).
+    database error that would have resolved on a retry.
     """
     mismatch = _protocol_mismatch(body.protocol)
     if mismatch is not None:
@@ -477,7 +475,7 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
                         await queries.set_edition_poster(
                             conn, job_row["edition_id"], body.poster_key
                         )
-                    # D-157/D-178: the edition this job produced lands on
+                    # The edition this job produced lands on
                     # 'active' (not the title directly), the default
                     # pointer moves only when this job's own creation
                     # asked for it, and the title's own aggregate status
@@ -496,7 +494,7 @@ async def done_route(job_id: uuid.UUID, request: Request, body: DoneBody):
     if not wrote:
         return await _reject_superseded(pool, job_id, delete_key=True)
     # The converter uploads the object with its own client in its own
-    # pod (D-115) -- this process's cached bucket listing has never seen
+    # pod -- this process's cached bucket listing has never seen
     # that key, and this report is the first moment this process can know
     # the bucket changed. Called only on this accepted branch, after the
     # write committed: a rolled-back write above must not throw away a
@@ -512,9 +510,9 @@ async def failed_route(job_id: uuid.UUID, request: Request, body: FailedBody):
     """A conversion the converter gave up on. `reason_key` must be one of
     `ALLOWED_FAILURE_REASONS` -- checked before the database is touched at
     all, so a converter's own text can never reach the sentence an
-    operator reads (T-04-07).
+    operator reads.
 
-    Shares `done_route`'s own shape (CR-03): the terminal write and the
+    Shares `done_route`'s own shape: the terminal write and the
     title's own flip to failed run inside one transaction, and a raised
     exception answers a server error rather than a conflict -- the same
     reasoning, since this route answered a conflict for a write that had
@@ -548,7 +546,7 @@ async def failed_route(job_id: uuid.UUID, request: Request, body: FailedBody):
                     # call above.
                     await queries.record_worker_seen(conn, worker_name=body.worker, status="idle")
                 if wrote and job_row is not None and job_row["title_id"] is not None:
-                    # D-157: the edition this job would have produced is
+                    # The edition this job would have produced is
                     # what actually fails; the title's own aggregate
                     # status is recomputed from the whole season, exactly
                     # as the done path recomputes it on success.
@@ -565,8 +563,8 @@ async def failed_route(job_id: uuid.UUID, request: Request, body: FailedBody):
     if not wrote:
         return await _reject_superseded(pool, job_id, delete_key=False)
     # Same reasoning as done_route's own call above -- and this branch
-    # matters in particular: the poster is uploaded before the video
-    # (D-115), so a conversion that dies during the video transfer has
+    # matters in particular: the poster is uploaded before the video, so
+    # a conversion that dies during the video transfer has
     # already put an object in the bucket, and this failure report is
     # the only announcement of it. This direction only ever under-reports
     # for up to a minute, never claims a delete failed, which is why it
@@ -580,7 +578,7 @@ async def cancelled_route(job_id: uuid.UUID, request: Request, body: CancelledBo
     """Confirms a cancellation the worker learned of from an earlier
     heartbeat's own answer.
 
-    A cancelled transcode's title never went live (T-04-32), so the row
+    A cancelled transcode's title never went live, so the row
     is hard-deleted here with no tombstone, the exact same
     `queries.delete_never_active_title` call
     `orchestrator.media.queue`'s own cancellation cleanup and
