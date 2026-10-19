@@ -1,6 +1,7 @@
 import functools
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -34,6 +35,41 @@ def _docker_daemon_reachable() -> bool:
         return True
     except Exception:
         return False
+
+
+def _ffmpeg_has_subtitles_filter() -> bool:
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+    except Exception:
+        return False
+    return re.search(r"^\s*\S+\s+subtitles\s", out, re.MULTILINE) is not None
+
+
+def pytest_configure(config):
+    """With MYTUBE_REQUIRE_INTEGRATION set, an environment that would turn
+    integration tests into skips aborts the session instead, so a runner
+    cannot report green having run nothing.
+    """
+    if not os.environ.get("MYTUBE_REQUIRE_INTEGRATION"):
+        return
+    missing = []
+    if not _docker_daemon_reachable():
+        missing.append("a reachable Docker daemon")
+    for binary in ("ffmpeg", "ffprobe"):
+        if shutil.which(binary) is None:
+            missing.append(f"{binary} on PATH")
+    if shutil.which("ffmpeg") and not _ffmpeg_has_subtitles_filter():
+        missing.append("an ffmpeg with the subtitles filter (built with libass)")
+    if missing:
+        raise pytest.UsageError(
+            "MYTUBE_REQUIRE_INTEGRATION is set but the environment lacks: "
+            + "; ".join(missing)
+        )
 
 
 def pytest_collection_modifyitems(config, items):
