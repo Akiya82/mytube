@@ -1,5 +1,5 @@
-"""cache-report: turn the D-28 cache criterion into a command with an exit
-code (D-29), instead of a phrase someone eyeballs at 3am after movie night.
+"""cache-report: turn the cache criterion into a command with an exit
+code, instead of a phrase someone eyeballs at 3am after movie night.
 
 The regex below is synchronized field-for-field, in the same order, with
 the `log_format cache_audit` directive in src/edge/nginx.conf.template:
@@ -19,7 +19,7 @@ after), and a mandatory group would make every pre-recreate line
 unparseable and quietly shrink the measured window instead of just leaving
 those lines unattributed.
 
-No viewer IP anywhere in the format or in this module (D-30): the report's
+No viewer IP anywhere in the format or in this module: the report's
 output is meant to be safe to paste into an issue on the public repo.
 
 **What "empty slice_range" actually means, and what changed here.** Live
@@ -67,9 +67,9 @@ LINE_RE = re.compile(
     r"(?: (?P<client_range_start>\S+))?"
 )
 
-# Statuses that mean nginx went to storage for this chunk (D-28). HIT and
+# Statuses that mean nginx went to storage for this chunk. HIT and
 # UPDATING mean it did not -- UPDATING is served stale while a background
-# refresh happens (proxy_cache_use_stale updating, D-26), not a new fetch
+# refresh happens (proxy_cache_use_stale updating), not a new fetch
 # on this request.
 UPSTREAM_STATUSES = {"MISS", "EXPIRED", "STALE"}
 
@@ -107,14 +107,14 @@ def cache_report(log_path: str, since: str | None = None) -> int:
     """Parse `log_path` (cache_audit format), report on storage re-fetches.
 
     Returns the process exit code: 0 if no chunk was fetched from storage
-    more than once, 1 if D-28 was violated, and 2 (verdict B2) if there was
+    more than once, 1 if the cache criterion was violated, and 2 if there was
     not enough data to say either way. Insufficient data covers three
     cases, all reported the same way rather than as a false "0 violations":
     zero parsed lines (empty log, no line matched the format, or `--since`
     filtered everything out); lines parsed but none of them attributable to
     any chunk (a log window recorded entirely before the edge picked up
-    `$client_range_start`, or entirely multi-range requests); and -- as
-    before Task 1 of this change -- a misconfigured edge (missing
+    `$client_range_start`, or entirely multi-range requests); and a
+    misconfigured edge (missing
     `log_subrequest on;`) or a format drift between this regex and
     `cache_audit`.
     """

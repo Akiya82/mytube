@@ -1,5 +1,5 @@
-"""The addition consumer: one claiming loop over the durable `jobs` table
-(D-118), kind `remux`.
+"""The addition consumer: one claiming loop over the durable `jobs` table,
+kind `remux`.
 
 Before this module read `AddQueue`, an in-memory FIFO queue object -- a
 route handed a job to it directly, and the whole thing forgot every
@@ -29,7 +29,7 @@ through `mytube_media.runner.run_ffmpeg_with_progress` instead, which
 drains ffmpeg's own pipes on this event loop rather than blocking it, and
 reports a percentage on every closed progress block.
 
-**Failure leaves nothing behind (D-53).** Any failure past the point the
+**Failure leaves nothing behind.** Any failure past the point the
 title flips to 'preparing'/started can leave an object in the bucket two
 different ways: the upload died partway (an *incomplete* multipart upload,
 cleared by `abort_dangling_multipart`) or the upload **completed** and a
@@ -114,7 +114,7 @@ HEARTBEAT_WHILE_INTERVAL_SECONDS = 3.0
 async def heartbeat_while(work, *, heartbeat, stage: str, interval: float | None = None):
     """Run the blocking, zero-argument callable `work` in a thread while
     sending `heartbeat(stage=stage)` on `interval`'s own timer until it
-    finishes -- closes CR-01 for every blocking transfer in this project:
+    finishes, for every blocking transfer in this project:
     without this, a transfer that outlasts the reaper's own stale
     threshold gets its job requeued out from under it, the object it just
     finished writing gets deleted, and the same work runs again from
@@ -175,7 +175,7 @@ async def _finish_add(
     never-active title, flipping it failed) runs in the same transaction,
     gated on the terminal write's own answer: a late or duplicate report
     from a superseded attempt must not touch a title another attempt now
-    owns (WR-02). `on_success`, when given, is an async callable taking
+    owns. `on_success`, when given, is an async callable taking
     the transaction's own connection, run only when the terminal write
     actually wrote -- never on a superseded answer.
 
@@ -206,7 +206,7 @@ async def _finish_add(
 
 def _reason_key_for(exc: Exception) -> str:
     """Map a failure to a translation catalog key, never an English
-    sentence (D-66).
+    sentence.
 
     The residual case gets its own neutral key rather than being folded
     into the upload one. A wrong reason costs more than a vague one: the
@@ -286,7 +286,7 @@ async def run_add_consumer(pool: asyncpg.Pool, *, poll_interval: float) -> None:
     different reason (its own single `.get()` caller). Independent of the
     playlist consumer's own loop by construction: the two never share a
     claim, a heartbeat or a failure, so a long assembly can never delay a
-    short addition (T-04-22).
+    short addition.
 
     Per-item exception isolation, unchanged from the mechanism this
     replaces: a bad claimed job can raise past `process_add`'s own
@@ -344,7 +344,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
     2. Resolve the source through `safe_join` against the share root
        again -- a path validated on a previous request is not
        automatically the path arriving on this one. A job carrying an
-       external audio choice (D-180) resolves that path the same way,
+       external audio choice resolves that path the same way,
        right beside it, and fails the same way when it escapes or no
        longer exists on disk -- never a silent fall back to the embedded
        track. Inside the failure handler's `try`, so a rejected path fails
@@ -355,15 +355,15 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
     4. Free-space precheck against the work directory ffmpeg actually
        writes into, before any ffmpeg process starts -- branched on
        `already_correct` through the one shared `required_free_bytes`
-       formula (D-52), never a restated threshold. An external audio
+       formula, never a restated threshold. An external audio
        choice forces this branch closed even when the source itself is
        already correct: a dub still has to be muxed in by ffmpeg, so the
        as-is upload can never apply to it.
-    5. If already correct (D-44) and no external audio was chosen, upload
+    5. If already correct and no external audio was chosen, upload
        the source file straight from the share -- ffmpeg never touches the
        video at all. Otherwise build the remux command -- with a second
        input and its own channel-count probe when an external dub was
-       chosen (D-180, D-181) -- run it through the shared progress
+       chosen -- run it through the shared progress
        runner, upload the result, and remove the scratch file whether the
        upload succeeded or not. Either way the size recorded on the
        edition is stat'ed from the artifact that was actually uploaded,
@@ -374,7 +374,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
        upload paths -- the as-is path and the remux path -- run through
        `heartbeat_while`, so an upload that outlasts a heartbeat interval
        is still reporting throughout the transfer and cannot be requeued
-       out from under itself (CR-01).
+       out from under itself.
     6. Extract the poster in its own try/except: a poster that will not
        extract must not fail an add that otherwise worked.
     7. Record the technical detail on the edition, flip the title to
@@ -426,7 +426,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         # dub goes through the same containment check every other
         # operator-supplied path in this consumer goes through -- an
         # escaping or vanished choice fails the job with the existing
-        # unreadable reason (T-05-09), never a silent fall back to the
+        # unreadable reason, never a silent fall back to the
         # embedded track: the operator asked for the dub and would
         # otherwise get a Japanese episode they think is Russian.
         external_audio_source: Path | None = None
@@ -449,8 +449,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
 
         # A dub has to be muxed in by ffmpeg -- the as-is upload-the-source
         # fast path never runs a command at all, so it cannot carry one
-        # in (D-180 still holds ASIS-01: the video stream itself is never
-        # touched either way).
+        # in (the video stream itself is never touched either way).
         effective_already_correct = verdict.already_correct and external_audio_source is None
 
         source_size = verdict.size_bytes
@@ -546,7 +545,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         except Exception:
             # A poster that will not extract must not fail an add that
             # otherwise worked -- the row just degrades to the missing-
-            # thumbnail placeholder (D-72).
+            # thumbnail placeholder.
             logger.exception(
                 "poster extraction failed for edition %s", job.edition_id
             )
@@ -558,10 +557,10 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         selected_track = next(
             (t for t in verdict.tracks if t.index == job.audio_stream_index), None
         )
-        # D-181: the technical detail describes whichever track actually
+        # The technical detail describes whichever track actually
         # ended up in the output -- the external dub when the job chose
         # one, the embedded track otherwise. `job.audio_stream_index` never
-        # matches an external dub's own index by construction (T-05-13's
+        # matches an external dub's own index by construction (the
         # form never emits an embedded index alongside an external
         # choice), so `selected_track` alone would silently record no
         # language/title at all for a job that plainly has both.
@@ -617,12 +616,12 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
             )
             if poster_key is not None:
                 await queries.set_edition_poster(conn, job.edition_id, poster_key)
-            # D-157: readiness lands on the edition this job actually
+            # Readiness lands on the edition this job actually
             # produced, not the title directly -- queries.sync_title_status
             # is what decides the title's own status from there (a
             # one-episode title reduces to the exact write this used to be;
             # a title with siblings reads the whole season, not just this
-            # job). D-178: the default-edition request the operator ticked
+            # job). The default-edition request the operator ticked
             # is applied here, once the edition really is ready, never at
             # save time.
             await queries.mark_edition_active(conn, job.edition_id)
@@ -631,7 +630,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
             await queries.sync_title_status(conn, job.title_id)
 
         # The terminal write runs first, inside the same transaction as
-        # the catalog writes it gates (CR-03(a)'s in-process shape): all
+        # the catalog writes it gates (in-process): all
         # or nothing, and a superseded attempt never flips a title another
         # attempt now owns.
         if not await _finish_add(pool, job, outcome="done", on_success=_mark_active):
@@ -644,7 +643,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         await _cleanup_orphans(job.object_key, poster_key)
 
         async def _drop_never_active(conn) -> None:
-            # A cancelled title's address never went live (T-04-32) -- it
+            # A cancelled title's address never went live -- it
             # is hard-deleted here rather than marked 'failed', with no
             # tombstone, the same guard and the same ordering
             # routes_titles.cancel_route uses for a queued cancellation.
@@ -664,7 +663,7 @@ async def process_add(pool: asyncpg.Pool, job: AddJob) -> None:
         # started: abort_dangling_multipart covers the upload-died-partway
         # case (an incomplete multipart upload), delete_object covers the
         # upload-completed-then-a-later-step-failed case, and both are
-        # safe no-ops against a key that was never touched (T-02-08).
+        # safe no-ops against a key that was never touched.
         await _cleanup_orphans(job.object_key, poster_key)
 
         reason_key = _reason_key_for(exc)

@@ -2,7 +2,7 @@
 
 The repair path for the account this interface's own `/setup` page
 normally creates -- reachable only from inside the already-running `api`
-container (D-36), the same trust boundary every other CLI command in this
+container, the same trust boundary every other CLI command in this
 package already relies on. Neither command gains any authentication of
 its own: whoever can run `docker compose exec` already holds Docker and
 the environment file, and removing them would delete the one way back in
@@ -36,7 +36,7 @@ async def _connect() -> asyncpg.Connection:
 def _audit(action: str, detail: str) -> None:
     """One INFO line per mutating CLI call, always starting with the
     literal word `cli` so a captured transcript reads apart from an
-    interface log line sharing the same destination (T-02.1-32).
+    interface log line sharing the same destination.
 
     This process is not the one serving requests -- its output lands
     wherever the caller's own terminal or log capture puts it, never in
@@ -87,7 +87,7 @@ async def _create_operator(username: str, password: str) -> None:
 
 async def _reset_password(username: str | None, password: str) -> None:
     """Change the stored hash and end every live session in one
-    transaction (D-86, `queries.set_password_and_revoke_sessions`) -- a
+    transaction (`queries.set_password_and_revoke_sessions`) -- a
     password is changed when someone believes it was taken, so leaving
     live sessions alive would leave exactly the access the change was
     meant to remove.

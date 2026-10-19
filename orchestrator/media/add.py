@@ -1,6 +1,6 @@
 """The slug-planning sequence the CLI and the web add form both call
-(D-45..D-48), the one free-space formula both the add form and the future
-background worker call (D-52), and the one `subtitle_choice` form-field
+the one free-space formula both the add form and the future
+background worker call, and the one `subtitle_choice` form-field
 parser both the preview route and the convert POST branch call (so the two
 never grow two slightly different ideas of what a submitted subtitle
 choice means). Extracted so every caller shares one implementation instead
@@ -21,8 +21,8 @@ from orchestrator.slugs import (
     pick_unique_slug,
 )
 
-# D-52/D-72: the doubled space +faststart's rewrite needs, plus the small,
-# fixed scratch budget a poster frame costs (one JPEG, D-72) -- see
+# The doubled space +faststart's rewrite needs, plus the small,
+# fixed scratch budget a poster frame costs (one JPEG) -- see
 # required_free_bytes below for why this budget is added in both branches
 # rather than only the ffmpeg one.
 POSTER_SCRATCH_BYTES = 16 * 1024 * 1024
@@ -87,7 +87,7 @@ async def plan_slug(
 
 
 def required_free_bytes(source_size: int, *, already_correct: bool) -> int:
-    """The free-space rule (D-52), defined once here -- both the add form
+    """The free-space rule, defined once here -- both the add form
     and the future worker call this function; neither restates the
     arithmetic.
 
@@ -98,7 +98,7 @@ def required_free_bytes(source_size: int, *, already_correct: bool) -> int:
     is a safe margin for that rewrite, not a second copy of the input.
 
     - **Not already correct:** `2 * source_size + POSTER_SCRATCH_BYTES`.
-    - **Already correct (D-44):** `POSTER_SCRATCH_BYTES` alone. This
+    - **Already correct:** `POSTER_SCRATCH_BYTES` alone. This
       branch never invokes ffmpeg on the video and uploads straight from
       the share; the only byte it writes to scratch is one poster JPEG.
       Demanding double the source's size to upload a file that touches
@@ -110,7 +110,7 @@ def required_free_bytes(source_size: int, *, already_correct: bool) -> int:
     return 2 * source_size + POSTER_SCRATCH_BYTES
 
 
-# --- the subtitle_choice form field (D-121, D-122, D-140) ------------------
+# --- the subtitle_choice form field ------------------
 
 # The vocabulary a submitted subtitle_choice value may carry: no burn-in
 # at all, an embedded stream picked by its absolute ffprobe index (text
@@ -140,7 +140,7 @@ def parse_subtitle_choice(
     `"embedded"` or `"external"`; `path` is always a share-relative
     string, never an absolute one and never trusted un-contained -- the
     caller still has to resolve it through `mytube_media.share.safe_join`
-    before it touches the filesystem (T-04-01), this function only shapes
+    before it touches the filesystem, this function only shapes
     the value.
 
     Raises `SubtitleChoiceRefused` for anything malformed.
@@ -183,7 +183,7 @@ def parse_subtitle_choice(
 # already reaches for it.
 
 
-# --- the audio_choice form field (D-180, D-181, T-05-13) -------------------
+# --- the audio_choice form field -------------------
 
 _AUDIO_KIND_EMBEDDED_PREFIX = "embedded:"
 _AUDIO_KIND_EXTERNAL_PREFIX = "external:"
@@ -199,8 +199,8 @@ class AudioChoiceRefused(Exception):
 def parse_audio_choice(value: str) -> tuple[str, int | None, str | None]:
     """`(kind, stream_index, path)` from the add form's single
     `audio_choice` radio value -- `kind` is one of `"embedded"` or
-    `"external"`; there is no `"none"` (an audio choice is never optional,
-    D-42) and no `"manual"` (a hand-typed audio path is joined into an
+    `"external"`; there is no `"none"` (an audio choice is never optional)
+    and no `"manual"` (a hand-typed audio path is joined into an
     `external:` value by the form's own script before it ever reaches this
     parser -- see static/app.js -- so this grammar stays exactly two
     shapes wide).
@@ -208,7 +208,7 @@ def parse_audio_choice(value: str) -> tuple[str, int | None, str | None]:
     `path` is always a share-relative string when `kind` is `"external"`,
     never an absolute one and never trusted un-contained -- the caller
     still has to resolve it through `mytube_media.share.safe_join` before
-    it touches the filesystem (T-05-13), this function only shapes the
+    it touches the filesystem, this function only shapes the
     value and performs no filesystem access of its own.
 
     Raises `AudioChoiceRefused` for anything malformed: no recognised
@@ -237,12 +237,12 @@ def parse_audio_choice(value: str) -> tuple[str, int | None, str | None]:
     raise AudioChoiceRefused()
 
 
-# --- the edition slug (D-177, D-178, D-179) ---------------------------------
+# --- the edition slug ---------------------------------
 
 
 class EditionSlugTaken(Exception):
     """Raised when the chosen edition slug already names another edition
-    of the same episode -- D-177's uniqueness scope, checked inside the
+    of the same episode -- uniqueness is per episode, checked inside the
     caller's own locked transaction.
     """
 
@@ -253,7 +253,7 @@ def suggest_edition_slug(
     candidate: dict,
     taken_audio_languages: frozenset[str] = frozenset(),
 ) -> str:
-    """D-177: the first real difference between `candidate` (what the add
+    """The first real difference between `candidate` (what the add
     or convert action about to run would produce) and `existing` (the
     episode's current default edition), checked in this fixed order:
     audio language, resolution, subtitles, conversion. Both dicts describe
@@ -265,14 +265,14 @@ def suggest_edition_slug(
     as unknown/absent, never as a match. This function performs no lookups
     of its own and is pure.
 
-    Worked examples (D-177): a Russian dub against a Japanese default ->
+    Worked examples: a Russian dub against a Japanese default ->
     "dub-ru"; a second Russian dub from a different studio, once
     `taken_audio_languages` already carries "ru" -> "dub-ru-<studio-slug>"
     ("dub-ru-dublyazhnaya"); a 720p output against a 1080p default ->
     "720p"; a Russian subtitle burn against an unsubtitled default ->
     "sub-ru", or "sub-ru-signs" when it resolved signs-only; a conversion
     to h264 against an as-is (never-transcoded) default -> "h264".
-    Nothing differing -> "", the "type your own" case D-177 asks for.
+    Nothing differing -> "", the "type your own" case.
     """
     candidate_language = candidate.get("audio_language")
     if candidate_language and candidate_language != existing.get("audio_language"):
@@ -309,7 +309,7 @@ def suggest_edition_slug(
     return ""
 
 
-# --- The folder confirmation screen's save (D-159, D-167, D-171, D-174) ----
+# --- The folder confirmation screen's save ----
 
 
 @dataclass(frozen=True)
@@ -317,9 +317,9 @@ class FolderValidation:
     """The whole answer `validate_folder_submission` gives: `ok=True`
     clears the save outright; `ok=False` carries the one catalog key the
     save-blocked banner shows (`folder.action.none_checked`,
-    `folder.validation.blocked`, or `folder.incompatible.hint`, per
-    05-UI-SPEC.md's own save-blocked table) and the set of row indexes the
-    screen re-renders with their offending caption already showing.
+    `folder.validation.blocked`, or `folder.incompatible.hint`) and the
+    set of row indexes the screen re-renders with their offending caption
+    already showing.
     """
 
     ok: bool
@@ -335,12 +335,12 @@ def validate_folder_submission(
     filesystem nor the database -- every fact it needs, the caller (`
     orchestrator.web.routes_folder`) already read this same request by
     re-running the read side's own `_build_rows` against the folder as it
-    is right now (T-05-33: never against what the GET route computed
+    is right now (never against what the GET route computed
     minutes ago) and resolving the operator's submission against it.
 
     `rows` is one plain dict per row in the folder's own listing order --
     a submission naming a row outside that listing is never built into
-    this list at all (T-05-35), so it cannot be validated into existing
+    this list at all, so it cannot be validated into existing
     either. Each dict carries: `index`; `ticked` (the operator's own tick,
     whether the generic include box for a new file or the "move into this
     series" box for an already-added one); `number` (the parsed episode
@@ -352,8 +352,8 @@ def validate_folder_submission(
     mismatch against the folder-wide choice); `audio_resolved` /
     `subtitle_resolved` (True for a row that was never highlighted, or
     whose mismatch already carries an explicit fallback pick, or that the
-    operator has unticked -- unticking is itself an explicit choice,
-    D-167/D-171); and `number_taken` (D-159: this ticked row's number is
+    operator has unticked -- unticking is itself an explicit choice);
+    and `number_taken` (this ticked row's number is
     already held by an episode of the target title that is not part of
     this same save).
 
@@ -368,11 +368,11 @@ def validate_folder_submission(
        the collision named.
     5. A ticked row's number already held by an existing episode of the
        target title -> same key (that row also carries
-       `library.renumber.taken` inline, reused from plan 05, in the
+       `library.renumber.taken` inline, in the
        template rather than here).
     6. A highlighted row, still ticked, with no explicit track choice yet
        for either kind -> same key.
-    7. Only for `action == "add"` (D-174): a ticked, unmoved,
+    7. Only for `action == "add"`: a ticked, unmoved,
        incompatible row -> `folder.incompatible.hint`, converting the
        whole folder being the one path that includes it.
 
@@ -419,12 +419,12 @@ def validate_folder_submission(
 
 async def plan_edition_slug(conn: asyncpg.Connection, episode_id, explicit_slug: str) -> str:
     """Validate a submitted edition-slug the way `plan_slug` validates a
-    title slug -- through the shape rule (`normalize_edition_slug`, D-177's
+    title slug -- through the shape rule (`normalize_edition_slug`, the
     not-all-digits refusal, which also refuses a blank string exactly as
     `normalize_slug` already does for an empty title name) -- and, unlike
     a title slug, a plain uniqueness refusal rather than an auto-suffix:
-    D-179 leaves no room for an edition slug to silently become a
-    different string than the one the operator saw and typed.
+    an edition slug can never silently become a different
+    string than the one the operator saw and typed.
 
     Raises `SlugError`/`EditionSlugRefused` (shape) or `EditionSlugTaken`
     (collision). Must be called inside the caller's own locked
@@ -438,16 +438,15 @@ async def plan_edition_slug(conn: asyncpg.Connection, episode_id, explicit_slug:
     return chosen
 
 
-# --- The folder confirmation screen's edition-only mode (plan 11, D-176) ---
+# --- The folder confirmation screen's edition-only mode ---
 
 
 def validate_edition_folder_submission(
     *, target_ok: bool, action: str, rows: list[dict]
 ) -> FolderValidation:
-    """The folder confirmation screen's edition-only mode (Screen B',
-    D-176), its own save-blocked rule -- the narrower twin of
-    `validate_folder_submission`: every row here already names a real,
-    existing episode of the one target title (there is no title mode, no
+    """The folder confirmation screen's edition-only mode, its own save-blocked
+    rule -- the narrower twin of `validate_folder_submission`: every row
+    here already names a real, existing episode of the one target title (there is no title mode, no
     "moved" row and no missing/duplicate number to check, since a read-only
     number came straight off an episode that already claims it), so only
     three things can still block a save.
@@ -455,7 +454,7 @@ def validate_edition_folder_submission(
     `rows` is one plain dict per row in the folder's own listing order, the
     same shape `validate_folder_submission`'s own docstring describes for
     `ticked`/`highlighted`/`audio_resolved`/`subtitle_resolved`/
-    `compatible`, plus `slug_taken` (D-177: this batch's one edition slug
+    `compatible`, plus `slug_taken` (this batch's one edition slug
     already names an edition of this row's own target episode).
 
     Checked in save-blocked order, first violation wins:
@@ -469,9 +468,9 @@ def validate_edition_folder_submission(
     4. A ticked row whose target episode already has an edition under this
        batch's own slug -> same key (`edition.slug.taken_on_episode` is the
        inline per-row reason, read in the template rather than here, the
-       same way `library.renumber.taken` already is on Screen B).
-    5. Only for `action == "add"` (D-174's identical rule): a ticked,
-       incompatible row -> `folder.incompatible.hint`.
+       same way `library.renumber.taken` already is on the folder screen).
+    5. Only for `action == "add"` (the same rule as the folder-wide
+       mode): a ticked, incompatible row -> `folder.incompatible.hint`.
 
     `ok=True` only once every ticked row has cleared every rule above.
     """

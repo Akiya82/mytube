@@ -1,12 +1,12 @@
 """CLI entrypoint: `docker compose exec api python -m orchestrator.cli <command>`.
 
-Runs only inside the already-running `api` container (D-36) -- nothing is
+Runs only inside the already-running `api` container -- nothing is
 installed on the host, credentials and environment are the same ones the
 orchestrator itself uses. `add` is the only way the first title/slug gets
-created (D-35): the point of routing it through here instead of `mc cp` +
+created: the point of routing it through here instead of `mc cp` +
 a hand-written `INSERT` is that the very first addresses that leave for
-VRChat worlds go through normalize_slug (ADDR-06) and get a slug_history
-row (ADDR-05) -- skip this and the first links are the ones a hand-rolled
+VRChat worlds go through normalize_slug and get a slug_history
+row -- skip this and the first links are the ones a hand-rolled
 INSERT would get wrong.
 """
 import asyncio
@@ -172,7 +172,7 @@ async def _add_new_title(
 ) -> None:
     """Standalone-title creation -- the CLI's original `add`, unchanged
     except for threading `number` through to `create_title_with_edition`
-    (D-187: `--episode` alone gives this new title's own single episode a
+    (`--episode` alone gives this new title's own single episode a
     real number, so its numbered address works from the first day).
     """
     # plan_slug (orchestrator/media/add.py) is the extracted version of
@@ -257,7 +257,7 @@ async def _add_new_episode_of_existing_title(
 ) -> None:
     """`--title` and `--episode`, no `--edition`: a new episode of an
     already-added title, through the exact transaction the form's own
-    attach offer calls (D-159, D-187).
+    attach offer calls.
     """
     title_row = await queries.title_by_current_slug(conn, title_slug)
     if title_row is None:
@@ -279,7 +279,7 @@ async def _add_new_episode_of_existing_title(
         raise typer.Exit(1)
     except queries.EpisodeNumberTaken:
         delete_object(object_key)
-        # D-177: reuse the exact suggestion the form computes rather than
+        # Reuse the exact suggestion the form computes rather than
         # inventing a second one here -- this command probes nothing about
         # the file it was about to attach, so the suggestion will usually
         # come back empty (nothing to compare against), and an empty
@@ -316,7 +316,7 @@ async def _add_edition_to_existing_episode(
 ) -> None:
     """`--title`, `--episode` and `--edition`: a new alternative edition of
     an episode that already exists, through the exact transaction the
-    form's own edition offer calls (D-176, D-187).
+    form's own edition offer calls.
     """
     title_row = await queries.title_by_current_slug(conn, title_slug)
     if title_row is None:
@@ -504,7 +504,7 @@ async def _episode_for_removal(conn: asyncpg.Connection, address) -> tuple:
     address names -- shared by `_remove_episode` and `_remove_edition`,
     since both start by resolving exactly the same thing: an active title,
     then the episode `address` actually points at (by number when it gave
-    one, the title's own lowest episode otherwise -- D-156's two-segment
+    one, the title's own lowest episode otherwise -- the two-segment
     edition address).
     """
     title_row = await queries.resolve_slug(conn, address.slug)
@@ -537,7 +537,7 @@ def _canonical_address(address) -> str:
 
 async def _remove_episode(conn: asyncpg.Connection, settings, address) -> None:
     """A numbered address: that one episode, with every edition it holds,
-    on the episode-scoped countdown (D-187) -- the exact twin of
+    on the episode-scoped countdown -- the exact twin of
     `_remove_title`, one level down.
     """
     _title_id, episode_row = await _episode_for_removal(conn, address)
@@ -561,7 +561,7 @@ async def _remove_edition(conn: asyncpg.Connection, settings, address) -> None:
     """An edition address: that one edition, refusing when it is the
     episode's default and other editions exist, and removing the whole
     episode along with it when it was the only edition left -- the same
-    thing the interface does (D-178).
+    thing the interface does.
     """
     _title_id, episode_row = await _episode_for_removal(conn, address)
     edition_row = await queries.edition_by_slug(

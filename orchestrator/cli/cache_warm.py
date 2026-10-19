@@ -1,19 +1,19 @@
-"""cache-warm: prime edge's tmpfs cache before a viewing session (D-27),
+"""cache-warm: prime edge's tmpfs cache before a viewing session,
 by walking the exact same path a viewer does -- GET /v/{slug}, follow the
 signed 302, then sequential Range requests -- so the cache is warm and the
-run itself is a reproducible stand for `cache-report` (D-29).
+run itself is a reproducible stand for `cache-report`.
 
-**Warms only the start of the file, not the whole thing (verdict M5).**
+**Warms only the start of the file, not the whole thing.**
 This is arithmetic, not caution: the cache zone is 512 MiB by default
-(D-23, `MYTUBE_CACHE_SIZE`), which at a 1080p/~6 Mbps profile holds about
-11 minutes of video, and `inactive` (D-24, `MYTUBE_CACHE_INACTIVE`, ~2 min
+(`MYTUBE_CACHE_SIZE`), which at a 1080p/~6 Mbps profile holds about
+11 minutes of video, and `inactive` (`MYTUBE_CACHE_INACTIVE`, ~2 min
 default) evicts whatever nobody touched for that long. Warming a two-hour
 rip "to the end" cannot make anything stick -- at best the tail 11 minutes
 would survive, and those evaporate within `inactive` of the warm finishing,
 before anyone has watched them. The one thing warming actually fixes is
 start-of-playback stall, so by default it stops at half the cache zone
 (`MYTUBE_WARM_BYTES`) -- one file's warm-up should not evict everything
-else in memory. Warm immediately before the session: the D-26 promise
+else in memory. Warm immediately before the session: the promise
 ("storage restarting mid-session goes unnoticed") holds only for as long
 as `inactive`'s window, not indefinitely.
 """
@@ -24,13 +24,13 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import typer
 
-# CLI runs inside the `api` container (D-36), on the same `edge_net` compose
+# CLI runs inside the `api` container, on the same `edge_net` compose
 # network as `edge` -- "http://edge" is edge's internal (unpublished, port
 # 80) address on that network, not the host-published MYTUBE_EDGE_PORT.
 DEFAULT_BASE_URL = "http://edge"
 
 DEFAULT_CHUNK_SIZE = 1024 * 1024  # 1 MiB, mirrors MYTUBE_SLICE_SIZE's default
-DEFAULT_WARM_BYTES = 256 * 1024 * 1024  # half of MYTUBE_CACHE_SIZE's 512m default (M5)
+DEFAULT_WARM_BYTES = 256 * 1024 * 1024  # half of MYTUBE_CACHE_SIZE's 512m default
 
 _SIZE_UNITS = {"k": 1024, "m": 1024**2, "g": 1024**3}
 

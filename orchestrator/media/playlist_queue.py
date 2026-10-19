@@ -1,5 +1,5 @@
-"""The assembly consumer: one claiming loop over the durable `jobs` table
-(D-118), kind `playlist`, in the shape `orchestrator.media.queue`
+"""The assembly consumer: one claiming loop over the durable `jobs` table,
+kind `playlist`, in the shape `orchestrator.media.queue`
 establishes for the addition consumer -- a module logger, a frozen job
 with one constructor built from a claimed row, one claiming task so
 concurrency of one is a property of the loop rather than of a lock, and
@@ -17,7 +17,7 @@ lifecycle in `orchestrator.db.queries` -- the same functions the converter
 reaches over the network for its own kind of work. This loop is entirely
 independent of the addition consumer's own loop: neither shares a claim, a
 heartbeat or a failure, so an assembly measured in minutes can never delay
-an addition measured in under one (T-04-22).
+an addition measured in under one.
 
 **Nothing synchronous is called bare from this module.** This loop shares
 its event loop with every HTTP request this process answers, including
@@ -33,8 +33,7 @@ while it runs. Each member's own download and each segment's own upload
 run through `orchestrator.media.queue.heartbeat_while` instead of a bare
 `asyncio.to_thread` -- a member can be an eight-gigabyte rip, and a
 transfer that outlasts the reaper's own stale threshold must not get its
-job requeued out from under it while it is still healthily in flight
-(CR-01).
+job requeued out from under it while it is still healthily in flight.
 
 **What a build produces.** One segment object per member, MPEG-TS bytes
 under a key shaped `{a fresh identifier}.mp4`, plus one artifact row each
@@ -204,7 +203,7 @@ async def _finish(
     one catalog write it implies (the playlist's own build-failure row)
     runs in the same transaction, gated on the terminal write's own
     answer: a late or duplicate report from a superseded attempt must not
-    flip a playlist another attempt now owns (WR-02). `done`/`cancelled`
+    flip a playlist another attempt now owns. `done`/`cancelled`
     carry no catalog write of their own here -- `set_playlist_built`'s own
     `swapped` check already handles the "deleted while building" case
     atomically, and a plain cancel leaves the playlist row untouched by
@@ -392,7 +391,7 @@ async def process_playlist_build(pool: asyncpg.Pool, job: PlaylistBuildJob) -> N
             segment = work_dir / f"{job.playlist_id}-{index}-segment"
             scratch.extend((source, segment))
 
-            # Heartbeating while it runs (CR-01): a member can be an
+            # Heartbeating while it runs: a member can be an
             # eight-gigabyte rip, and a download that outlasts the reaper's
             # own stale threshold must not get its job requeued out from
             # under it while the transfer is still healthily in flight.

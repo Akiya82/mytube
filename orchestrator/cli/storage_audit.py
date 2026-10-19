@@ -1,5 +1,5 @@
 """storage-audit: compare the catalog against the bucket in both
-directions, read-only (D-70).
+directions, read-only.
 
 Two things go wrong independently, and this command is the one place that
 checks for both: an object sits in the bucket with no catalog row pointing
