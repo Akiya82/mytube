@@ -468,7 +468,7 @@ async def test_ffmpeg_failing_is_reported_as_an_assembly_failure_not_a_check_one
 async def test_more_than_one_heartbeat_covers_a_download_that_outlasts_the_interval(
     build, monkeypatch
 ):
-    """CR-01: a member download that runs longer than one heartbeat
+    """A member download that runs longer than one heartbeat
     interval is still heartbeating throughout it, the same guarantee the
     addition consumer's own upload now has.
     """
@@ -490,7 +490,7 @@ async def test_more_than_one_heartbeat_covers_a_download_that_outlasts_the_inter
 
 
 async def test_a_download_failure_still_reaches_the_assembly_failure_handler(build, monkeypatch):
-    """The download now runs wrapped in `heartbeat_while` (CR-01) -- its
+    """The download now runs wrapped in `heartbeat_while` -- its
     own exception must still propagate unchanged and land on the same
     reason key it did before the wrapper existed.
     """
@@ -588,7 +588,7 @@ async def test_the_combined_percentage_advances_across_segments(build):
     done with the current one's own progress -- for two equal-size
     members, each fully finishing in a single reported block, that is
     50% after the first and 100% after the second. Each member's own
-    download now writes its own `working`-stage heartbeat too (CR-01) --
+    download now writes its own `working`-stage heartbeat too --
     carrying no percentage of its own, so it is excluded here rather than
     read as a stalled segment.
     """

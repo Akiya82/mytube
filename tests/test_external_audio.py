@@ -1,4 +1,4 @@
-"""External audio as a first-class audio source (D-180, D-181, D-182):
+"""External audio as a first-class audio source:
 the dub search over `RUS Sound/`-shaped folders, matched by episode
 number rather than by stem (Pattern 5's generalisation of the existing
 sidecar walker); probing a dub file into the same `AudioTrack` shape an
@@ -36,7 +36,7 @@ def _run(argv):
     )
 
 
-# --- the shared walker, searched for a dub (D-180, Pattern 5) -----------
+# --- the shared walker, searched for a dub --------------------------------
 
 
 def test_a_dub_beside_the_season_in_the_real_folder_shape_is_found(tmp_path):
@@ -149,7 +149,7 @@ def test_a_candidate_carries_its_relative_path_and_its_folder_segments(tmp_path)
 
 
 def test_an_english_folder_name_is_recognised_alongside_the_russian_one(tmp_path):
-    """The product ships in two languages (D-66) -- the search must not
+    """The product ships in two languages -- the search must not
     only recognise the owner's own Russian folder name.
     """
     from mytube_media.subtitles import external_audio_tracks
@@ -165,7 +165,7 @@ def test_an_english_folder_name_is_recognised_alongside_the_russian_one(tmp_path
     assert len(candidates) == 1
 
 
-# --- one walker, not two (T-05-08, T-05-11) -------------------------------
+# --- one walker, not two --------------------------------------------------
 
 
 def test_there_is_still_exactly_one_walk_in_the_module():
@@ -178,7 +178,7 @@ def test_there_is_still_exactly_one_walk_in_the_module():
     assert source.count("os.walk") == 1
 
 
-# --- probing an external file into the shared AudioTrack shape (D-181) --
+# --- probing an external file into the shared AudioTrack shape ------------
 
 
 def _fake_ffprobe_result(streams, duration="7.007000"):
@@ -236,7 +236,7 @@ def test_an_external_file_with_no_language_tag_leaves_it_absent(monkeypatch):
     assert track.folder_label is None
 
 
-# --- the duration-mismatch comparison (D-182) -----------------------------
+# --- the duration-mismatch comparison -------------------------------------
 
 
 def test_duration_gap_is_a_plain_number_computed_both_ways_round():
@@ -257,7 +257,7 @@ def test_duration_gap_is_none_when_either_duration_is_unmeasurable():
 
 def test_duration_gap_never_refuses_a_large_mismatch():
     """The function itself is a pure comparison -- the refusal that never
-    happens is the point (D-182): a mismatch is a warning shown elsewhere,
+    happens is the point: a mismatch is a warning shown elsewhere,
     never raised here.
     """
     from mytube_media.compat import duration_gap_seconds
@@ -265,7 +265,7 @@ def test_duration_gap_never_refuses_a_large_mismatch():
     assert duration_gap_seconds(1400.0, 30.0) == pytest.approx(1370.0)
 
 
-# --- the mux command contract: never -shortest (Pitfall 4, D-180) --------
+# --- the mux command contract: never -shortest ----------------------------
 
 
 def _remux_cmd(**overrides):
@@ -440,7 +440,7 @@ def test_a_real_mux_carries_the_full_video_with_the_shorter_dub_ending_early(tmp
     assert audio_duration < format_duration - 1.0
 
 
-# --- the choice is contained again on the converter (T-05-09, D-180) -----
+# --- the choice is contained again on the converter -----------------------
 
 
 def test_a_worker_job_whose_external_audio_choice_escapes_the_share_fails_the_job(

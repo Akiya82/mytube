@@ -1,5 +1,4 @@
-"""Failing argv contract for `mytube_media.transcode` (CONV-04..08, D-133,
-D-135, D-136, D-137, D-140) -- pure argv-builder assertions in the style
+"""Failing argv contract for `mytube_media.transcode` -- pure argv-builder assertions in the style
 of `tests/test_remux.py`, no ffmpeg process started anywhere in this
 file.
 
@@ -10,10 +9,10 @@ inside a test body) so this module collects cleanly while
 as a failing assertion per test, never a collection error that hides the
 rest of the file.
 
-This module also fixes the public surface plan 07 implements against:
+This module also fixes the public surface the implementation is written against:
 the constants, the two dataclasses (`TranscodePlan`, `SubtitleChoice`),
-the `FilterGraph` return type and the `TranscodeRefused` exception. A
-later plan may not rename any of these without this file failing loudly.
+the `FilterGraph` return type and the `TranscodeRefused` exception. Nothing
+may rename any of these without this file failing loudly.
 """
 import pytest
 
@@ -172,10 +171,10 @@ def test_a_4k_source_is_capped_at_the_1080p_figure_because_the_output_scales_dow
 
 
 def test_a_full_frame_stereo_source_is_budgeted_by_area_but_never_above_the_ceiling():
-    """D-137 authorises scaling the bitrate budget by area, and a
+    """Scaling the bitrate budget by area, and a
     full-frame stereo frame genuinely carries twice the picture, so it
     earns more than one eye's budget -- but the per-viewer bandwidth
-    figure D-136 exists to warn about is the same 9 Mbit/s ceiling, and a
+    figure the budget warning exists for is the same 9 Mbit/s ceiling, and a
     stereo conversion that shipped at 12 Mbit/s (a bare doubling of the
     reference) would silently exceed the very ceiling the analyzer warns
     other files about. Budget by area, cap at the ceiling.
@@ -223,7 +222,7 @@ def test_maxrate_and_bufsize_keep_their_ratio_to_the_target():
         assert cmd[idx + 1] == str(round(target * BUFSIZE_RATIO))
 
 
-# --- scaling and aspect (CONV-08) ----------------------------------------
+# --- scaling and aspect --------------------------------------------------
 
 
 def test_scaling_never_upsizes():
@@ -264,7 +263,7 @@ def test_a_non_square_pixel_aspect_is_carried_through_the_filter_chain():
     assert "setsar" not in square.value
 
 
-# --- the filter chain (CONV-07) ------------------------------------------
+# --- the filter chain ----------------------------------------------------
 
 
 def test_scale_comes_before_subtitles_in_the_chain():
@@ -316,7 +315,7 @@ def test_a_bitmap_subtitle_track_uses_a_labelled_overlay_graph():
 
 
 def test_an_external_subtitle_file_is_passed_by_path_and_its_path_is_escaped():
-    """This is the injection surface the threat model names (T-04-02);
+    """This is the injection surface the threat model names;
     assert it here rather than trusting the builder.
     """
     import re
@@ -478,7 +477,7 @@ def test_a_non_utf8_subtitle_file_is_burned_with_its_own_encoding():
     assert "charenc" not in explicit_utf8.value
 
 
-# --- decode side (D-133) --------------------------------------------------
+# --- decode side ---------------------------------------------------------
 
 
 @pytest.mark.parametrize("codec", sorted(["h264", "hevc", "vp9", "av1"]))
@@ -511,7 +510,7 @@ def test_an_unsupported_source_codec_decodes_on_the_processor_without_refusing()
     assert "-hwaccel_output_format" not in cmd
 
 
-# --- audio (D-135) ---------------------------------------------------------
+# --- audio ---------------------------------------------------------------
 
 
 def test_an_aac_source_track_is_copied_rather_than_re_encoded():
@@ -579,7 +578,7 @@ def test_only_the_chosen_audio_track_is_mapped(kind):
     assert cmd[idx + 1] == "0:4"
 
 
-# --- refusal (D-140) --------------------------------------------------------
+# --- refusal -------------------------------------------------------------
 
 
 @pytest.mark.parametrize("layout", ["sbs_full", "sbs_half", "ou_full", "ou_half"])
@@ -610,7 +609,7 @@ def test_no_subtitle_on_a_stereo_source_is_allowed(layout):
     assert graph is not None
 
 
-# --- the preview (CONV-04, D-125/D-126) -------------------------------------
+# --- the preview ---------------------------------------------------------
 
 
 def test_the_preview_command_renders_exactly_one_frame():
@@ -691,8 +690,8 @@ def test_the_preview_and_the_conversion_share_one_filter_chain(kind):
 
 def test_the_subtitle_term_alone_is_identical_between_preview_and_conversion():
     """Narrower than the test above: this isolates only the
-    `subtitles=...` portion of the filter value -- the one piece CONV-04's
-    whole promise rests on. The scale and frame-selection portions are
+    `subtitles=...` portion of the filter value -- the one piece the
+    preview/conversion identity promise rests on. The scale and frame-selection portions are
     allowed to differ (a future preview-only downscale for speed would be
     a legitimate reason to touch only one builder), but the subtitle term
     the operator approved has to be the exact term the conversion burns
@@ -759,11 +758,11 @@ def test_the_free_space_estimate_is_double_the_encoded_output():
     assert required_free_bytes_for_transcode(6_000_000, 1440.0) == pytest.approx(encoded_bytes * 2)
 
 
-# --- the two-pass filter escaper (CR-04) ---------------------------------
+# --- the two-pass filter escaper -----------------------------------------
 
 
 def test_escaping_an_apostrophe_emits_three_backslashes():
-    """The one form a real ffmpeg opens (CR-04): the filtergraph's own
+    """The one form a real ffmpeg opens: the filtergraph's own
     tokenizer has to recognise a quoted run in order to know a comma or
     semicolon inside it is not a structural separator, so `'` is read by
     both grammars and needs two rounds of escaping where `:` and the
@@ -793,7 +792,7 @@ def test_escaping_a_literal_backslash_emits_four():
     assert result == "a" + "\\" * 4 + "b"
 
 
-# --- the house style for plain text (D-124) ------------------------------
+# --- the house style for plain text --------------------------------------
 
 
 def test_a_srt_choice_carries_force_style_with_the_bundled_family():

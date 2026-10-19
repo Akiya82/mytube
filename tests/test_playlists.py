@@ -79,7 +79,7 @@ def _picker_stub(monkeypatch):
 @pytest.fixture(autouse=True)
 def _storage_stub(monkeypatch):
     """`GET /library` -- exercised by several tests in this file, since a
-    playlist row lives there (D-108) -- always calls `storage_usage()` for
+    playlist row lives there -- always calls `storage_usage()` for
     the header's used/free figure, same as it always has for a library of
     videos alone. This module drives no real storage (see its own
     docstring), so that call is stubbed here exactly the way
@@ -265,7 +265,7 @@ async def test_assembly_create_escapes_a_name_that_looks_like_markup(monkeypatch
         assert "&lt;script&gt;" in resp.text
 
 
-# --- The library row: a playlist lives next to videos, same row shape (D-108) --
+# --- The library row: a playlist lives next to videos, same row shape -----
 
 
 async def test_library_shows_playlists_and_videos_in_one_list(monkeypatch, client, signed_in):
@@ -470,7 +470,6 @@ async def test_a_playlist_row_detail_line_degrades_when_a_duration_is_unknown(
 
 
 # --- Membership and ordering: repeats allowed, gaps marked, arrows first --
-# (D-101, D-102, D-107) --------------------------------------------------
 
 
 async def test_assembly_picker_lists_every_active_video_with_an_add_button(
@@ -499,7 +498,7 @@ async def test_assembly_picker_lists_every_active_video_with_an_add_button(
     assert "Add" in resp.text
 
 
-# --- Plan 11 Task 2: the picker says which episode and which edition -------
+# --- The picker says which episode and which edition ----------------------
 
 
 async def _get_picker(monkeypatch, client, picker_rows):
@@ -1096,9 +1095,9 @@ async def test_a_pending_playlist_row_renders_the_same_countdown_a_video_row_doe
     assert resp.text.count("data-confirm") >= 2
 
 
-# --- Job progress, cancel and retry (04-11) -------------------------------
+# --- Job progress, cancel and retry ---------------------------------------
 # A playlist build now shares the same live-update mechanism a video's own
-# Preparing row already has (04-UI-SPEC.md Amendment 3): its own fragment
+# Preparing row already has: its own fragment
 # route, its own data-row-url, and data-row-status="preparing" for exactly
 # as long as a job is actually in flight.
 
@@ -1137,7 +1136,7 @@ def _job_fields(**over):
 async def test_a_building_playlist_row_with_a_live_job_is_wired_to_the_row_poller(
     monkeypatch, client, signed_in
 ):
-    """The amendment to 03-UI-SPEC.md's own "no live updates" decision: an
+    """The earlier "no live updates" decision no longer holds: an
     assembly with an actual job in flight now polls exactly like a video's
     Preparing row, reading its own fragment address off data-row-url
     rather than the poller building one from a title id it does not have.

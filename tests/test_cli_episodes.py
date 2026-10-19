@@ -1,5 +1,5 @@
-"""Integration tests for the CLI's episode and edition options on `add`
-(D-187), plus the shared address grammar `add`/`rename`/`remove` all read
+"""Integration tests for the CLI's episode and edition options on `add`,
+plus the shared address grammar `add`/`rename`/`remove` all read
 through -- the command line's own repair path for a series once the web
 interface will not come up. Same shape as `test_cli_add.py`: storage is
 mocked, `_add`/`_rename`/`_remove` are called directly against a real
@@ -468,12 +468,12 @@ async def test_remove_edition_deletes_a_non_default_edition_with_a_sibling(
 async def test_remove_edition_last_edition_removes_the_episode_too(
     source_file, uploaded_objects, capsys, raw_conn
 ):
-    """The episode's own first edition is always slug-less (D-177), so no
+    """The episode's own first edition is always slug-less, so no
     public address ever names it directly -- the only way this codebase
     reaches "one edition left, and it has a real slug" is the original
     slug-less edition already being gone by some other means. Simulated
     here with a direct row deletion (test-only) so `_remove_edition`'s own
-    last-edition branch (D-178) is exercised end to end through the real
+    last-edition branch is exercised end to end through the real
     CLI entry point.
     """
     title_slug = await _add_standalone_title(source_file, _unique("CLI Remove Last Edition"))

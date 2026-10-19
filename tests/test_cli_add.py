@@ -65,7 +65,7 @@ async def test_add_twice_same_file_gives_different_object_keys(source_file, uplo
 
     assert len(uploaded_objects) == 2
     assert uploaded_objects[0] != uploaded_objects[1]
-    # D-12: object keys are always {edition_id}.mp4, never reused.
+    # Object keys are always {edition_id}.mp4, never reused.
     assert all(key.endswith(".mp4") for key in uploaded_objects)
 
 

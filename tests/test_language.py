@@ -1,4 +1,4 @@
-"""Failing contract for `orchestrator.language` (D-184, D-185): a code, a
+"""Failing contract for `orchestrator.language`: a code, a
 name in any language, or a folder token all resolve to one canonical
 language tag or to an honest nothing -- and the four track-kind words
 resolve in both interface languages.

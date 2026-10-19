@@ -116,7 +116,7 @@ def test_maps_video_stream_zero_and_the_absolute_audio_index():
 def test_no_external_audio_argv_is_unchanged_from_before_the_parameter_existed():
     """`external_audio` defaulting to `None` must not perturb a single
     argument of either branch this module already had -- the whole point
-    of adding a keyword-only parameter with a falsy default (D-180).
+    of adding a keyword-only parameter with a falsy default.
     """
     with_explicit_none = build_remux_command(
         "/share/movie.mkv",

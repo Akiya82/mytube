@@ -1,7 +1,7 @@
 """Unit tests for mytube_media.compat, driven by real ffprobe output
 frozen into tests/fixtures/probe/*.json rather than hand-typed JSON --
-02-RESEARCH.md Pitfall 2 flags the H.264 level x10 convention specifically
-as the kind of fact that is easy to get subtly wrong from memory, and a
+the H.264 level x10 convention is exactly
+the kind of fact that is easy to get subtly wrong from memory, and a
 hand-typed fixture would just re-encode the same assumption the test is
 supposed to be checking.
 
@@ -65,7 +65,7 @@ def _load(name: str) -> dict:
 
 
 def test_compatible_fixture_json_literally_contains_level_41():
-    """Assumption A2 in 02-RESEARCH.md, closed by observation: the fixture's
+    """Closed by observation: the fixture's
     own JSON must contain the numeric level, not a remembered convention.
     """
     data = _load("compatible.json")
@@ -200,8 +200,7 @@ def test_format_name_matching_splits_on_commas_for_a_real_mp4():
     """compatible.json's format_name is the real comma-separated list
     ffprobe reports for MP4 ("mov,mp4,m4a,3gp,3g2,mj2") -- already_correct
     can only be True at all if the "mp4" membership check splits on commas
-    rather than comparing the whole string for equality (02-RESEARCH.md
-    Anti-Patterns).
+    rather than comparing the whole string for equality.
     """
     data = _load("compatible.json")
     assert data["format"]["format_name"] == "mov,mp4,m4a,3gp,3g2,mj2"
@@ -289,7 +288,7 @@ def test_already_correct_requires_moov_first_true():
 
 
 def test_already_correct_is_false_with_more_than_one_audio_stream():
-    """D-42: only the selected track ever survives into an ffmpeg-produced
+    """Only the selected track ever survives into an ffmpeg-produced
     output. An already-correct file is uploaded with no ffmpeg pass at
     all, so it cannot drop the tracks it did not select -- a source with
     two audio streams can never be already-correct, no matter how
@@ -437,7 +436,7 @@ def test_the_effective_audio_codec_describes_the_stored_object_not_the_source(
     assert effective_audio_codec(source_codec, reencoded, channels) == stored
 
 
-# --- the extended verdict (CONV-01, D-136, D-138) ---------------------------
+# --- the extended verdict ---------------------------------------------------
 # All failing today: `Verdict` does not yet carry `plan`, `plan_reason_key`,
 # `plan_reason_params`, `bitrate_bps`, `over_bitrate_ceiling`,
 # `subtitle_tracks`, `stereo_layout` or `stereo_layout_source`. This section

@@ -1,7 +1,6 @@
-"""Failing enumeration contract for `mytube_media.subtitles` (D-121, D-122,
-D-136): the three subtitle sources, their search order and the charset
-ladder. Font collection and cue parsing arrive with the code that needs
-them, in a later plan -- this module does not pre-assert them.
+"""Failing enumeration contract for `mytube_media.subtitles`: the three
+subtitle sources, their search order and the charset ladder. Font collection and cue parsing arrive with the code that needs
+them -- this module does not pre-assert them.
 
 Every subject is imported inside the test body so this module collects
 cleanly while `mytube_media.subtitles` does not exist yet.
@@ -317,7 +316,7 @@ def test_the_encoding_that_decoded_the_file_is_returned_with_the_text(
         assert encoding.lower() == "windows-1251"
 
 
-# --- read_text's refusal boundary (WR-03, T-04-41) ---------------------
+# --- read_text's refusal boundary ---------------------------------------
 
 
 def test_read_text_refuses_a_path_whose_extension_is_not_a_subtitle_format(
@@ -369,7 +368,7 @@ def test_read_text_still_reads_a_subtitle_file_under_the_cap(tmp_path):
     assert text == "Hello"
 
 
-# --- copy_external_track (CR-04's own note, T-04-41) --------------------
+# --- copy_external_track ------------------------------------------------
 
 
 def test_copy_external_track_copies_bytes_under_a_generated_stem(tmp_path):
@@ -417,7 +416,7 @@ def test_copy_external_track_refuses_an_oversized_file(tmp_path, monkeypatch):
         copy_external_track(source, scratch)
 
 
-# --- extraction_extension (CR-05) ---------------------------------------
+# --- extraction_extension -----------------------------------------------
 
 
 def test_extraction_extension_maps_known_codecs_and_falls_back_for_unknown():
@@ -441,7 +440,7 @@ def test_extraction_extension_maps_known_codecs_and_falls_back_for_unknown():
     assert extraction_extension(probe_json, 99) == "ass"
 
 
-# --- cue_times: WebVTT without an hours field (IN-04) -------------------
+# --- cue_times: WebVTT without an hours field ---------------------------
 
 
 def test_cue_times_reads_a_webvtt_cue_with_no_hours_field():
@@ -464,7 +463,7 @@ def test_cue_times_still_reads_an_srt_cue_with_hours():
     assert times == [3605.0]
 
 
-# --- bitmap_cue_after's bounded read window (IN-03) ----------------------
+# --- bitmap_cue_after's bounded read window -----------------------------
 
 
 def test_bitmap_cue_after_bounds_the_ffprobe_read_to_a_window(monkeypatch):
@@ -540,7 +539,7 @@ def test_extract_embedded_track_keeps_the_floor_for_a_small_source(monkeypatch, 
     assert _capture_extract_timeout(monkeypatch, source, tmp_path) == subtitles._EXTRACT_TIMEOUT_SECONDS
 
 
-# --- the font cap bounds the copy, not the leftovers (WR-04, T-04-42) ----
+# --- the font cap bounds the copy, not the leftovers --------------------
 
 
 def test_the_font_cap_stops_copying_at_the_file_limit(tmp_path, monkeypatch):
@@ -603,7 +602,7 @@ def test_the_font_cap_stops_copying_at_the_byte_limit(tmp_path, monkeypatch):
     assert len(copy_calls) == 3
 
 
-# --- attachment dumping never reads the container's own name (T-04-40) --
+# --- attachment dumping never reads the container's own name ------------
 
 
 def test_dump_container_font_attachments_is_a_noop_with_no_attachment_streams(

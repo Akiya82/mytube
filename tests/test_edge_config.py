@@ -85,7 +85,7 @@ def test_the_delivery_server_block_is_byte_identical_to_the_pinned_digest():
 
     assert sep, (
         f"the sentinel {SENTINEL!r} is missing from {TEMPLATE_PATH} -- the "
-        "admin server block has not been appended after it yet (plan 03), "
+        "admin server block has not been appended after it yet, "
         "or somebody removed the marker this test is pinned to"
     )
     digest = hashlib.sha256(head.encode("utf-8")).hexdigest()
@@ -100,7 +100,7 @@ def test_the_edge_template_never_gains_a_subrequest_authorisation_directive():
     assert "auth_request" not in text, (
         "auth_request appeared in the edge template -- the subrequest "
         "authorisation mechanism was deliberately not chosen for the "
-        "delivery path (see D-73); a login on this template's delivery "
+        "delivery path; a login on this template's delivery "
         "server block breaks every viewer"
     )
 

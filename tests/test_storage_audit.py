@@ -170,7 +170,7 @@ async def test_present_count_excludes_missing_rows(monkeypatch, capsys):
 
 
 async def test_a_moved_editions_object_counts_present_exactly_once(monkeypatch, capsys):
-    """T-05-38: after `queries.reparent_edition_to_episode` moves an
+    """After `queries.reparent_edition_to_episode` moves an
     edition, `referenced_objects` reports its object key through exactly
     one row -- the moved edition under the target title, never a second
     row still naming the tombstoned old title (whose own rows this same
@@ -255,7 +255,7 @@ async def test_a_missing_playlist_artifact_names_the_playlist_address_not_a_vide
     assert "/v/p-slug" not in out
 
 
-# --- Plan 10: a per-episode reap excludes only that episode's own object,
+# --- A per-episode reap excludes only that episode's own object,
 # integration tests against a real Postgres exercising queries.referenced_
 # objects directly, rather than the CLI's own stubbed report above.
 
@@ -279,7 +279,7 @@ async def test_a_reaped_episodes_object_is_counted_zero_times_and_its_siblings_o
     (`ep.status = 'deleted'`), leaving its two untouched siblings counted
     exactly once each -- the exact false positive the function's own
     docstring says the title-level exclusion exists to prevent, one level
-    down (plan 10).
+    down.
     """
     title_id, edition1, edition2, edition3 = await _seed_three_episode_title(raw_conn, "reaped")
     episode2 = await queries.episode_by_number(raw_conn, title_id, 2)
@@ -297,7 +297,7 @@ async def test_a_reaped_episodes_object_is_counted_zero_times_and_its_siblings_o
 @pytest.mark.integration
 async def test_an_episode_still_inside_its_countdown_is_still_counted_referenced(raw_conn):
     """A `pending_delete` episode's objects are untouched while the
-    deletion can still be undone (D-62) -- a bucket genuinely missing them
+    deletion can still be undone -- a bucket genuinely missing them
     during that window is still a broken address, so it must not be
     excluded the way a reaped one is.
     """
@@ -335,7 +335,7 @@ async def test_a_reaped_titles_episodes_are_still_excluded_exactly_as_before(raw
     assert keys.count(f"{edition_id}.mp4") == 0
 
 
-# --- plan 18: an address is not broken before anything undertook to
+# --- An address is not broken before anything undertook to
 # write it -- referenced_objects gains a predicate on the edition's own
 # status (excluding 'preparing') and, separately, on the title's for one
 # specific write-path asymmetry. See that function's own docstring for
@@ -433,7 +433,7 @@ async def test_a_preparing_title_contributes_nothing_until_the_title_is_active(r
 @pytest.mark.integration
 async def test_an_edition_inside_its_delete_countdown_is_still_counted_referenced(raw_conn):
     """A `pending_delete` edition's object is untouched while the
-    deletion can still be undone (D-62) -- a bucket genuinely missing it
+    deletion can still be undone -- a bucket genuinely missing it
     during that window is still a broken address, so the new `preparing`
     exclusion must not have swallowed this status too. The precedent is
     the identical episode-level test above, one level down.
@@ -459,7 +459,7 @@ async def test_a_failed_editions_object_still_in_the_bucket_is_reported_present_
     raw_conn,
 ):
     """The route the production converter reports a failure to deletes
-    nothing (D-115: the poster uploads before the video, so a job that
+    nothing (the poster uploads before the video, so a job that
     dies mid-transfer can already have put a real object in the bucket).
     A failed edition must therefore stay in the referenced set -- if
     `failed` is ever added to the exclusion list beside `preparing`, this

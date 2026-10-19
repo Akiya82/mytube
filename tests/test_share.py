@@ -213,8 +213,8 @@ class _DummyPool:
 
 @pytest.fixture
 def web_client(_web_env, monkeypatch, signed_in):
-    """Since plan 03 the directory-listing branch also calls
-    `queries.editions_by_source_paths` (the already-added chip, D-48), so
+    """The directory-listing branch also calls
+    `queries.editions_by_source_paths` (the already-added chip), so
     `request.app.state.db_pool` now needs to exist -- same `_DummyPool`
     shape test_resolve.py already uses. The query itself is monkeypatched
     to "nothing already added", matching this fixture share's fixture data

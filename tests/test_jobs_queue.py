@@ -16,7 +16,7 @@ RED state: none of `orchestrator.db.queries`'s new job-queue functions
 (mirrors `tests/test_queries.py`'s own extension style for the phase-2
 additions to this same module).
 
-Only the six claiming tests (WORK-02/WORK-03) are marked `integration`:
+Only the six claiming tests are marked `integration`:
 they are the ones that genuinely need two independent, committed
 connections racing against the real `FOR UPDATE SKIP LOCKED` query --
 a rollback-wrapped `db_conn` cannot exhibit cross-connection visibility at
@@ -93,7 +93,7 @@ async def _clean_jobs_before_and_after(migrated_db_url):
 @pytest.fixture
 async def worker_conns(migrated_db_url):
     """Two independent, autocommitting connections to the same migrated
-    Postgres -- what WORK-02/03's claiming tests need to prove the claim
+    Postgres -- what the claiming tests need to prove the claim
     is visible across sessions, which the suite's rollback-wrapped
     `db_conn` cannot exhibit.
     """
@@ -179,7 +179,7 @@ async def test_a_transcode_job_carries_the_operator_s_choices_and_nothing_derive
     assert not columns & {"argv", "filter_chain", "encoder_flags", "command"}
 
 
-# --- Claiming (WORK-02, WORK-03) ---------------------------------------
+# --- Claiming -----------------------------------------------------------
 
 
 @pytest.mark.integration
@@ -339,7 +339,7 @@ async def test_claiming_an_empty_queue_returns_nothing_rather_than_raising(worke
     assert claimed is None
 
 
-# --- Heartbeat and cancellation (WORK-04, D-129) ------------------------
+# --- Heartbeat and cancellation -----------------------------------------
 
 
 @pytest.mark.parametrize("stage", ["working", "uploading"])
@@ -435,7 +435,7 @@ async def test_requesting_cancellation_on_a_queued_job_can_finish_it_immediately
     assert row["worker_name"] is None
 
 
-# --- Finishing (D-116) ---------------------------------------------------
+# --- Finishing ----------------------------------------------------------
 
 
 @pytest.mark.parametrize("outcome", ["done", "failed"])
@@ -618,7 +618,7 @@ async def test_a_failure_reason_is_stored_as_a_catalog_key(db_conn):
     assert " " not in reason
 
 
-# --- Requeue and the attempts cap (WORK-04, D-130) ----------------------
+# --- Requeue and the attempts cap ---------------------------------------
 
 
 async def test_a_running_job_past_the_stale_threshold_is_due_for_requeue(db_conn):
@@ -713,7 +713,7 @@ async def test_the_fourth_attempt_is_a_named_failure_rather_than_a_fifth_requeue
 async def test_a_stale_job_that_was_already_cancelled_finishes_as_cancelled_not_requeued(
     db_conn,
 ):
-    """D-129 names both endings for a cancellation -- the converter
+    """A cancellation has two endings -- the converter
     confirming it, or the reaper giving up on the converter. Left out, an
     operator's cancellation silently becomes a requeue and the job they
     stopped starts again on another attempt.
@@ -751,7 +751,7 @@ async def test_a_stale_job_that_was_already_cancelled_finishes_as_cancelled_not_
     assert final["failure_reason"] is None
 
 
-# --- The exhausted branch also fails the catalog row (CR-02) ------------
+# --- The exhausted branch also fails the catalog row --------------------
 
 
 class _SingleAcquireCtx:
@@ -886,7 +886,7 @@ async def test_a_cancelled_job_past_the_attempt_cap_still_ends_cancelled_not_fai
     assert job_row["failure_reason"] is None
 
 
-# --- Worker visibility (D-113, D-117, D-131) -----------------------------
+# --- Worker visibility --------------------------------------------------
 
 
 async def test_a_check_in_is_recorded_even_when_the_claim_finds_nothing(db_conn):
@@ -954,7 +954,7 @@ async def test_a_converter_below_the_memory_floor_checks_in_as_waiting_for_the_c
         )
 
 
-# --- Per-kind counting (D-118) -------------------------------------------
+# --- Per-kind counting --------------------------------------------------
 
 
 async def test_the_queue_position_is_counted_within_a_kind(db_conn):

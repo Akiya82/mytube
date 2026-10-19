@@ -1,6 +1,5 @@
-"""Route tests for the add form (GET /add/{path} on a file) -- Screen 2 of
-02-UI-SPEC.md. `ffprobe` is monkeypatched to return the frozen real-ffprobe
-fixtures from tests/fixtures/probe/ (task 2), and the database layer is
+"""Route tests for the add form (GET /add/{path} on a file).
+`ffprobe` is monkeypatched to return the frozen real-ffprobe fixtures from tests/fixtures/probe/, and the database layer is
 monkeypatched at the `orchestrator.db.queries` module boundary, the same
 shape test_resolve.py and test_share.py already use -- no real Postgres or
 subprocess in this file, quick-loop only.
@@ -236,7 +235,7 @@ async def test_incompatible_file_renders_no_enabled_add_control_and_disabled_con
 
     assert resp.status_code == 200
     # No "Add as-is" control at all (still not eligible) -- but Convert
-    # is now live for any readable file, compatible or not (CONV-01).
+    # is now live for any readable file, compatible or not.
     assert 'name="add"' not in resp.text
     convert_tag = resp.text.split('name="convert"')[1].split(">")[0]
     assert "disabled" not in convert_tag
@@ -249,7 +248,7 @@ async def test_silent_file_renders_no_add_control_and_explains_why(
     """The third state the form must never reach: a live Add button over a
     track picker with no options, whose POST can only answer the required
     audio_track field with a 422. A conversion needs a track chosen
-    exactly as a copy does (Amendment 2), so a source with none has no
+    exactly as a copy does, so a source with none has no
     live action at all -- Convert renders, disabled.
     """
     monkeypatch.setattr(routes_share, "probe", _probe_returning("no_audio.json"))
@@ -285,7 +284,7 @@ async def test_unreadable_file_renders_unreadable_reason_not_traceback(
 async def test_name_field_value_is_the_recognised_name_not_the_raw_filename(
     web_client, monkeypatch
 ):
-    """D-169: the name field is prefilled with what the recogniser read,
+    """The name field is prefilled with what the recogniser read,
     not the raw filename -- "a-video.mp4" recognises as "a-video" (the
     extension stripped), and the raw filename still renders, verbatim, in
     its own caption beneath the episode-number field.
@@ -413,7 +412,7 @@ async def test_slug_field_shows_the_planned_slug(web_client, monkeypatch):
         resp = await web_client.get("/add/a-video.mp4")
 
     assert 'id="add-slug"' in resp.text
-    # D-169: the slug is now planned from the recognised name ("a-video",
+    # The slug is now planned from the recognised name ("a-video",
     # the extension stripped), not the raw filename.
     assert 'value="a-video"' in resp.text
 
@@ -462,7 +461,7 @@ async def test_tombstoned_slug_with_reuse_confirmed_enables_submit(
     assert "disabled" not in submit_tag
 
 
-# --- already-added, now offered as an edition (D-176 supersedes D-147) ----
+# --- already-added, now offered as an edition ----------------------------
 
 
 def _already_added_row(**overrides):
@@ -483,7 +482,7 @@ def _already_added_row(**overrides):
 async def test_already_added_exact_match_gates_both_actions_behind_the_edition_offer(
     web_client, monkeypatch, db_stub
 ):
-    """D-176 supersedes D-147: whatever kind the existing edition is, the
+    """Whatever kind the existing edition is, the
     exact-match banner is always the same warning confirm-gate offering
     "Add as an edition" -- no differing-kind distinction, no info-only
     branch, and both primary actions stay disabled until it is accepted.
@@ -535,8 +534,8 @@ async def test_accepting_the_edition_offer_enters_edition_mode_with_no_gate(
 async def test_opened_from_library_add_edition_link_enters_edition_mode_with_no_gate(
     web_client, monkeypatch, db_stub
 ):
-    """The episode row's own "Add edition" action (05-UI-SPEC.md Component
-    Inventory, D-176) is a plain link carrying `target_episode_id` -- the
+    """The episode row's own "Add edition" action
+    is a plain link carrying `target_episode_id` -- the
     exact same query param `test_accepting_the_edition_offer_enters_
     edition_mode_with_no_gate` above exercises from the confirm-gate's own
     CTA, reached here the other way round: no prior "already added" state
@@ -560,7 +559,7 @@ async def test_opened_from_library_add_edition_link_enters_edition_mode_with_no_
     assert "disabled" not in add_tag
 
 
-# --- title match, D-159's single-file case ---------------------------------
+# --- title match, the single-file case -----------------------------------
 
 
 async def test_title_match_with_a_free_number_offers_to_attach_not_a_gate(
@@ -593,7 +592,7 @@ async def test_title_match_with_a_taken_number_becomes_an_edition_offer(
     web_client, monkeypatch, db_stub, share_root
 ):
     """A *different* file recognising as the same episode number of an
-    existing title (D-176's "720p rip of the same episode" case) becomes
+    existing title (the "720p rip of the same episode" case) becomes
     the edition-offer gate instead of the attach offer, and blocks the
     primary actions the same way an exact-source match does.
     """
@@ -627,7 +626,7 @@ async def test_title_match_with_a_taken_number_becomes_an_edition_offer(
 async def test_no_recognised_episode_number_never_offers_a_title_match(
     web_client, monkeypatch, db_stub
 ):
-    """D-169: clips without a number behave exactly as today -- a file
+    """Clips without a number behave exactly as today -- a file
     whose name matches a catalog title but carries no recognisable
     episode number is never offered the attach path (there is no episode
     number to attach it at).
@@ -704,7 +703,7 @@ async def test_subtitle_group_lists_embedded_tracks_and_defaults_to_none(
 
 
 async def test_manual_path_field_is_always_present_with_no_inline_script(web_client, monkeypatch):
-    """T-05-14: the manual field is a permanent fallback now, not a state
+    """The manual field is a permanent fallback now, not a state
     revealed by picking a radio option -- it renders every time, and its
     own hidden radio carries no static "manual" value in the markup at all
     (a separate acceptance grep enforces that; this test only re-confirms
@@ -723,7 +722,7 @@ async def test_manual_path_field_is_always_present_with_no_inline_script(web_cli
     assert "<script>" not in resp.text
 
 
-# --- the manual field is a button, not a track option (T-05-14) --------
+# --- the manual field is a button, not a track option --------------------
 
 
 async def test_the_manual_entry_is_no_longer_a_radio_option_in_either_group(
@@ -743,10 +742,9 @@ async def test_the_manual_entry_is_no_longer_a_radio_option_in_either_group(
 
 
 def test_preview_button_disabled_state_is_wired_to_the_subtitle_choice_in_the_script():
-    """Checkable through the script's own file rather than a browser
-    (05-04-PLAN.md task 2's own acceptance note): the listener that keeps
-    the preview control's disabled state in sync with the current
-    subtitle choice.
+    """Checkable through the script's own file rather than a browser:
+    the listener that keeps the preview control's disabled state in sync
+    with the current subtitle choice.
     """
     script = (Path(__file__).parent.parent / "static" / "app.js").read_text(encoding="utf-8")
     assert "_updatePreviewGate" in script
@@ -754,7 +752,7 @@ def test_preview_button_disabled_state_is_wired_to_the_subtitle_choice_in_the_sc
     assert "button.disabled" in script
 
 
-# --- the sidecar/audio picker route (T-05-14) -----------------------------
+# --- the sidecar/audio picker route --------------------------------------
 
 
 async def test_sidecar_picker_route_lists_real_subtitle_candidates_for_a_real_source(
@@ -828,7 +826,7 @@ async def test_subtitle_group_is_disabled_under_a_stereo_layout(web_client, monk
     assert 'name="subtitle_choice" value="embedded' not in resp.text
 
 
-# --- external audio and subtitle labelling (D-180..D-186) ----------------
+# --- external audio and subtitle labelling -------------------------------
 
 
 def _encoded(name: str) -> str:
@@ -1032,13 +1030,13 @@ async def test_external_audio_choice_leaves_subtitle_default_untouched(
     assert resp.status_code == 200
     # A Russian dub sitting right there in the audio list changes nothing
     # about the subtitle group's own default -- "No subtitles" is still
-    # the only checked radio in that fieldset (D-183: no dub-to-signs
+    # the only checked radio in that fieldset (no dub-to-signs
     # heuristic).
     assert 'name="subtitle_choice" value="none" checked' in resp.text
 
 
-# The GET-render second-edition gate (D-147) is retired: D-176 supersedes
-# it, and `test_already_added_exact_match_gates_both_actions_behind_the_edition_offer`
+# The GET-render second-edition gate is retired: the edition offer
+# supersedes it, and `test_already_added_exact_match_gates_both_actions_behind_the_edition_offer`
 # / `test_accepting_the_edition_offer_enters_edition_mode_with_no_gate` above
 # cover its replacement. The POST route's own `confirm_add_anyway` re-check
 # stays as defensive, unreachable-from-the-UI code -- see
@@ -1129,12 +1127,12 @@ async def test_convert_only_source_shows_neither_as_is_estimate_nor_space_banner
     assert "disabled" not in convert_tag
 
 
-# --- POST /add/{path} -- the convert branch (D-145, D-147, D-148) -------
+# --- POST /add/{path} -- the convert branch ------------------------------
 
 
 @pytest.fixture
 def post_client(web_client, monkeypatch):
-    """The POST route re-probes the file itself (T-02-06) -- same
+    """The POST route re-probes the file itself -- same
     `_probe_returning` doubles as GET's, applied to `routes_titles.probe`
     rather than `routes_share.probe`.
     """
@@ -1230,8 +1228,7 @@ async def test_second_edition_gate_refuses_a_convert_post_with_no_confirmation(
     post_client, db_stub
 ):
     """The gate is enforced here, not only by the page's own control -- a
-    form can be submitted with no `confirm_add_anyway` field at all
-    (D-147).
+    form can be submitted with no `confirm_add_anyway` field at all.
     """
     db_stub.already_added_rows = [
         {
@@ -1317,7 +1314,7 @@ async def test_convert_payload_carries_only_the_operators_choices(post_client, d
     }
 
 
-# --- POST /add/{path} -- the audio_choice compound value (T-05-13) -------
+# --- POST /add/{path} -- the audio_choice compound value -----------------
 
 
 async def test_an_external_audio_choice_queues_the_external_path(
@@ -1391,7 +1388,7 @@ async def test_an_embedded_index_the_probe_never_reported_is_refused_via_audio_c
 async def test_a_malformed_audio_choice_bypassing_the_page_is_refused(post_client, db_stub):
     """A submission with no page's own controls behind it -- an
     unrecognised `audio_choice` value -- is refused the same way a
-    tampered one would be (T-05-13).
+    tampered one would be.
     """
     async with post_client:
         resp = await _post_add(post_client, audio_choice="not-a-real-choice")

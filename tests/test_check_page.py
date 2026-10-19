@@ -1,4 +1,4 @@
-"""Route tests for GET /check/{slug} -- Screen 4 of 02-UI-SPEC.md (D-65).
+"""Route tests for GET /check/{slug}.
 
 The database layer is monkeypatched at the `orchestrator.db.queries`
 module boundary, the same shape test_library.py and test_add_form.py
@@ -59,7 +59,7 @@ def _web_env(monkeypatch):
 class _QueriesStub:
     resolved_by_slug: dict = field(default_factory=dict)
     row_by_title_id: dict = field(default_factory=dict)
-    # Plan 10: the episode/edition check routes' own reads, keyed exactly
+    # The episode/edition check routes' own reads, keyed exactly
     # the way routes_episodes.py calls each function.
     episode_resolved: dict = field(default_factory=dict)  # (slug, number, edition_slug) -> row
     title_edition_resolved: dict = field(default_factory=dict)  # (slug, edition_slug) -> row
@@ -110,7 +110,7 @@ def client(_web_env, queries_stub, signed_in):
 @pytest.fixture
 def anon_client(_web_env, queries_stub, operator_present):
     """The identical client, minus `signed_in` and minus the session
-    cookie -- T-05-45's own gate test: the two new check routes must
+    cookie -- the gate test: the two new check routes must
     refuse exactly like every other operator-only screen, not gain a
     public exemption.
     """
@@ -222,7 +222,7 @@ async def test_hairpin_note_names_the_same_address_and_is_always_present(client,
     assert "router" in resp.text.lower()
 
 
-# --- The stereo-mode sentence (04-UI-SPEC.md Screen 4 addendum) ----------
+# --- The stereo-mode sentence ----------------------------------------------
 
 
 async def test_layout_hint_sbs_names_the_side_by_side_mode(client, queries_stub):
@@ -311,7 +311,7 @@ async def test_copy_control_still_copies_only_the_address_on_a_3d_title(client, 
     assert 'data-copy-text="https://mytube.example/v/copy-3d-clip"' in resp.text
 
 
-# --- Plan 10: an episode's own check page, and an edition's ----------------
+# --- An episode's own check page, and an edition's -------------------------
 
 
 async def test_episode_check_page_renders_its_own_heading_address_player_and_detail(
@@ -368,7 +368,7 @@ async def test_edition_check_page_renders_its_own_heading_and_address(client, qu
 
 
 async def test_film_check_page_unaffected_for_a_one_episode_title(client, queries_stub):
-    """D-158: a film's own alternative edition (a two-segment address whose
+    """A film's own alternative edition (a two-segment address whose
     second segment is not made only of digits) resolves through
     `resolve_title_edition_slug`, not `resolve_episode_slug` -- exercised
     here to prove that branch renders too, distinctly from the bare
@@ -395,7 +395,7 @@ async def test_film_check_page_unaffected_for_a_one_episode_title(client, querie
 
     assert resp.status_code == 200
     assert "Mushoku Tensei Movie 1 (dub-en)" in resp.text
-    # A one-episode title's nav never renders (D-158) -- there is nothing
+    # A one-episode title's nav never renders -- there is nothing
     # to walk to.
     assert "check.cta.next_episode" not in resp.text
     assert 'href="/check/mushoku-tensei-movie/2"' not in resp.text
@@ -420,7 +420,7 @@ async def test_unknown_edition_slug_answers_not_found(client, queries_stub):
     assert resp.status_code == 404
 
 
-# --- Plan 10: the previous/next navigation ---------------------------------
+# --- The previous/next navigation ------------------------------------------
 
 
 def _seed_episode_page(queries_stub, *, slug, number, title_id, episode_id, episode_count, **over):
@@ -489,7 +489,7 @@ async def test_check_nav_previous_and_next_reach_the_right_neighbours_in_number_
 async def test_check_nav_reaches_a_not_ready_neighbour_and_renders_its_own_state(
     client, queries_stub
 ):
-    """D-158: the navigation never computes a ready range -- it links to
+    """The navigation never computes a ready range -- it links to
     every neighbour, ready or not, and a not-ready neighbour's own page
     renders `check.inactive`, exactly like a not-yet-active title's bare
     check page already does.
@@ -617,7 +617,7 @@ async def test_check_nav_last_boundary_renders_disabled_link_with_its_reason(
     assert 'href="/check/boundary-series-2/4"' not in resp.text
 
 
-# --- Plan 10: both new routes stay behind the session gate -----------------
+# --- Both new routes stay behind the session gate --------------------------
 
 
 async def test_episode_check_page_gate_redirects_when_unauthenticated(anon_client, queries_stub):

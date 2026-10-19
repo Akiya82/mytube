@@ -1,4 +1,4 @@
-"""Failing detection contract for `mytube_media.stereo3d` (CONV-08, D-138):
+"""Failing detection contract for `mytube_media.stereo3d`:
 tag beats filename beats geometry, and half is never guessed from a
 1920x1080 frame.
 
@@ -8,8 +8,8 @@ module collects cleanly while `mytube_media.stereo3d` does not exist yet.
 
 Fixtures were captured locally with this project's own pinned ffmpeg
 (`ffmpeg version 2025-10-01-git-...-full_build`) by
-`tools/make_probe_fixtures.sh`. Capturing them settled 04-RESEARCH.md's
-Open Question 1: the real Matroska tag key is lowercase `stereo_mode` (not
+`tools/make_probe_fixtures.sh`. Capturing them settled
+an open question: the real Matroska tag key is lowercase `stereo_mode` (not
 the uppercase `STEREO_MODE` the research document had only cross-
 referenced from documentation), and the side-data entry's type name lives
 under `side_data_type` ("Stereo 3D"), with the actual orientation as a

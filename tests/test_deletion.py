@@ -1,5 +1,5 @@
 """Integration tests for the CLI `remove` command and the reaper
-(orchestrator/reaper.py), plus (plan 10) the six per-episode action routes
+(orchestrator/reaper.py), plus the six per-episode action routes
 in orchestrator/web/routes_episodes.py, called directly against a real
 connection through a minimal Request/pool stand-in rather than a full
 authenticated HTTP client -- the same "exercise the real function against
@@ -149,7 +149,7 @@ async def test_reaper_deletes_object_and_finishes_delete_after_grace_expires(
     row_after = await queries.resolve_slug(raw_conn, "reaper-target-slug")
     assert row_after["status"] == "deleted"
 
-    # D-10: the slug_history row survives the reap -- tombstone, not a hole.
+    # The slug_history row survives the reap -- tombstone, not a hole.
     history = await raw_conn.fetch(
         "SELECT title_id FROM slug_history WHERE slug = $1", "reaper-target-slug"
     )
@@ -217,7 +217,7 @@ async def test_reaper_retries_next_cycle_when_an_object_delete_fails(raw_conn, m
     assert row_after["status"] == "deleted"
 
 
-# --- Plan 10: the six per-episode action routes, each scoped to one
+# --- The six per-episode action routes, each scoped to one
 # episode, leaving its sibling untouched -------------------------------
 
 
@@ -273,8 +273,8 @@ async def test_episode_purge_deletes_immediately_leaving_sibling_untouched(
 async def test_deleting_an_episodes_last_edition_takes_the_episode_with_it(
     raw_conn, deleted_objects
 ):
-    """D-178/plan 11: an episode with exactly one edition never renders the
-    nested edition disclosure at all (05-UI-SPEC.md Screen D item 5) --
+    """An episode with exactly one edition never renders the
+    nested edition disclosure at all --
     "Delete episode" is the only control that can ever remove that one
     edition, and it takes the whole episode with it on the same countdown,
     after which every address of that episode answers as gone (here: the
@@ -324,7 +324,7 @@ async def test_episode_cancel_reaches_only_that_episodes_own_job(
     raw_conn, episode_route_deleted_objects
 ):
     """A queued job for episode 1's own edition must never be touched by a
-    cancel aimed at episode 2 (D-164) -- `job_for_episode` scopes strictly
+    cancel aimed at episode 2 -- `job_for_episode` scopes strictly
     to the editions of the episode it is given.
     """
     title_id, ep1, ep2, edition2 = await _create_two_episode_series(
@@ -438,7 +438,7 @@ async def test_episode_dismiss_removes_only_that_failed_episode_leaving_sibling_
 
 
 async def test_episode_dismiss_deletes_objects_before_rows(raw_conn, monkeypatch):
-    """T-02-08, one level down: a storage failure must leave the failed
+    """One level down: a storage failure must leave the failed
     episode exactly as it was, never a row already gone with bytes an
     audit can no longer attribute to anything -- the same ordering
     routes_titles.dismiss_route already guarantees for a whole title.
@@ -462,7 +462,7 @@ async def test_episode_dismiss_deletes_objects_before_rows(raw_conn, monkeypatch
     assert row["edition_status"] == "failed"
 
 
-# --- Plan 10: the reaper's own sweep, extended to episodes -----------------
+# --- The reaper's own sweep, extended to episodes --------------------------
 
 
 async def test_episode_reaper_deletes_object_and_finishes_delete_after_grace_expires(

@@ -144,7 +144,7 @@ def test_every_runtime_selected_key_in_the_source_exists_in_both_catalogs():
 def test_incompatible_hint_and_validation_sentence_are_not_worded_alike():
     """`folder.incompatible.hint` and `folder.validation.blocked` are
     neighbouring sentences about a similar-looking problem, but only one
-    of them is actually about a highlight (plan 18 task 3, 05-UAT.md).
+    of them is actually about a highlight.
     Incompatibility under "Add as-is" is never highlighted -- routes_
     folder.py computes `highlighted` from a track mismatch alone -- so
     the hint has to point the operator at the reason sentence each

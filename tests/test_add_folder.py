@@ -1,5 +1,5 @@
 """Route tests for the folder confirmation screen (`GET /add-folder/{path}`)
--- 05-UI-SPEC.md Screen A/B. Follows `test_add_form.py`'s own shape: no
+-- it follows `test_add_form.py`'s own shape: no
 real Postgres or subprocess, `ffprobe` and the database layer both
 monkeypatched at their module boundary.
 """
@@ -87,7 +87,7 @@ class _DummyPool:
 def folder_share_root(tmp_path):
     """A season folder with three episodes, plus a subfolder holding a
     fourth video that must never be listed or counted -- the direct-
-    files-only rule (D-166/D-167) this whole screen rests on.
+    files-only rule this whole screen rests on.
     """
     root = tmp_path / "share"
     root.mkdir()
@@ -104,19 +104,19 @@ def folder_share_root(tmp_path):
     single.mkdir()
     (single / "a-video.mp4").write_bytes(b"stub video bytes")
 
-    # A second, plain two-file folder Task 3's row-state tests reuse under
+    # A second, plain two-file folder the row-state tests reuse under
     # different probe/db_stub configurations per test, kept separate from
     # "Horimiya" so those files' own three-episode shape stays fixed for
-    # Task 1/2's own tests.
+    # the other tests.
     mixed = root / "Mixed"
     mixed.mkdir()
     (mixed / "Mixed - 01.mkv").write_bytes(b"stub video bytes")
     (mixed / "Mixed - 02.mkv").write_bytes(b"stub video bytes")
 
-    # Plan 11 Task 3: a twelve-episode season, every file already an
+    # A twelve-episode season, every file already an
     # edition of the same title -- the edition-only mode's own folder,
     # kept separate so a studio-folder-covers-eleven-of-twelve test can
-    # tick 12 files without perturbing Task 1/2's fixed three-episode
+    # tick 12 files without perturbing the fixed three-episode
     # "Horimiya" shape above.
     season = root / "Season"
     season.mkdir()
@@ -176,7 +176,7 @@ def db_stub(monkeypatch):
         reparent_edition_to_episode_calls: list[dict] = []
         enqueue_job_calls: list[dict] = []
         touch_title_changed_calls: list = []
-        # Plan 11 Task 3: the edition-only folder mode's own reads/writes.
+        # The edition-only folder mode's own reads/writes.
         default_editions_technical_result: list = []
         audio_languages_on_episodes_result: set = set()
         slug_taken_episode_ids: set = set()
@@ -294,7 +294,7 @@ def web_client(_web_env, db_stub, signed_in):
     )
 
 
-# --- Task 1: the button inside the opened folder -------------------------
+# --- The button inside the opened folder ----------------------------------
 
 
 async def test_button_renders_on_a_listing_with_two_video_files(web_client):
@@ -366,8 +366,7 @@ async def test_folder_button_form_submits_a_url_that_still_selects_edition_mode(
     slices the form element itself out of the page: the action must carry
     no query string at all, and the mode has to be a field inside the
     form, or clicking this button lands on the ordinary series screen
-    instead of the edition one it is labelled for (05-UAT.md gap, plan 18
-    task 1).
+    instead of the edition one it is labelled for.
     """
     db_stub.already_added_rows = [
         {"source_path": f"Horimiya/Horimiya - {n:02d}.mkv", "title_id": "same-title"}
@@ -412,7 +411,7 @@ async def test_plain_label_shows_when_no_files_are_already_added(web_client):
 async def test_folder_route_refuses_a_path_outside_the_share(web_client, monkeypatch):
     """A literal `../` traversal cannot be exercised through httpx/ASGI --
     both normalize dot segments client-side before the request is ever
-    sent (see 02-02-PLAN.md's own note on this). `safe_join` is the real
+    sent. `safe_join` is the real
     control and has its own direct tests in test_share.py; here the
     contract under test is that this route calls it and answers 400 when
     it raises, exactly like every other share route.
@@ -462,7 +461,7 @@ async def test_both_catalogs_hold_the_folder_button_keys():
         assert key in ru
 
 
-# --- Task 2: recognising and probing a whole folder -----------------------
+# --- Recognising and probing a whole folder -------------------------------
 
 
 def _probe_dispatch(mapping: dict):
@@ -768,7 +767,7 @@ async def test_the_estimate_sums_only_ticked_rows(monkeypatch, db_stub):
     assert built["estimate_size_bytes"] > 0
 
 
-# --- Task 3: the confirmation screen --------------------------------------
+# --- The confirmation screen ----------------------------------------------
 
 
 async def test_rendered_order_matches_the_contracts_numbering(web_client, monkeypatch):
@@ -1084,7 +1083,7 @@ async def test_not_predisabled_no_button_is_disabled_for_a_reason_a_box_could_ch
     assert "disabled" not in convert_tag
 
 
-# --- The save: POST /add-folder/{path} (plan 08) ---------------------------
+# --- The save: POST /add-folder/{path} ------------------------------------
 
 
 def _horimiya_form(**overrides) -> dict:
@@ -1382,7 +1381,7 @@ async def test_the_save_redirects_to_the_library(web_client, monkeypatch, db_stu
     assert resp.headers["location"] == "/library"
 
 
-# --- The move: an already-added row joins the series (plan 08, Task 3) -----
+# --- The move: an already-added row joins the series ----------------------
 
 
 def _already_added_row(rel_path: str, *, number: int) -> dict:
@@ -1530,7 +1529,7 @@ async def test_atomic_refusal_leaves_both_new_and_moved_rows_unwritten(
     assert db_stub.enqueue_job_calls == []
 
 
-# --- Plan 11 Task 3: a whole season gains an edition in one press ----------
+# --- A whole season gains an edition in one press -------------------------
 
 
 def _edition_mode_rows(
@@ -1763,7 +1762,7 @@ async def test_edition_mode_default_when_ready_applies_per_episode_not_at_save(
 
     assert resp.status_code == 302
     # The pointer request rides on the job, not on the edition write --
-    # add_edition_to_episode never touches default_edition_id (D-178).
+    # add_edition_to_episode never touches default_edition_id.
     assert len(db_stub.enqueue_job_calls) == 3
     for call in db_stub.enqueue_job_calls:
         assert call["make_default_when_ready"] is True

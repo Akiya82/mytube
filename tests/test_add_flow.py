@@ -1,7 +1,7 @@
-"""End-to-end coverage of preparing -> active and preparing -> failed
-(D-45..D-53), against a real Postgres (testcontainers) and real
+"""End-to-end coverage of preparing -> active and preparing -> failed,
+against a real Postgres (testcontainers) and real
 ffmpeg/ffprobe on small synthetic clips built once per module -- never
-hand-typed JSON, matching plan 03's own precedent for this analyzer.
+hand-typed JSON.
 
 **Storage is mocked.** Assert an upload was *called* with the expected key
 and content type, the way `tests/test_deletion.py` already asserts
@@ -45,8 +45,8 @@ def clips(tmp_path_factory):
     """Two small, real H.264 clips, one second long -- one already fully
     compliant (AAC, faststart), one whose audio needs re-encoding (mp3).
     Built once per module with the real local ffmpeg/ffprobe, the same
-    "capture from a real run, never hand-type" discipline plan 03 already
-    established for the compatibility fixtures.
+    "capture from a real run, never hand-type" discipline the
+    compatibility fixtures already follow.
     """
     root = tmp_path_factory.mktemp("clips")
     already_correct = root / "already-correct.mp4"
@@ -118,7 +118,7 @@ def storage_spy(monkeypatch):
 
     Only `orchestrator.media.queue` needs this any more: the startup
     sweep this fixture used to patch a second copy for
-    (`orchestrator.main`) is gone (D-118) -- restart recovery no longer
+    (`orchestrator.main`) is gone -- restart recovery no longer
     makes its own storage calls at all, it just lets a stale heartbeat
     put the row back in the queue for this same consumer to pick up
     again.
@@ -144,7 +144,7 @@ def storage_spy(monkeypatch):
 async def client(env, storage_spy, signed_in):
     """Runs the real lifespan (real Postgres pool, the real addition and
     assembly consumers, the real reaper) against an in-memory ASGI
-    transport -- the only way to exercise D-49's "the row is written, the
+    transport -- the only way to exercise the "the row is written, the
     response returns, and a background task does the rest" shape for
     real.
 
@@ -194,7 +194,7 @@ async def test_post_add_returns_redirect_with_preparing_row_and_null_started_at(
 ):
     """The claim under test -- "the row is written and the response
     returns before the background work does anything" -- is a real
-    design property (D-49), but asserting it by racing a wall-clock
+    design property, but asserting it by racing a wall-clock
     check against the worker task after `await client.post(...)` returns
     is not reliable: asyncio gives the worker task turns to run during
     that same `await`, and on a fast enough machine it can call
@@ -251,14 +251,14 @@ async def test_worker_drains_to_active_upload_called_and_v_slug_redirects(
 
     await _wait_until(is_active)
     elapsed = time.monotonic() - start
-    assert elapsed < 60, "the control-clip-sized add must land in under a minute (D-51)"
+    assert elapsed < 60, "the control-clip-sized add must land in under a minute"
 
     title = await raw_conn.fetchrow(
         "SELECT id, started_at FROM titles WHERE name = $1", "Drain Clip"
     )
     assert title["started_at"] is not None
 
-    # CAT-04: exactly one season, one episode, one edition for the film --
+    # Exactly one season, one episode, one edition for the film --
     # no separate entity type.
     counts = await raw_conn.fetchrow(
         """
@@ -384,7 +384,7 @@ async def test_poster_extraction_failure_still_ends_active_with_null_poster_key(
     assert edition["poster_key"] is None
 
 
-# --- parse_audio_choice (T-05-13) ----------------------------------------
+# --- parse_audio_choice -----------------------------------------------
 
 
 def test_parse_audio_choice_embedded_returns_the_absolute_stream_index():
@@ -426,7 +426,7 @@ def test_parse_audio_choice_refuses_an_empty_external_path():
 
 def test_parse_audio_choice_never_touches_the_filesystem(monkeypatch):
     """`parse_audio_choice` shapes the value only -- containment and
-    existence are the caller's job (T-05-13). Proven by making every
+    existence are the caller's job. Proven by making every
     filesystem entry point explode and confirming a normal call still
     answers normally.
     """
@@ -485,7 +485,7 @@ async def test_duplicate_source_path_add_proceeds_without_a_confirmation_field(
 
     # No confirm_duplicate field anywhere in this payload -- the design
     # contract discloses a duplicate via the listing chip and the form
-    # banner, and never blocks it (D-48).
+    # banner, and never blocks it.
     r2 = await client.post(
         f"/add/{clip['path'].name}",
         data=_post_data(clip, name="Dup Source B", slug="dup-source-b"),
@@ -494,7 +494,7 @@ async def test_duplicate_source_path_add_proceeds_without_a_confirmation_field(
     assert r2.status_code == 302
 
 
-# --- attaching an episode, adding an edition (D-159, D-176, task 2) -------
+# --- attaching an episode, adding an edition --------------------------
 
 
 @pytest.fixture
@@ -823,8 +823,7 @@ async def test_edition_branch_refuses_an_episode_that_does_not_exist(client, raw
     assert after == before
 
 
-# --- a job's terminal write lands on the edition, the title aggregates
-# (D-157, D-178, task 3) ----------------------------------------------------
+# --- a job's terminal write lands on the edition, the title aggregates --
 
 
 async def _title_status(conn, title_id) -> str:
@@ -836,7 +835,7 @@ async def _edition_status(conn, edition_id) -> str:
 
 
 async def test_single_file_add_still_ends_active_through_the_aggregate_rule(raw_conn):
-    """The one-episode path is unchanged (task 3's own done criterion):
+    """The one-episode path is unchanged:
     for a title with exactly one episode, `sync_title_status` reduces to
     the identical unconditional `mark_title_active` write this used to
     be, since the two facts are the same by construction.
@@ -857,7 +856,7 @@ async def test_single_file_add_still_ends_active_through_the_aggregate_rule(raw_
 
 async def test_aggregate_status_title_is_active_from_its_first_ready_episode(raw_conn):
     """A sibling episode still 'preparing' does not hold the title back
-    once one of its episodes is ready (D-157) -- and does not flip it to
+    once one of its episodes is ready -- and does not flip it to
     'failed' either."""
     from orchestrator.db import queries as queries_module
 
@@ -967,7 +966,7 @@ async def test_default_pointer_moves_for_a_ready_edition_that_asked_for_it(raw_c
 
 async def test_default_pointer_does_not_move_for_a_failed_edition(raw_conn):
     """The route stores the request on the job; the terminal write only
-    ever calls `set_default_edition` on the *done* path (D-178) -- a
+    ever calls `set_default_edition` on the *done* path -- a
     failed edition's own request is simply never acted on.
     """
     from orchestrator.db import queries as queries_module
@@ -1003,8 +1002,8 @@ async def test_cancelled_single_file_add_leaves_both_levels_consistent(
     client, raw_conn, clips, monkeypatch
 ):
     """The existing cancellation path (a title whose address never went
-    live is hard-deleted with no tombstone, T-04-32) is unaffected by this
-    plan's own readiness changes. `claim_job` itself is stubbed out for
+    live is hard-deleted with no tombstone) is unaffected by the
+    readiness changes. `claim_job` itself is stubbed out for
     the duration of this test -- unlike gating `process_add`, this keeps
     the job genuinely 'queued' (never claimed at all) while the request
     is cancelled, deterministic rather than a race against the real
@@ -1048,7 +1047,7 @@ async def test_cancelled_single_file_add_leaves_both_levels_consistent(
     assert episode_row is None
 
 
-# --- plan_edition_slug / suggest_edition_slug (D-177, D-178, D-179) -------
+# --- plan_edition_slug / suggest_edition_slug -------------------------
 
 
 def test_suggest_edition_slug_returns_dub_prefixed_slug_for_a_differing_language():
@@ -1207,7 +1206,7 @@ async def test_healthz_stays_responsive_while_upload_is_slow(
 async def test_more_than_one_heartbeat_covers_an_upload_that_outlasts_the_interval(
     client, clips, storage_spy, monkeypatch, raw_conn
 ):
-    """CR-01: a transfer that runs longer than one heartbeat interval is
+    """A transfer that runs longer than one heartbeat interval is
     still heartbeating throughout it, not just once before it starts --
     without this, the reaper's own stale sweep can requeue the job out
     from under an upload that is still healthily in flight.
@@ -1248,7 +1247,7 @@ async def test_more_than_one_heartbeat_covers_an_upload_that_outlasts_the_interv
     assert len(uploading) > 1
 
 
-# --- failure paths (task 3) ------------------------------------------
+# --- failure paths ----------------------------------------------------
 
 
 async def test_upload_failure_marks_failed_with_upload_key_and_aborts_multipart(
@@ -1365,7 +1364,7 @@ async def test_failure_after_poster_upload_deletes_the_poster_key_too(
 async def test_a_superseded_terminal_write_leaves_the_title_untouched(
     client, raw_conn, clips, storage_spy, monkeypatch
 ):
-    """WR-02, the add consumer's own half: when the terminal write reports
+    """The add consumer's half: when the terminal write reports
     the attempt was superseded (a late report against a job the reaper
     has already requeued or finished under a different attempt), the
     consumer must not flip the title active, write the edition's
@@ -1486,7 +1485,7 @@ async def test_healthz_stays_responsive_during_the_failure_cleanup_pair(
     assert elapsed < 0.5
 
 
-# --- restart recovery, now the reaper's job (D-118) --------------------
+# --- restart recovery, now the reaper's job ---------------------------
 #
 # There is no startup sweep to test in this file any more:
 # `orchestrator.main._sweep_preparing_titles` is gone, along with the
@@ -1714,7 +1713,7 @@ async def test_the_recorded_size_is_the_uploaded_object_not_the_source(
 async def test_a_restart_mid_remux_leaves_the_row_in_flight_rather_than_failed(
     raw_conn, env
 ):
-    """The property this plan exists to change (D-118), proven against the
+    """The property this plan exists to change, proven against the
     real durable table rather than a real process restart -- this project
     no longer runs a local dev stand to kill and bring back (`.claude
     /CLAUDE.md`: the workstation stand is retired, the service only runs

@@ -69,7 +69,7 @@ async def test_rename_pitfall_1_old_address_keeps_resolving(db_conn):
 
 
 async def test_move_into_series_keeps_the_old_address_resolving(db_conn):
-    """D-160's own promise for the library's single-row move (Screen G):
+    """The promise for the library's single-row move:
     `reparent_edition_to_episode` never deletes the standalone
     title's own `slug_history` row, so its old address keeps resolving to
     the exact episode that moved, through the permanent alias this
@@ -119,7 +119,7 @@ async def test_resolve_deleted_title_returns_non_active_status(db_conn):
 
 
 async def test_reuse_slug_after_tombstone_new_title_wins_old_row_survives(db_conn):
-    """D-10 / verdict B3: slug X belonged to deleted title A. A new title B
+    """Slug X belonged to deleted title A. A new title B
     is created *with* slug X (the CLI's `add --reuse-slug` path: title
     creation and slug assignment happen together, via
     create_title_with_edition -> reuse_slug) -> resolving X gives B, and

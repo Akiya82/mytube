@@ -80,6 +80,5 @@ SHAPE_FIXTURES: list[Expectation] = [
 ]
 
 # A shape the recogniser genuinely cannot get right, with the reason why.
-# Empty until a real attempt (not a guess) proves one belongs here -- see
-# the summary for what task 2 found.
+# Empty until a real attempt (not a guess) proves one belongs here.
 KNOWN_LIMITS: list[tuple[str, str]] = []

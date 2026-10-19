@@ -515,7 +515,7 @@ async def test_a_superseded_report_refuses_with_a_status_the_worker_can_act_on(
 ):
     """The signal to delete what it uploaded -- driven here as a clean
     superseded write (the terminal write's own honest `False`, no
-    exception raised), since task 3 gives a raised exception a different
+    exception raised), since a raised exception gets a different
     answer entirely (503, see the dedicated tests below). `job_by_id`
     reports a `running`, not-yet-done job, so this is the genuine-conflict
     case: deletion is attempted for `done` (the only outcome whose
@@ -571,7 +571,7 @@ async def test_a_superseded_report_refuses_with_a_status_the_worker_can_act_on(
 
 
 async def test_a_conflict_on_a_job_that_is_already_done_deletes_nothing(monkeypatch, client):
-    """CR-03(b): both attempts of a job write the same object key, so a
+    """Both attempts of a job write the same object key, so a
     late report against a job a different attempt already finished points
     at the object an active title is serving right now -- the delete must
     be skipped, not just attempted against a key that happens to be gone.
@@ -617,7 +617,7 @@ async def test_a_conflict_on_a_job_that_is_already_done_deletes_nothing(monkeypa
     assert edition_object_key_called == [], "the key is never even looked up for a done job"
 
 
-# --- The check-in stops freezing at the moment of the claim (05-17) -----
+# --- The check-in stops freezing at the moment of the claim -------------
 #
 # Each terminal report closes the window between the converter's last
 # heartbeat and its next claim poll: a converter that just finished (or
@@ -797,7 +797,7 @@ async def test_a_done_report_with_no_audio_channel_layout_is_accepted(monkeypatc
 
 async def test_a_failed_report_clears_the_cached_storage_listing_too(monkeypatch, client):
     """The poster case: the converter uploads the poster before the
-    video (D-115), so a failed conversion can have already left an
+    video, so a failed conversion can have already left an
     object in the bucket. The failed report is the only announcement of
     it, so it clears the cache exactly like the done report does.
     """
@@ -831,7 +831,7 @@ async def test_a_failed_report_clears_the_cached_storage_listing_too(monkeypatch
 
 async def test_a_failed_report_never_deletes_the_jobs_object(monkeypatch, client):
     """Pins the fact `queries.referenced_objects`'s own exclusion list
-    rests on (05-18-PLAN.md task 2): a failed edition stays in the
+    rests on : a failed edition stays in the
     referenced set precisely because this route never deletes its
     object, only the two status flips. If this route ever starts
     cleaning up, keeping `failed` out of that exclusion list becomes
@@ -972,7 +972,7 @@ async def test_a_heartbeat_returns_the_cancel_flag(monkeypatch, client, cancel_r
     assert resp.json()["cancel_requested"] == cancel_requested
 
 
-# --- The check-in stops freezing at the moment of the claim (05-17) -----
+# --- The check-in stops freezing at the moment of the claim -------------
 #
 # A converter that holds a job stops polling /worker/claim -- the only
 # route that used to write worker_checkins -- so about a minute into
@@ -1093,13 +1093,13 @@ async def test_an_unknown_job_identifier_answers_a_refusal_rather_than_an_error(
     assert "traceback" not in resp.text.lower()
 
 
-# --- Bounds and enumerations (WR-05/IN-13/T-04-57) -----------------------
+# --- Bounds and enumerations --------------------------------------------
 
 
 async def test_a_heartbeat_whose_progress_value_is_not_a_number_is_refused(
     monkeypatch, client
 ):
-    """The exact reproduction WR-05 recorded (a JSON string carrying
+    """The exact reproduction of the bug (a JSON string carrying
     `"NaN"`, not a bare float) -- `allow_inf_nan=False` is what refuses
     it, never a value that would otherwise reach `heartbeat_job` and then
     raise while the library page renders it.
@@ -1293,7 +1293,7 @@ async def test_the_success_body_the_client_posts_matches_the_route_models_own_fi
     assert set(posted) == set(DoneBody.model_fields)
 
 
-# --- Atomicity against a real Postgres (CR-03/IN-10) ---------------------
+# --- Atomicity against a real Postgres ----------------------------------
 #
 # Everything above drives the routes with `_DummyPool`/`_DummyConn` --
 # adequate for the gate, the protocol check and the model's own
@@ -1408,7 +1408,7 @@ async def _title_and_edition_for_claim(conn) -> tuple:
 
 
 # --- the converter's own probe-mismatch guard branches around a null
-# embedded index (D-180) ---------------------------------------------------
+# embedded index ---------------------------------------------------
 #
 # The two tests below drive `worker.__main__._process_job` directly, the
 # same layer `test_worker_job.py` exercises -- placed here rather than
@@ -1549,7 +1549,7 @@ def _run_converter_job(monkeypatch, tmp_path, job) -> _FakeConverterClient:
 def test_a_convert_job_with_external_audio_and_a_null_index_reaches_a_done_report(
     monkeypatch, tmp_path
 ):
-    """The owner's own primary case (D-180): the embedded track is never
+    """The owner's own primary case: the embedded track is never
     consulted, the external file is probed instead, and the job finishes
     rather than tripping the guard built for an embedded index.
     """

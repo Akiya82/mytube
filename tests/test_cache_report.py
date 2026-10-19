@@ -1,4 +1,4 @@
-"""Unit tests for `orchestrator.cli.cache_report` (D-28/D-29/D-30, plan 05/06).
+"""Unit tests for `orchestrator.cli.cache_report`.
 
 All synthetic logs use the exact field order of `log_format cache_audit` in
 src/edge/nginx.conf.template:
@@ -12,7 +12,7 @@ below defaults to omitting it, matching a pre-recreate line, and callers
 pass it explicitly to build a post-recreate line.
 
 No `$remote_addr` anywhere in the format -- the parser under test has no
-notion of an IP address (D-30), and none of these fixtures include one.
+notion of an IP address, and none of these fixtures include one.
 """
 from orchestrator.cli.cache_report import cache_report
 
@@ -40,7 +40,7 @@ def _line(
 
 def test_clean_session_all_chunks_hit_at_most_once_returns_zero(tmp_path, capsys):
     """Each chunk: one MISS (cold fill) + three HITs (three synchronous
-    viewers). D-28 is satisfied -- no chunk went to storage twice."""
+    viewers). No chunk went to storage twice."""
     log = tmp_path / "access.log"
     lines = []
     for rng in ("bytes=0-1048575", "bytes=1048576-2097151"):
@@ -56,8 +56,8 @@ def test_clean_session_all_chunks_hit_at_most_once_returns_zero(tmp_path, capsys
 
 
 def test_chunk_fetched_twice_from_storage_returns_one_and_names_it(tmp_path, capsys):
-    """Same chunk goes MISS twice (proxy_cache_lock_timeout expired mid-fill,
-    Pitfall 11) -- D-28 violated, exit code 1, offending chunk named."""
+    """Same chunk goes MISS twice (proxy_cache_lock_timeout expired mid-fill)
+    -- the rule is violated, exit code 1, offending chunk named."""
     log = tmp_path / "access.log"
     lines = [
         _line("/blob/y.mp4", "bytes=0-1048575", "MISS"),
@@ -111,7 +111,7 @@ def test_five_point_range_requests_to_five_offsets_are_five_chunks_not_one(tmp_p
     point Range request landing in a different slice. Every one of those
     requests logs as a master line (empty $slice_range) -- the OLD code
     bucketed all five under the single literal key "-", reporting one
-    phantom chunk fetched five times (a false D-28 violation that gets
+    phantom chunk fetched five times (a false violation that gets
     WORSE as more people watch). Attributed by each request's own start
     offset, this is five distinct chunks, one storage fetch each: exit 0,
     and the phantom " -:" bucket must never appear in the output."""

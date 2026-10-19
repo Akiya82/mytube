@@ -1,6 +1,6 @@
 """The converter's own storage client is built from its own credential --
 never the service's, even when both pairs sit in the same environment
-file (D-115, Pitfall 6 in `04-RESEARCH.md`).
+file.
 
 Every assertion below names the variable rather than the object it
 produces, on purpose: a test that only checked "a client was built"

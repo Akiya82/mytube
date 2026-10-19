@@ -13,15 +13,11 @@ import pytest
 SIGNING_SECRET = "test-secret-do-not-use-in-prod"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The admin interface's own hostname, forward-compatible with the field
-# `MYTUBE_ADMIN_FQDN` will become once phase 02.1 makes it required.
-# Exported so test modules can build a matching `X-Forwarded-Host` header
+# The admin interface's own hostname. Exported so test modules can build a matching `X-Forwarded-Host` header
 # without retyping the string.
 ADMIN_FQDN = "admin.mytube.example"
 
-# The worker-facing bearer token, forward-compatible with the field
-# `MYTUBE_WORKER_TOKEN` will become once a later plan makes it required.
-# Exported so test modules can build a matching `Authorization` header
+# The worker-facing bearer token. Exported so test modules can build a matching `Authorization` header
 # without retyping the string.
 WORKER_TOKEN = "test-worker-token-do-not-use-in-prod"
 
@@ -75,16 +71,7 @@ def settings(monkeypatch):
     monkeypatch.setenv("MYTUBE_S3_KEY", "test-key")
     monkeypatch.setenv("MYTUBE_S3_SECRET", "test-secret")
     monkeypatch.setenv("MYTUBE_PUBLIC_BASE_URL", "https://mytube.example")
-    # Forward-compatible: this field does not exist on Settings yet, and
-    # pydantic-settings ignores an unknown MYTUBE_ variable, so the suite
-    # stays green on this edit alone. It stops being a no-op the moment
-    # plan 04 makes the field required.
     monkeypatch.setenv("MYTUBE_ADMIN_FQDN", ADMIN_FQDN)
-    # Forward-compatible, same reasoning as MYTUBE_ADMIN_FQDN above: this
-    # field does not exist on Settings yet, so this edit is a no-op today
-    # and stops being one the moment a later plan makes the field required
-    # with no default -- done here, in wave 1, so that edit does not turn
-    # the entire suite red in a later wave.
     monkeypatch.setenv("MYTUBE_WORKER_TOKEN", WORKER_TOKEN)
 
     from orchestrator.config import Settings
@@ -122,8 +109,7 @@ def share_root(tmp_path):
 def postgres_url():
     """Session-scoped Postgres via testcontainers. Only used by integration tests.
 
-    Plan 04 needs this fixture for migration/model tests; created here (Wave 0)
-    per 01-VALIDATION.md's contract even though nothing in this plan consumes it yet.
+    Backs the migration and model tests.
     """
     from testcontainers.postgres import PostgresContainer
 
@@ -134,7 +120,7 @@ def postgres_url():
 @pytest.fixture(scope="session")
 def migrated_db_url(postgres_url) -> str:
     """`postgres_url` (testcontainers gives it back with a `+psycopg2` driver
-    suffix) with plan 04's catalog schema applied, driver-less so asyncpg
+    suffix) with the catalog schema applied, driver-less so asyncpg
     accepts it directly.
 
     Runs `alembic upgrade head` as a *subprocess* rather than calling

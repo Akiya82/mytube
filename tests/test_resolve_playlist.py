@@ -58,7 +58,7 @@ def client():
 def _pending_row(slug="vecher-klipov", member_count=0):
     """An active row that has not finished building yet -- `built_at` is
     `None`. `member_count` distinguishes the two not-ready cases the route
-    deliberately treats identically (D-104) by carrying it as an informational
+    deliberately treats identically by carrying it as an informational
     field the route never reads: neither case is actionable by the viewer, so
     both answer the same status with the same clip regardless of it.
     """
@@ -116,7 +116,7 @@ async def test_a_playlist_slug_never_answers_410(monkeypatch, client, row):
         resp = await client.get("/p/gone", follow_redirects=False)
 
     assert resp.status_code != 410, (
-        "playlist addresses are not tombstoned (D-103) -- unlike /v/, an "
+        "playlist addresses are not tombstoned -- unlike /v/, an "
         "address that stops working stops working outright, so a copy of "
         "the video route's tombstone branch is wrong here"
     )
@@ -136,7 +136,7 @@ async def test_a_playlist_that_is_not_ready_answers_the_not_ready_status(
 ):
     """The route branches on the readiness timestamp alone, never on member
     count: the viewer cannot act on the difference between "no members" and
-    "not built yet", so one status and one clip covers both (D-104). Written
+    "not built yet", so one status and one clip covers both. Written
     as one parametrised test rather than two, because two separately named
     tests over an identical row shape would have looked like two behaviours
     and could never have disagreed. The operator-side distinction (whether

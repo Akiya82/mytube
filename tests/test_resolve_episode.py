@@ -112,7 +112,7 @@ def _slug(tag: str) -> str:
     return f"{tag}-{uuid.uuid4().hex[:8]}"
 
 
-# --- Task 1: the sixth migration, with its backfill ------------------------
+# --- The sixth migration, with its backfill --------------------------------
 
 
 async def test_migration_upgrade_succeeds_and_reports_the_new_revision(migrated_db_url):
@@ -121,8 +121,8 @@ async def test_migration_upgrade_succeeds_and_reports_the_new_revision(migrated_
     current = _run_alembic(migrated_db_url, "current")
     assert "0006" in current
     # Restore head -- every test module sharing this session-scoped
-    # Postgres after this one expects the full schema in place (plan 11
-    # added 0007 on top of this migration).
+    # Postgres after this one expects the full schema in place (a later
+    # migration, 0007, builds on this one).
     _run_alembic(migrated_db_url, "upgrade", "head")
 
 
@@ -310,7 +310,7 @@ async def test_migration_cancel_a_never_active_title_completes_after_the_upgrade
     assert surviving_slug["episode_id"] is None
 
 
-# --- Task 2: the queries the rest of the phase reads and writes through ---
+# --- The queries the rest of the phase reads and writes through ------------
 
 
 async def _season_id_for_title(conn, title_id) -> uuid.UUID:
@@ -498,7 +498,7 @@ async def test_claim_episode_number_renumber_keeps_the_old_number_until_a_second
 async def test_renumber_episode_old_number_still_resolves_after_a_renumber(raw_conn):
     """`renumber_episode` is the number equivalent of `rename_slug`. The
     old row is never deleted, so the old number keeps answering exactly
-    as D-161 promises -- proven here directly against `renumber_episode`
+    as promised -- proven here directly against `renumber_episode`
     itself, not the lower-level `claim_episode_number` the query wraps.
     """
     title_id, slug, episodes = await _seed_series(raw_conn, "renumber-episode", episode_count=1)
@@ -529,7 +529,7 @@ async def test_renumber_episode_succeeds_onto_a_siblings_former_number_and_newes
     raw_conn,
 ):
     """The query itself never refuses a number that is only a sibling's
-    *former* claim (D-161) -- that gate is the caller's own job
+    *former* claim -- that gate is the caller's own job
     (`routes_episodes.renumber_confirm_route`), never this query's. Once
     claimed, the newest row wins, exactly as slug reuse already works.
     """
@@ -685,7 +685,7 @@ async def test_resolve_edition_reports_episode_and_edition_status_across_prepari
     assert row_deleted["episode_status"] == "deleted"
 
 
-# --- Task 3: the two new public addresses, the preparing stub, and the ---
+# --- The two new public addresses, the preparing stub, and the -------------
 # --- edition-slug rule, driven through the real application            ---
 
 
@@ -914,15 +914,15 @@ async def test_http_a_title_with_one_ready_and_one_preparing_episode_serves_both
     assert preparing_resp.status_code == EDITION_PREPARING_STATUS
 
 
-# --- Plan 10: a reaped episode's every address answers gone, not 404 -------
+# --- A reaped episode's every address answers gone, not 404 ----------------
 
 
 async def test_a_tombstoned_episodes_own_number_answers_gone_while_its_title_stays_active(
     raw_conn, http_client
 ):
-    """D-164: `finish_delete_episode` tombstones (rather than drops) an
+    """`finish_delete_episode` tombstones (rather than drops) an
     episode that was ever active, exactly as a whole title's own reap
-    does one level up (D-10) -- its own number must answer gone (410),
+    does one level up -- its own number must answer gone (410),
     never as though it had never existed, even while the *title* itself
     stays 'active' because a sibling episode is untouched.
     """
@@ -946,12 +946,12 @@ async def test_a_tombstoned_episodes_own_number_answers_gone_while_its_title_sta
 async def test_a_reaped_episodes_former_number_still_answers_gone_after_a_renumber(
     raw_conn, http_client
 ):
-    """D-164/D-161: `resolve_episode_slug` reads a number's own newest
+    """`resolve_episode_slug` reads a number's own newest
     history row regardless of `is_current`, so a former number that a
     renumber superseded (and nothing else has reclaimed) still resolves
     to the exact episode it always did -- once that episode is reaped,
     the former number has to answer gone too, the identical rule a
-    tombstoned slug already gives a former name (D-10).
+    tombstoned slug already gives a former name.
     """
     edition_id = uuid.uuid4()
     slug = _slug("former-number")

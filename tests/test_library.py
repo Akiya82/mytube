@@ -1,6 +1,5 @@
 """Route tests for the Library screen (GET /library, GET /library/{id}/row,
-GET /poster/{edition_id}, POST /library/{id}/dismiss) -- Screen 3 of
-02-UI-SPEC.md. The database layer is monkeypatched at the
+GET /poster/{edition_id}, POST /library/{id}/dismiss). The database layer is monkeypatched at the
 `orchestrator.db.queries` module boundary and storage at the
 `orchestrator.web.routes_titles` module boundary, the same shape
 test_add_form.py already uses -- no real Postgres, no real S3, quick-loop
@@ -91,13 +90,13 @@ class _QueriesStub:
     # defaulting to empty so every test in this file keeps describing a
     # library of videos alone and keeps passing unchanged.
     playlist_rows: list = field(default_factory=list)
-    # Plan 09: episodes_for_library's own stub data, keyed by title_id --
+    # episodes_for_library's own stub data, keyed by title_id --
     # empty by default, so a test that never sets is_series on a row never
     # triggers the series call at all (episodes_for_library_calls stays 0).
     episodes_by_title: dict = field(default_factory=dict)
     episodes_for_library_calls: int = 0
     episodes_for_library_title_ids: list = field(default_factory=list)
-    # Plan 11: editions_for_library's own stub data, keyed by episode_id --
+    # editions_for_library's own stub data, keyed by episode_id --
     # empty by default, so an episode whose own edition_count stays at 1
     # never triggers this call's own round trip at all.
     editions_by_episode: dict = field(default_factory=dict)
@@ -241,7 +240,7 @@ def _row(**over) -> dict:
 
 def _job(**over) -> dict:
     """The job-carrying overrides a row needs to land on a given
-    `job_stage` (04-UI-SPEC.md States -> Job progress) -- merged into
+    `job_stage` -- merged into
     `_row(**_job(...))`'s own kwargs. `job_id` alone is what
     `derive_job_ui` (orchestrator.web.routes_titles) treats as "a live
     job exists"; every other field defaults to a plain queued remux so a
@@ -337,7 +336,7 @@ def _edition(**over) -> dict:
     return edition
 
 
-# --- Task 1: technical detail, address, copy button, header, empty ------
+# --- Technical detail, address, copy button, header, empty --------------
 
 
 async def test_active_row_renders_technical_detail_and_audio_note(client, queries_stub):
@@ -493,7 +492,7 @@ async def test_empty_library_renders_empty_state(client, queries_stub):
     assert "Add a file from the share to see it here." in resp.text
 
 
-# --- Task 2: the poster frame --------------------------------------------
+# --- The poster frame ---------------------------------------------------
 
 
 async def test_active_row_with_poster_key_renders_image_with_title_alt(client, queries_stub):
@@ -575,7 +574,7 @@ async def test_poster_route_404_when_object_missing(client):
     assert resp.status_code == 404
 
 
-# --- Task 3: preparing/failed states, the fragment route, dismiss -------
+# --- Preparing/failed states, the fragment route, dismiss ---------------
 
 
 async def test_fragment_route_returns_only_row_markup(client, queries_stub):
@@ -630,7 +629,7 @@ async def test_working_and_waiting_rows_have_different_state_text(client, querie
     assert "Working" in resp.text
 
 
-# --- Job progress: one attribute pair, six in-flight stages (04-11) -----
+# --- Job progress: one attribute pair, six in-flight stages -------------
 # The wrapper keeps data-row-status="preparing" (the exact value the
 # poller already binds on) through every one of these; data-job-stage
 # carries the finer value the chip dispatch above actually reads.
@@ -704,7 +703,7 @@ async def test_stage_waiting_for_converter_with_no_worker_ever_connected(client,
 
 
 async def test_stage_queued_recovers_once_the_converter_is_seen_working(client, queries_stub):
-    """05-17 gap closure: the heartbeat now refreshes the check-in, so a
+    """The heartbeat now refreshes the check-in, so a
     queued sibling beside a real conversion renders the queued sentence
     for the whole conversion instead of falling into
     waiting_for_converter about a minute in -- the same fixture shape as
@@ -773,7 +772,7 @@ async def test_stage_waiting_for_converter_still_fires_for_a_check_in_past_the_b
 async def test_stage_waiting_for_gpu_is_a_separate_sentence_from_waiting_for_a_converter(
     client, queries_stub
 ):
-    """D-113: a fresh check-in reporting waiting_for_gpu is not the
+    """A fresh check-in reporting waiting_for_gpu is not the
     waiting-for-a-converter sentence -- the converter is up and healthy,
     it is the shared card that is busy.
     """
@@ -1007,7 +1006,7 @@ async def test_stage_cancelling_does_not_carry_the_countdown_class(client, queri
     assert f"/library/{title_id}/cancel" not in resp.text
 
 
-# --- Converted-edition detail and the stereo badge (04-11, D-146/D-139) --
+# --- Converted-edition detail and the stereo badge ----------------------
 
 
 async def test_converted_detail_line_appears_only_for_a_conversion(client, queries_stub):
@@ -1090,8 +1089,8 @@ async def test_stereo_badge_appears_for_a_non_flat_layout_on_an_as_is_edition_ha
     client, queries_stub
 ):
     """The stereo badge belongs to the layout, not to the conversion --
-    an as-is edition with a half side-by-side layout carries it too
-    (D-139), since a file prepared in the dedicated stereo tool arrives
+    an as-is edition with a half side-by-side layout carries it too,
+    since a file prepared in the dedicated stereo tool arrives
     already compatible and is added as it is.
     """
     queries_stub.rows = [
@@ -1180,7 +1179,7 @@ async def test_dismiss_refuses_an_active_title(client, queries_stub, monkeypatch
     assert queries_stub.dismiss_calls == []
 
 
-# --- Cancel and retry: every kind of work, one lifecycle (04-11) --------
+# --- Cancel and retry: every kind of work, one lifecycle ----------------
 
 
 async def test_cancel_on_a_queued_job_deletes_objects_before_the_row(client, monkeypatch):
@@ -1338,7 +1337,7 @@ async def test_cancel_on_a_season_with_a_running_job_drops_only_the_queued_episo
 
 @pytest.mark.integration
 async def test_cancel_never_active_delete_refuses_a_title_that_has_ever_been_active(raw_conn):
-    """T-04-32's own guard, proven against real Postgres: a title that
+    """Proven against real Postgres: a title that
     ever went active can never be hard-deleted through this door, no
     matter how it is reached -- only a title whose address never went
     live (still 'preparing', or 'failed') may be erased outright.
@@ -1442,14 +1441,14 @@ def test_app_js_has_a_poll_timer_and_stays_short():
     # its own -- a comment explaining why a fallback exists is not the
     # thing to ration, and counting it pushes the next person toward
     # deleting the explanation rather than the complexity. Raised from 80
-    # once hand-written drag-and-drop reordering (D-107) landed alongside
+    # once hand-written drag-and-drop reordering landed alongside
     # the poller, the countdown and the copy handler; raised again from
     # 140 once the on-demand preview's two delegated handlers (04-UI-
     # SPEC.md States -> Preview) landed alongside them; raised again from
     # 180 once the preview-disabled gate, the manual audio/subtitle path
-    # join and the sidecar/audio picker's own open/choose handlers (T-05-14)
+    # join and the sidecar/audio picker's own open/choose handlers
     # landed alongside them; raised again from 260 once the series row's
-    # disclosure-state-and-focus survival (05-UI-SPEC.md Screen D item 3)
+    # disclosure-state-and-focus survival
     # landed -- the poller itself gained three lines, the rest is the two
     # small helpers those lines call -- still well under a vendored drag-
     # and-drop or lightbox library's own line count, so the guard still
@@ -1476,7 +1475,7 @@ def test_no_htmx_or_cdn_references():
         assert "jsdelivr" not in text
 
 
-# --- Plan 06 Task 1/2: row actions and the delete countdown markup ------
+# --- Row actions and the delete countdown markup ------------------------
 
 
 async def test_active_row_has_rename_delete_and_check_actions(client, queries_stub):
@@ -1524,7 +1523,7 @@ async def test_pending_delete_row_has_undo_and_purge_controls_with_native_confir
     assert "Delete now" in resp.text
 
 
-# --- Plan 06 Task 1/2: rename, delete, undo, purge -- real Postgres -----
+# --- Rename, delete, undo, purge -- real Postgres -----------------------
 # These need the shared slug planner and the mark_for_delete/cancel_delete/
 # reap_once query layer to behave for real, so they run against a real,
 # migrated Postgres (migrated_db_url/raw_conn from conftest.py) rather than
@@ -1847,11 +1846,11 @@ async def test_a_read_from_another_site_is_still_served(client, queries_stub):
     assert resp.status_code == 200
 
 
-# --- Plan 09 Task 1: the whole hierarchy in one round trip ----------------
+# --- The whole hierarchy in one round trip ------------------------------
 
 
 async def test_a_one_episode_title_film_row_context_is_unchanged(client, queries_stub):
-    """D-162: a film (episode_count defaults to 1 via derive_series_ui,
+    """A film (episode_count defaults to 1 via derive_series_ui,
     the same as a stub row that never sets it) renders exactly today's
     row -- no series class, no disclosure -- even though library_rows now
     always returns the new aggregate columns.
@@ -1894,7 +1893,7 @@ async def test_library_route_query_count_does_not_scale_with_episode_count(clien
 async def test_episode_size_and_duration_round_trip_into_the_episode_row(client, queries_stub):
     """The technical detail `episodes_for_library` reads per episode
     (size, duration) survives all the way to the rendered row -- the
-    facts D-163 moves down from the title row.
+    facts the aggregate chip moves down from the title row.
     """
     title_id = uuid.uuid4()
     queries_stub.rows = [_row(title_id=title_id, title_status="active", episode_count=2, ready_count=2)]
@@ -1955,7 +1954,7 @@ async def test_aggregate_sentence_names_the_in_flight_episode_number(client, que
     assert "4 of 12 ready, episode 5" in resp.text
 
 
-# --- Plan 09 Task 2: the row that opens ------------------------------------
+# --- The row that opens -------------------------------------------------
 
 
 async def test_disclosure_renders_with_the_right_episode_count_when_settled(client, queries_stub):
@@ -2114,9 +2113,8 @@ async def test_episode_row_in_flight_collapses_actions_to_cancel_only(client, qu
 
 
 async def test_episode_row_queued_chip_carries_no_number(client, queries_stub):
-    """D-188 gap closure, 2026-09-09: a season's queue position belongs
-    on the title row once, not repeated on every queued episode of it --
-    05-UI-SPEC.md Screen D item 4.
+    """A season's queue position belongs
+    on the title row once, not repeated on every queued episode of it.
     """
     title_id = uuid.uuid4()
     ep2 = _episode(
@@ -2146,7 +2144,7 @@ async def test_episode_row_queued_chip_carries_no_number(client, queries_stub):
 async def test_episode_row_queued_chip_stays_number_free_once_the_converter_is_seen_working(
     client, queries_stub
 ):
-    """05-17 gap closure: the queued chip's own number-free rendering
+    """The queued chip's own number-free rendering
     (established above with a `remux` job, since a `transcode` job's
     check-in went stale about a minute into any real conversion) now
     agrees with a real transcode job carrying a fresh, working check-in
@@ -2218,7 +2216,7 @@ async def test_episode_row_ready_and_settled_shows_check_link(client, queries_st
 
 
 async def test_episode_row_ready_and_settled_check_link_is_episode_scoped(client, queries_stub):
-    """Plan 10: an episode's own Check link points at its own numbered
+    """An episode's own Check link points at its own numbered
     check page, not the title's bare one -- distinct from the title row's
     own Check action asserted above, which still exists and still points
     at the bare address.
@@ -2268,7 +2266,7 @@ async def test_episode_row_failed_shows_retry_and_dismiss(client, queries_stub):
     assert 'data-control="dismiss"' in section
 
 
-# --- Plan 11 Task 2: one click to add an edition ----------------------------
+# --- One click to add an edition ----------------------------------------
 
 
 async def test_episode_row_ready_and_settled_shows_add_edition_control_with_right_target(
@@ -2317,7 +2315,7 @@ async def test_episode_row_pending_delete_shows_countdown_and_undo_purge(client,
     assert 'data-control="purge"' in section
 
 
-# --- Plan 11 Task 1: the edition list, the badge, and the pointer that only
+# --- The edition list, the badge, and the pointer that only
 # --- the operator moves -----------------------------------------------------
 
 
@@ -2583,7 +2581,7 @@ async def test_purge_on_a_pending_edition_deletes_the_object_and_the_row(
     assert target is None
 
 
-# --- Plan 09 Task 3: the poll that does not throw away what the operator did
+# --- The poll that does not throw away what the operator did
 
 
 async def test_poll_status_follows_in_flight_episodes_for_an_already_active_series(client, queries_stub):
@@ -2647,9 +2645,8 @@ async def test_in_flight_active_row_renders_address_copy_button_and_chips_togeth
 
 
 async def test_fragment_route_never_emits_the_open_attribute_on_the_episode_list(client, queries_stub):
-    """The default-open rule is initial-render only (05-UI-SPEC.md Screen D
-    item 3) -- a fragment carries a failed episode (which would default-
-    open on a full render) and still never sets `open`, since the poller
+    """The default-open rule is initial-render only -- a fragment carries a failed episode
+    (which would default-open on a full render) and still never sets `open`, since the poller
     already copied the operator's own choice onto it before the swap.
     """
     title_id = uuid.uuid4()
@@ -2690,8 +2687,7 @@ async def test_fragment_route_renders_the_same_episode_content_as_the_full_page(
 def test_poller_syncs_episode_disclosure_state_and_restores_focus_by_data_episode_id():
     """Reads the script rather than driving a browser (this codebase has
     none) -- the poller's own three added lines, and the two small
-    helpers they call, both keyed off data-episode-id per 05-UI-SPEC.md
-    Screen D item 3.
+    helpers they call, both keyed off data-episode-id.
     """
     text = (REPO_ROOT / "static" / "app.js").read_text(encoding="utf-8")
     assert "_syncEpisodeState(row, fresh)" in text
@@ -2703,9 +2699,9 @@ def test_poller_syncs_episode_disclosure_state_and_restores_focus_by_data_episod
     assert "row.replaceWith(fresh);" in text
 
 
-# --- An episode's number can be corrected without breaking its link
-# --- (Screen F, D-161) -- real Postgres, the same action_client/raw_conn
-# --- split every other action test above draws -----------------------------
+# --- An episode's number can be corrected without breaking its link -----
+# Real Postgres, the same action_client/raw_conn split every other action
+# test above draws.
 
 
 async def _create_two_episode_series(conn, name: str, slug: str):
@@ -2751,7 +2747,7 @@ async def test_renumber_form_shows_current_address_prefilled_number_and_padded_p
 
     assert resp.status_code == 200
     # The current address line and the preview both show the canonical
-    # zero-padded form (D-155), never the bare "1".
+    # zero-padded form, never the bare "1".
     assert f"{slug}/01" in resp.text
     assert 'value="1"' in resp.text
 
@@ -2880,12 +2876,12 @@ async def test_renumber_after_a_later_episode_claims_the_old_number_the_newer_cl
     assert still_reachable["episode_id"] == episode1_id
 
 # --- A standalone one-episode title can move into a title, from the
-# --- library (Screen G, D-160) ----------------------------------------------
+# --- library ------------------------------------------------------------
 
 
 async def test_move_control_renders_only_on_a_one_episode_title(client, queries_stub):
-    """Screen D's own single addition to a one-episode title's row
-    (D-160): a film or any one-episode title renders as it does today,
+    """The single addition to a one-episode title's row:
+    a film or any one-episode title renders as it does today,
     plus this one ghost action. A series row never gets it.
     """
     standalone_id = uuid.uuid4()
@@ -3041,7 +3037,7 @@ async def test_move_new_title_creates_it_then_repoints_and_old_address_stays_ali
 async def test_move_merges_two_standalone_titles_with_both_old_addresses_alive(
     action_client, raw_conn
 ):
-    """D-160's own second scenario: no folder involved at all, two
+    """The second scenario: no folder involved at all, two
     standalone one-episode titles merged into one series.
     """
     target_title_id, _target_edition_id, _ = await _create_title(

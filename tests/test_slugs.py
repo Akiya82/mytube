@@ -104,7 +104,7 @@ def test_normalize_edition_slug_refuses_an_empty_result():
         normalize_edition_slug("???")
 
 
-# --- parse_public_address (D-156, D-187, T-05-23) ---------------------------
+# --- parse_public_address ---------------------------------------------------
 
 
 def test_parse_public_address_bare_title():

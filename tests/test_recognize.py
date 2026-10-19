@@ -1,4 +1,4 @@
-"""Failing contract for `orchestrator.recognize` (D-151, D-168, D-170): a
+"""Failing contract for `orchestrator.recognize`: a
 release filename becomes a name, a season, an episode number and a
 provenance key -- or an honest blank, never a guess.
 

@@ -1,11 +1,11 @@
-"""The assertions that only a real ffmpeg process can make (CR-04, CR-05,
-CR-06): whether a burn-in with an apostrophe in the subtitle filename
-actually opens the file, whether an extracted SubRip track is a container
+"""The assertions that only a real ffmpeg process can make:
+whether a burn-in with an apostrophe in the subtitle filename actually
+opens the file, whether an extracted SubRip track is a container
 the muxer can actually write, and whether a hostile attachment name can
 put a file outside its own job's fonts directory. Every other test in
 this suite asserts the argv string the code builds and never runs the
 tool -- which is exactly how the three defects this file exists to catch
-survived thirteen plans (04-REVIEW.md).
+survived every earlier round of work.
 
 Every test here is skipped, never errored, when `ffmpeg`/`ffprobe` is not
 on `PATH` -- this file is not marked `integration` (that marker means a
@@ -33,7 +33,7 @@ def _run(argv, cwd=None):
     )
 
 
-# --- CR-04: the burn-in actually opens a filename with an apostrophe -----
+# --- The burn-in actually opens a filename with an apostrophe ------------
 
 
 def test_a_real_burn_in_opens_a_subtitle_filename_with_an_apostrophe(tmp_path):
@@ -72,7 +72,7 @@ def test_a_real_burn_in_opens_a_subtitle_filename_with_an_apostrophe(tmp_path):
     assert output.is_file() and output.stat().st_size > 0
 
 
-# --- CR-05: a SubRip track extracts to a container the muxer accepts ----
+# --- A SubRip track extracts to a container the muxer accepts ------------
 
 
 def test_a_real_subrip_track_extracts_to_a_non_empty_file(tmp_path):
@@ -115,7 +115,7 @@ def test_a_real_subrip_track_extracts_to_a_non_empty_file(tmp_path):
     assert destination.stat().st_size > 0
 
 
-# --- CR-06: an attachment cannot name its own destination ----------------
+# --- An attachment cannot name its own destination -----------------------
 
 
 def test_collect_fonts_never_writes_outside_its_scratch_directory_for_a_hostile_attachment_name(

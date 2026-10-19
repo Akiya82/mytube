@@ -1,5 +1,5 @@
 """Route tests for the on-demand preview (`POST /preview/{path:path}`,
-`GET /preview/frame/{token}.jpg`) -- 04-UI-SPEC.md States -> Preview.
+`GET /preview/frame/{token}.jpg`).
 
 The route's own heavy lifting (`extract_embedded_track`, `read_text`,
 `collect_fonts`, the render subprocess itself) is monkeypatched at the
@@ -37,7 +37,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures" / "probe"
 
 def _mixed_subtitle_probe() -> dict:
     """The real subtitles_mixed.json fixture: stream 2 is a SubRip track,
-    stream 3 is an ASS track -- the shape CR-05's own fix (extraction_extension)
+    stream 3 is an ASS track -- the shape the extraction_extension fix
     exists to tell apart.
     """
     return json.loads((FIXTURES_DIR / "subtitles_mixed.json").read_text(encoding="utf-8"))
@@ -180,7 +180,7 @@ async def test_manual_subtitle_path_escaping_the_share_root_is_refused(
     assert "Could not render a preview" in resp.text
 
 
-# --- the stereo refusal (D-140) ----------------------------------------
+# --- the stereo refusal ----------------------------------------------------
 
 
 async def test_a_stereo_layout_refuses_the_burn_in_and_answers_the_note(
@@ -250,7 +250,7 @@ async def test_the_timestamp_falls_back_to_the_first_cue_when_none_qualify(
     assert 'data-frame-seconds="1.0"' in resp.text
 
 
-# --- the font-missing notice (D-124) -------------------------------------
+# --- the font-missing notice -----------------------------------------------
 
 
 async def test_font_notice_appears_when_the_tool_output_names_a_missing_family(
@@ -371,11 +371,11 @@ async def test_frame_route_serves_a_frame_that_was_actually_rendered(
     assert frame_resp.headers["content-type"] == "image/jpeg"
 
 
-# --- preview/conversion identity (CONV-04) ---------------------------------
+# --- preview/conversion identity -------------------------------------------
 
 
 def test_the_preview_and_the_conversion_command_share_the_same_filter_value():
-    """The structural half of CONV-04's promise: for the same plan and the
+    """The structural half of the preview/conversion identity promise: for the same plan and the
     same subtitle choice, the preview and the conversion commands carry
     the identical filter graph -- proven here directly against
     `mytube_media.transcode`, the module both `build_preview_command` and
@@ -414,13 +414,13 @@ def test_the_preview_and_the_conversion_command_share_the_same_filter_value():
     assert _filter_value(preview_cmd) == _filter_value(transcode_cmd)
 
 
-# --- per-request scratch isolation (WR-04, IN-08, CR-05) -------------------
+# --- per-request scratch isolation -----------------------------------------
 
 
 async def test_a_subrip_track_reaches_the_render_step_instead_of_the_error_panel(
     web_client, render_stubs
 ):
-    """The most common embedded text format (CR-05): before the
+    """The most common embedded text format: before the
     extraction extension was derived from the probe, this always fell
     through the ASS muxer and answered the error panel instead.
     """
@@ -550,7 +550,7 @@ async def test_an_external_subtitle_is_copied_into_the_request_scratch_directory
     assert copied.read_text(encoding="utf-8").startswith("1\n00:00:03")
 
 
-# --- an awkward filename still reaches the route (WR-07) -------------------
+# --- an awkward filename still reaches the route ---------------------------
 
 
 def test_app_js_encodes_each_path_segment_before_building_the_preview_request():
@@ -566,7 +566,7 @@ def test_app_js_encodes_each_path_segment_before_building_the_preview_request():
     assert "/preview/${encodedPath}" in text
 
 
-# --- preview/conversion resolution parity (CONV-04) -------------------------
+# --- preview/conversion resolution parity ----------------------------------
 
 
 async def test_the_preview_and_the_converter_resolve_the_same_choice_for_the_same_job(

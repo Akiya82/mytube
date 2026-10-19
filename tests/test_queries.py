@@ -1,5 +1,5 @@
 """Integration tests for the phase-2 additions to orchestrator/db/queries.py
--- the schema and query surface plan 03 task 1 lays down (0002_add_as_is.py).
+-- the schema and query surface laid down by 0002_add_as_is.py.
 Marked `integration`, same as test_slug_history.py -- these need Docker.
 """
 import asyncio
@@ -170,7 +170,7 @@ async def test_failed_title_object_keys_returns_both_keys_without_deleting_anyth
 
     assert set(keys) == {f"{edition_id}.mp4", f"{edition_id}-poster.jpg"}
 
-    # Read-only: the row this plan (02-05) relies on for a crash-safe
+    # Read-only: the row this plan relies on for a crash-safe
     # dismiss (delete objects, using these keys, before the rows go) must
     # still exist after asking for the keys.
     still_there = await raw_conn.fetchrow("SELECT id FROM titles WHERE id = $1", title_id)
@@ -565,7 +565,7 @@ async def test_removing_a_playlist_item_renumbers_the_remainder_contiguously(raw
 
 
 async def test_removing_a_playlist_item_from_the_wrong_playlist_changes_nothing(raw_conn):
-    """T-03-18: an item identifier scoped to one playlist must not delete
+    """An item identifier scoped to one playlist must not delete
     anything when presented against a different one.
     """
     playlist_a = await queries.create_playlist(raw_conn, "Playlist A", "playlist-a-slug")
@@ -586,7 +586,7 @@ async def test_removing_a_playlist_item_from_the_wrong_playlist_changes_nothing(
 
 
 async def test_a_member_whose_title_was_deleted_reports_itself_as_dropped(raw_conn):
-    """The gap mark (D-102) is a column the query computes, not a status
+    """The gap mark is a column the query computes, not a status
     value the template is expected to recognise -- so the thing worth
     proving against real Postgres is that deleting a title actually flips
     it, and that the member keeps its slot rather than disappearing from
@@ -792,7 +792,7 @@ async def test_finish_delete_episode_hard_deletes_an_episode_that_was_never_acti
     assert edition_row is None
 
 
-# --- Growing an existing title, attaching an edition (0006, plan 05) -------
+# --- Growing an existing title, attaching an edition (0006) ---------------
 
 
 async def _first_episode_id(conn, title_id) -> uuid.UUID:
@@ -1042,7 +1042,7 @@ async def test_concurrent_add_edition_same_slug_one_wins_one_raises(migrated_db_
     assert sorted(results) == ["EditionSlugTaken", "ok"]
 
 
-# --- The folder confirmation screen's save (0006, plan 08) -----------------
+# --- The folder confirmation screen's save (0006) -------------------------
 
 
 def _edition_spec(number: int, *, source_path: str | None = None, **overrides) -> dict:
@@ -1419,11 +1419,11 @@ async def test_reparent_edition_to_episode_touches_the_target_titles_changed_at(
     assert after > before
 
 
-# --- Plan 09 Task 1: the whole hierarchy in one round trip ----------------
+# --- The whole hierarchy in one round trip --------------------------------
 
 
 async def test_library_rows_orders_by_changed_at_not_created_at(raw_conn):
-    """D-165: a title rises to the top when it changes, not only when it
+    """A title rises to the top when it changes, not only when it
     was created -- the older title outranks the newer one once its own
     `changed_at` is bumped past it.
     """
@@ -1440,7 +1440,7 @@ async def test_library_rows_orders_by_changed_at_not_created_at(raw_conn):
 async def test_library_row_carries_the_new_aggregate_columns_for_a_one_episode_title(raw_conn):
     """A film's aggregate columns are exactly what a one-episode title
     always was: one episode, ready, none failed -- so `derive_series_ui`
-    (routes_titles.py) has real data to fall back on for D-162's
+    (routes_titles.py) has real data to fall back on for the
     unchanged-film guarantee, not just a stub default.
     """
     title_id = await _create_title(raw_conn, "One Episode Aggregate", "one-episode-aggregate-slug")
@@ -1455,7 +1455,7 @@ async def test_library_row_carries_the_new_aggregate_columns_for_a_one_episode_t
 async def test_library_row_aggregate_counts_ready_failed_and_current_episode(raw_conn):
     """A multi-episode title reports its own ready/failed counts and,
     while a job is in flight, which episode that job belongs to -- the
-    three facts the aggregate chip (D-163) reads.
+    three facts the aggregate chip reads.
     """
     first_edition = uuid.uuid4()
     title_id = await queries.create_title_with_edition(
@@ -1486,11 +1486,11 @@ async def test_library_row_aggregate_counts_ready_failed_and_current_episode(raw
 
 async def test_library_row_prefers_the_running_job_over_a_newer_queued_one(raw_conn):
     """The collapsed title row must describe the episode actually
-    converting, not merely the newest job of the season (D-188 gap
-    closure): a real order (migration 0008) makes "newest" mean "this
-    season's last episode" the moment a folder save enqueues every job in
-    one transaction, so the pre-existing newest-first pick becomes
-    deterministically wrong rather than harmless the moment task 1 lands.
+    converting, not merely the newest job of the season: a real order
+    (migration 0008) makes "newest" mean "this season's last episode" the
+    moment a folder save enqueues every job in one transaction, so the
+    pre-existing newest-first pick becomes deterministically wrong rather
+    than harmless once the newest job stops being the right one.
     """
     first_edition = uuid.uuid4()
     title_id = await queries.create_title_with_edition(
@@ -1536,7 +1536,7 @@ async def test_job_for_title_returns_the_running_job_over_queued_siblings(raw_co
     (`routes_titles.cancel_route`) must pick the same job the row itself
     describes -- otherwise the row shows episode one converting while
     Cancel stops episode eleven, turning a display defect into a
-    destructive one (D-188 gap closure).
+    destructive one.
     """
     first_edition = uuid.uuid4()
     title_id = await queries.create_title_with_edition(

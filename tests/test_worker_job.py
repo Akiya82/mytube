@@ -300,7 +300,7 @@ def test_an_embedded_choice_is_resolved_and_actually_burned_in(monkeypatch, tmp_
     # single-track file, not the source container by a stream selector.
     assert "si=" not in graph
     # The path inside the filter term names a file this converter wrote
-    # into the job's own scratch directory (CR-05), never the source --
+    # into the job's own scratch directory, never the source --
     # the job id (plain hex and hyphens, untouched by filter escaping)
     # is the scratch directory's own name and stands in for the whole
     # path here, since the path itself is escaped inside the term.
@@ -367,7 +367,7 @@ def test_a_bitmap_choice_is_resolved_to_its_own_overlay_branch(monkeypatch, tmp_
     assert client.failed_calls == []
 
 
-# --- the success report (D-146, CONV-04's poster gap) --------------------
+# --- the success report, including the poster gap ------------------------
 
 
 def test_a_finished_job_reports_the_output_probes_own_facts_not_the_sources(
@@ -564,7 +564,7 @@ def test_a_storage_error_while_cleaning_up_after_a_cancellation_is_swallowed(
     assert "SignatureDoesNotMatch" in caplog.text
 
 
-# --- the heartbeat loop (CR-01, WR-01) -----------------------------------
+# --- the heartbeat loop --------------------------------------------------
 
 
 def test_the_heartbeat_interval_is_below_the_library_row_s_poll_interval():
@@ -579,7 +579,7 @@ def test_the_heartbeat_interval_is_below_the_library_row_s_poll_interval():
 def test_more_than_one_heartbeat_covers_an_upload_that_outlasts_the_interval(
     monkeypatch, tmp_path
 ):
-    """The whole point of CR-01's fix: a transfer that runs longer than
+    """The whole point of the fix: a transfer that runs longer than
     one tick of the loop is still heartbeating throughout, not just once
     before it starts.
     """
@@ -723,7 +723,7 @@ def test_a_heartbeat_answered_with_any_other_error_is_logged_and_the_encode_cont
     assert client.failed_calls == []
 
 
-# --- a protocol mismatch ends the process, not the loop (D-146) ----------
+# --- a protocol mismatch ends the process, not the loop ------------------
 
 
 def test_a_protocol_mismatch_at_check_in_propagates_rather_than_being_swallowed():

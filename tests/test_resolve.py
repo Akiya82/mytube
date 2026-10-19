@@ -117,7 +117,7 @@ async def test_resolve_non_active_title_returns_410(monkeypatch, client, status)
 async def test_resolve_after_rename_gives_same_redirect_path_as_before(
     monkeypatch, client
 ):
-    """ADDR-05: the queries layer already guarantees old and new slug both
+    """The queries layer already guarantees old and new slug both
     resolve to the same title/edition (proven in test_slug_history.py) --
     this checks the HTTP layer treats them identically, i.e. it doesn't
     special-case "is this the current slug" anywhere.
@@ -139,7 +139,7 @@ async def test_resolve_after_rename_gives_same_redirect_path_as_before(
 
 
 async def test_response_does_not_depend_on_user_agent_or_accept(monkeypatch, client):
-    """D-08: browser and AVPro get the same 302, no User-Agent/Accept branching."""
+    """Browser and AVPro get the same 302, no User-Agent/Accept branching."""
 
     async def fake_resolve_slug(conn, slug):
         return _active_row()
