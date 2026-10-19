@@ -1,0 +1,48 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: checkboxes
+    id: warnings
+    attributes:
+      label: Known limits ruled out
+      description: The README lists three limits that cause most first-evening failures.
+      options:
+        - label: Every viewer has enabled "Allow Untrusted URLs" in VRChat
+          required: true
+        - label: The instance is private or friends-only, not public or group-public
+          required: true
+        - label: I am not expecting adaptive bitrate or an in-player quality switch
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or image tag
+      placeholder: ghcr.io/akiya82/mytube:v1.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: How the stack was brought up
+      description: Which compose files, and whether storage is the bundled one or external. Redact hostnames, keys, secrets and tokens.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: From `docker compose logs`. Redact anything secret before pasting.
+      render: text
