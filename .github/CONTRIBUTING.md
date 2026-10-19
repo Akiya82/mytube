@@ -47,3 +47,5 @@ trap, a reason a plausible alternative was rejected.
 The checks above run on the pull request. A maintainer reviews it, may ask
 for changes, and either merges it or explains why not. Describe what changed,
 why, and how you verified it; the template asks for exactly that.
+
+<!-- This line exists only to open a throwaway pull request. -->
