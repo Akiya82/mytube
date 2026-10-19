@@ -1,11 +1,10 @@
 # MyTube — SETUP
 
-[Русская версия](SETUP.ru.md)
+[Русская версия](SETUP.ru.md) · [Back to the README](README.md)
 
-A short setup guide: `.env` variables, startup order, what to expose through
+The operator guide: `.env` variables, startup order, what to expose through
 an external reverse proxy, how to check the cache, backup, and cache modes.
-This file stays intentionally minimal for now; it is expected to grow into a
-full README once the project publishes images.
+The [README](README.md) is the short introduction; this is the full reference.
 
 Every command below was either actually run while writing this document,
 against a live stack (`docker compose ps` — every service healthy), or is
