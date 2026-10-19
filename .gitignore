@@ -42,6 +42,9 @@ htmlcov/
 # error_page has something to point at on a fresh clone.
 !edge/errors/*.mp4
 
+# Two one-second test clips whose box order is what the tests read.
+!tests/fixtures/probe/*.mp4
+
 # Editors / OS
 .vscode/
 .idea/
