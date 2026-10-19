@@ -1,0 +1,4 @@
+# Commits that only reformatted code and changed no behaviour.
+# Enable locally with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Full 40-character hashes only; a history rewrite would invalidate this list.
+f75e99de9e60e3ef82eb7e2ed9edb7226f0729ef
