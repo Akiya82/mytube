@@ -7,7 +7,7 @@ This module's formula MUST mirror, character for character, the
 
 Order is `expires`, then `uri` (blob_path), then the secret, with no
 separators between them. Any deviation gives an unconditional signature
-mismatch with no diagnostic (Pitfall C, 01-RESEARCH.md).
+mismatch with no diagnostic.
 
 Note the curly-braced `${uri}` in the nginx expression above (not bare
 `$uri`): nginx's variable-name parser greedily consumes identifier chars
@@ -61,11 +61,10 @@ def sign_object_key(object_key: str, secret: str, ttl_seconds: int) -> tuple[str
 
     $remote_addr is deliberately NOT part of this formula: the audience
     (7-15 friends) watches from mixed networks including mobile, and tying
-    the signature to a client IP would trigger the D-04 refresh loop mid
-    film whenever the viewer's carrier rotates their address (Pitfall B,
-    01-RESEARCH.md). The signature's protection comes from the 12h TTL
-    (D-03) and the secrecy of the URL itself; per-viewer revocation is not
-    implemented (D-05).
+    the signature to a client IP would trigger the refresh loop mid
+    film whenever the viewer's carrier rotates their address. The
+    signature's protection comes from the 12h TTL and the secrecy of the
+    URL itself; per-viewer revocation is not implemented.
     """
     expires = int(time.time()) + ttl_seconds
     raw = f"{expires}{blob_path(object_key)}{secret}".encode()

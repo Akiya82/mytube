@@ -1,11 +1,11 @@
-"""Background reaper for delayed title deletion (D-13), delayed per-episode
-deletion (plan 10), delayed per-edition deletion (plan 11) and expired
-session cleanup (D-80).
+"""Background reaper for delayed title deletion, delayed per-episode
+deletion, delayed per-edition deletion and expired
+session cleanup.
 
 Runs inside the same FastAPI process as everything else -- a title crossing
 its `delete_at` needs no dedicated compose service, the orchestrator is
 already running continuously. The session sweep extends this same loop
-rather than starting a second background task (D-80): a session table with
+rather than starting a second background task: a session table with
 no janitor would grow forever, and the loop that already runs every thirty
 seconds is where `sessions_expires_at_idx` gets used.
 
@@ -15,15 +15,15 @@ event loop with every HTTP request in the process, and `purge_route` awaits
 for as long as storage takes to answer.
 
 Never touches the slug history table: a deleted title's slug stays a
-tombstone and keeps answering 410 forever (D-10) -- a dead link is honest,
+tombstone and keeps answering 410 forever -- a dead link is honest,
 a link that quietly starts playing something else is not.
 
-Also sweeps stale job heartbeats (D-118, D-130): a running job whose
+Also sweeps stale job heartbeats: a running job whose
 converter went silent comes back to the queue on its own, up to a named
 attempt cap, after which it fails with a reason a person can read -- and,
 since exhausting that cap is the one outcome an operator otherwise has no
 way to see or act on, the catalog row (a title or a playlist) is marked
-failed alongside the job itself (CR-02).
+failed alongside the job itself.
 
 The four sweeps run inside their own `try/except` in `run_reaper`'s loop
 body, each isolated from the other three: a failure in the session sweep
@@ -45,8 +45,8 @@ POLL_INTERVAL_SECONDS = 30
 
 
 async def reap_once(pool: asyncpg.Pool) -> None:
-    """Sweep a title's own countdown, every episode's (plan 10) and every
-    edition's (plan 11) in one pass -- `purge_route` (the title-level, the
+    """Sweep a title's own countdown, every episode's and every
+    edition's in one pass -- `purge_route` (the title-level, the
     per-episode and the per-edition one, orchestrator.web.routes_titles/
     routes_episodes) awaits this inline so the object is actually gone
     before the response returns, and reusing one function for all three
@@ -57,7 +57,7 @@ async def reap_once(pool: asyncpg.Pool) -> None:
         due = await queries.due_for_reaping(conn)
         for row in due:
             title_id = row["title_id"]
-            # D-72: a poster left behind when its video goes is the same
+            # A poster left behind when its video goes is the same
             # orphan class this project has already accumulated once with
             # video objects alone -- deleted here, same per-object
             # exception isolation, so one bad key never stops the rest.
@@ -83,7 +83,7 @@ async def reap_once(pool: asyncpg.Pool) -> None:
                 continue
             await queries.finish_delete(conn, title_id)
 
-        # An episode's own countdown (plan 02/10), collected the same
+        # An episode's own countdown, collected the same
         # cycle rather than a second background loop: due_for_reaping_episodes
         # names only identifiers (an episode can carry an arbitrary number
         # of editions, the same reason due_for_reaping_playlists gives),
@@ -113,7 +113,7 @@ async def reap_once(pool: asyncpg.Pool) -> None:
                 continue
             await queries.finish_delete_episode(conn, episode_id)
 
-        # A single edition's own countdown (plan 11, D-178), collected the
+        # A single edition's own countdown, collected the
         # same cycle rather than a third background loop -- the identical
         # per-object exception isolation and finish-only-on-success rule
         # the title and episode sweeps above already establish. Unlike an
@@ -206,7 +206,7 @@ async def sweep_sessions_once(pool: asyncpg.Pool) -> None:
 # own constraint statement in queries.due_for_requeue's caller here): it
 # has to be comfortably longer than the interval between a heartbeat and
 # the next (every consumer now heartbeats on the order of a few seconds,
-# through every stage including a blocking transfer -- CR-01), and
+# through every stage including a blocking transfer), and
 # comfortably longer than the time this process takes to restart. The
 # third bound is now the binding one: strictly longer than the
 # converter's own report retry window (`worker.client.
@@ -231,11 +231,11 @@ JOB_STALE_SECONDS = 360
 
 async def sweep_stale_jobs(pool: asyncpg.Pool) -> None:
     """Return, fail or finish every `running` job whose heartbeat has gone
-    stale (D-116, D-130, D-131).
+    stale.
 
     Three branches per row, and the cancelled check runs first because it
     must win over the other two: a row already flagged for cancellation
-    (D-129) ends `cancelled`, never requeued and never failed, even when
+    ends `cancelled`, never requeued and never failed, even when
     it is also past the attempt cap. This is the case where the operator
     pressed cancel and the converter then died before it could confirm --
     with only the other two branches, that cancellation would silently
@@ -263,7 +263,7 @@ async def sweep_stale_jobs(pool: asyncpg.Pool) -> None:
                         outcome="cancelled",
                     )
                     # A title's address never went live when the worker
-                    # that would have finished it died first (T-04-32) --
+                    # that would have finished it died first --
                     # hard-deleted with no tombstone, the same call the
                     # converter's own /cancelled report and the in-process
                     # remux consumer's cancellation cleanup both use.
@@ -291,7 +291,7 @@ async def sweep_stale_jobs(pool: asyncpg.Pool) -> None:
                     # a title stays 'preparing' forever with no live job,
                     # which the library query's join reads as "waiting",
                     # not "failed": no Retry, no Dismiss, just a Cancel
-                    # button that answers not-found (CR-02). A playlist
+                    # button that answers not-found. A playlist
                     # build in the same state says "Building..." forever
                     # with no way to build it again.
                     if row["title_id"] is not None:

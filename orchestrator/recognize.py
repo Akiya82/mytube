@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import anitopy
 import guessit
 
-# D-151: a trailing arabic number becomes a season only up to this bound --
+# A trailing arabic number becomes a season only up to this bound --
 # above it, a four-digit year ("Blade Runner 2049") or a large identifier
 # in a title's last word must stay part of the name rather than being read
 # as a season count no real single-cour anime series would have.
@@ -58,7 +58,7 @@ _ORDINAL_TRAILING = re.compile(
     r"^(?P<title>.+?)\s+(?P<n>\d{1,2})(?:st|nd|rd|th)\s+Season$", re.IGNORECASE
 )
 
-# D-151's own bound: one or two digits, never three or four -- a year can
+# The bound: one or two digits, never three or four -- a year can
 # never match this pattern by its shape alone, regardless of its value.
 _TRAILING_DIGIT = re.compile(r"^(?P<title>.+?)\s+(?P<n>\d{1,2})$")
 
@@ -86,7 +86,7 @@ def _roman_to_int(numeral: str) -> int | None:
 
 def normalize_season(title: str, anime_season: str | None) -> tuple[str, int | None, str]:
     """`(name, season_number, provenance_key)` -- first match wins, in the
-    order D-151 fixes: the parser's own season tag, a trailing roman
+    order: the parser's own season tag, a trailing roman
     numeral, a trailing ordinal (defensive), a trailing one-or-two-digit
     number. A four-digit number, a number above the bound, or a named
     season with no number of its own all leave the title untouched.
@@ -110,7 +110,7 @@ def normalize_season(title: str, anime_season: str | None) -> tuple[str, int | N
 
 
 def parse_episode_number(parsed: dict) -> int | None:
-    """D-168: integers only. `anitopy` genuinely returns a number for a
+    """Integers only. `anitopy` genuinely returns a number for a
     special/half-numbered file (tagged separately via `anime_type`, or as
     a string with a literal decimal point) -- the product wants both
     discarded, not trusted, so the operator assigns them by hand.
@@ -169,7 +169,7 @@ class Recognised:
 def recognize_filename(filename: str) -> Recognised:
     """The whole chain: `anitopy` first, its own season/episode guards
     applied, `guessit` only when `anitopy` found no episode number at all
-    (never for a special or a half number -- those are a deliberate D-168
+    (never for a special or a half number -- those are a deliberate
     discard, not a parser failure to revisit with a second, less careful
     tool).
     """

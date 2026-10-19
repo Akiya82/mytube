@@ -2,7 +2,7 @@
 
 Base S3 API only (boto3): put_object/upload_file, head_object, head_bucket,
 create_bucket. No vendor-specific admin calls — swapping the storage
-candidate must not break on one particular call (Pitfall F, 01-RESEARCH.md).
+candidate must not break on one particular call.
 Client parameters (signature_version, addressing_style) are the ones
 confirmed working against chrislusf/seaweedfs:3.97 in
 src/docs/experiments/07-object-storage.md.
@@ -19,7 +19,7 @@ from orchestrator.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# D-67: storage_usage() lists the whole bucket, which is too expensive to
+# storage_usage() lists the whole bucket, which is too expensive to
 # do on every page render. This process's own writes clear the cache
 # themselves (see invalidate_usage_cache, called from put_object_from_file
 # and delete_object below), so sixty seconds is no longer the window in
@@ -54,7 +54,7 @@ def put_object_from_file(path: str, key: str, content_type: str = "video/mp4") -
     stores `application/octet-stream`, and that reaches the client verbatim:
     a browser downloads such a response instead of playing it, and a player
     has to guess the format. `video/mp4` stays the default so every existing
-    caller is unchanged; the poster upload (D-72) passes `image/jpeg`.
+    caller is unchanged; the poster upload passes `image/jpeg`.
     """
     settings = get_settings()
     get_s3_client().upload_file(
@@ -70,7 +70,7 @@ def get_object_bytes(key: str) -> bytes:
     """Read a whole object into memory -- used to serve the poster frame
     through the orchestrator, since the edge only exposes the video object
     path (`/blob/{edition_id}.mp4`), not a second one for posters. Posters
-    are a few tens of KB (D-72), so reading the whole body is fine; this
+    are a few tens of KB, so reading the whole body is fine; this
     is not the path a multi-gigabyte video ever goes through.
     """
     settings = get_settings()
@@ -110,8 +110,8 @@ def delete_object(key: str) -> None:
 
 
 def abort_dangling_multipart(key: str) -> None:
-    """Best-effort cleanup after a failed `upload_file()` call for `key`
-    (D-53). `upload_file`'s managed transfer does not hand back its
+    """Best-effort cleanup after a failed `upload_file()` call for `key`.
+    `upload_file`'s managed transfer does not hand back its
     `UploadId` on failure, so the only way to abort "explicitly" rather
     than waiting on the bucket lifecycle rule (`ensure_multipart_lifecycle_
     rule`) is to list uploads for this exact key and abort each one found.
@@ -136,7 +136,7 @@ def ensure_multipart_lifecycle_rule() -> None:
     """Idempotent bucket bootstrap, same shape as `ensure_bucket`: a
     lifecycle rule aborting any incomplete multipart upload one day after
     initiation, as the backstop behind the explicit
-    `abort_dangling_multipart` call above (D-53). Standard S3 lifecycle
+    `abort_dangling_multipart` call above. Standard S3 lifecycle
     API, so it works against the external endpoint and the bundled one
     alike -- no vendor-specific admin call.
 
@@ -199,7 +199,7 @@ def list_all_objects() -> dict[str, int]:
 
 @dataclass(frozen=True)
 class StorageUsage:
-    """What the interface's storage-usage line needs (D-67): total bytes
+    """What the interface's storage-usage line needs: total bytes
     and object count from the bucket listing, plus free bytes computed
     from the configured quota when one is set (`storage_quota_bytes > 0`)
     and `None` when no quota is enforced. `listing` carries the same raw
@@ -327,7 +327,7 @@ def reconcile(listing: dict[str, int], referenced) -> Reconciliation:
 
 
 def ensure_bucket() -> None:
-    """Idempotent bucket bootstrap (verdict M1) — safe to call on every
+    """Idempotent bucket bootstrap — safe to call on every
     container start. head_bucket, and only create_bucket if it's actually
     missing; any other failure gets a message pointing at the exact manual
     command from src/docs/experiments/07-object-storage.md rather than a

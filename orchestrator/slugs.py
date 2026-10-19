@@ -1,4 +1,4 @@
-"""Slug normalization, transliteration, and collision resolution (ADDR-06).
+"""Slug normalization, transliteration, and collision resolution.
 
 Wraps `python-slugify` 8.0.4 (default backend `text-unidecode`, Artistic
 License -- the GPL `unidecode` extra, `python-slugify[unidecode]`, is
@@ -20,8 +20,8 @@ from slugify import slugify
 _SLUG_SHAPE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_SLUG_LENGTH = 80
 
-# A digit run longer than this is refused before int() ever sees it
-# (T-05-05, T-05-23): Postgres's own `episode_number_history.number` column
+# A digit run longer than this is refused before int() ever sees it:
+# Postgres's own `episode_number_history.number` column
 # is a 32-bit integer, so no real episode number is ever more than ten
 # digits, and refusing well above that bound still leaves no room for a
 # pathologically long string to cost anything before the address answers
@@ -99,7 +99,7 @@ def pick_unique_slug(candidate: str, taken: set[str]) -> tuple[str, list[str]]:
     Returns (chosen_slug, similar_existing_slugs). `similar_existing_slugs`
     lists already-taken slugs whose `similar_key` matches `candidate`'s --
     reported regardless of whether the exact candidate was free, so callers
-    can warn before saving (the "Re:Zero" / "ReZero" case, D-10/ADDR-06).
+    can warn before saving (the "Re:Zero" / "ReZero" case).
 
     Exact-match collisions get a numeric suffix starting at 2, incrementing
     until free. Same (candidate, taken) input always produces the same
@@ -117,7 +117,7 @@ def pick_unique_slug(candidate: str, taken: set[str]) -> tuple[str, list[str]]:
     return f"{candidate}-{suffix}", similar
 
 
-# --- The public address grammar (D-156, D-187, T-05-23) --------------------
+# --- The public address grammar --------------------
 #
 # What a second (and third) path segment of GET /v/{slug}/... means used to
 # be decided twice: once inline in orchestrator.resolve's own routes, and
@@ -227,7 +227,7 @@ def parse_public_address(path: str) -> PublicAddress:
 
 
 def format_episode_number(number: int) -> str:
-    """The canonical display form of an episode number (D-155): zero-padded
+    """The canonical display form of an episode number: zero-padded
     to two digits, three from 100. This is a rendering rule only -- what an
     operator types (a renumber form's own number field, a leading-zero
     address segment) is never required to already look like this;

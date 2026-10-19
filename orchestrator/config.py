@@ -13,38 +13,38 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MYTUBE_")
 
     secure_link_secret: str
-    sign_ttl_seconds: int = 43200  # 12h, D-03
+    sign_ttl_seconds: int = 43200  # 12h
     database_url: str
     s3_endpoint: str
     s3_bucket: str = "mytube"
     s3_key: str
     s3_secret: str
     s3_region: str = "mytube"
-    delete_grace_seconds: int = 300  # D-13
+    delete_grace_seconds: int = 300
     blob_access_log: str = "/var/log/nginx/blob_access.log"
 
-    # D-57: the address the copy button builds links against. Required, no
+    # The address the copy button builds links against. Required, no
     # default -- the service refuses to start without it, the same way it
     # already refuses without secure_link_secret, because a bare hostname
     # here produces a copied link that silently does not work in a player.
     public_base_url: str
-    # D-77: the hostname the interface answers on. Required, no default --
+    # The hostname the interface answers on. Required, no default --
     # redirects and the session cookie are built against a name the
     # application knows rather than one a caller supplies, and the service
     # refuses to start without it for the same reason it already refuses
     # without a public base address.
     admin_fqdn: str
-    # D-54: the read-only bind mount of the one CIFS/NFS share this phase browses.
+    # The read-only bind mount of the one CIFS/NFS share the interface browses.
     share_root: str = "/share"
-    # D-52/D-53: ephemeral ffmpeg scratch space -- a plain container-layer
+    # Ephemeral ffmpeg scratch space -- a plain container-layer
     # directory, wiped on recreate, never a named volume (see Dockerfile).
     work_dir: str = "/work"
-    # D-51: the size-based time estimate shown next to the add button.
+    # The size-based time estimate shown next to the add button.
     add_estimate_mb_per_second: float = 20.0
-    # D-67: 0 means "no quota enforced", used only for the usage display for now.
+    # 0 means "no quota enforced", used only for the usage display for now.
     storage_quota_bytes: int = 0
 
-    # D-111: the converter's only credential, checked in constant time against
+    # The converter's only credential, checked in constant time against
     # every request under /worker/. Required, no default -- not even an empty
     # string, which would compare equal to a missing header and open the whole
     # prefix to anyone who can reach the interface's hostname. This value is
@@ -52,23 +52,23 @@ class Settings(BaseSettings):
     # caller; a service that started with an empty one would look healthy
     # while being open.
     worker_token: str
-    # D-131: how long a queued transcode waits with no converter check-in
+    # How long a queued transcode waits with no converter check-in
     # before the interface switches to "waiting for a converter" instead of
     # plain "queued". Must stay comfortably longer than the converter's own
     # polling interval (on the order of a few seconds) -- shorter than that
     # and a healthy converter reads as absent between two of its own polls.
     converter_offline_seconds: int = 60
-    # D-136: advisory only, gates nothing. A compatible source above this
+    # Advisory only, gates nothing. A compatible source above this
     # bitrate earns a sentence recommending conversion in the analyzer's
     # plan and stays addable as-is regardless. Defaulted near the per-viewer
     # bandwidth figure the project's own constraints already state (~9
     # Mbit/s pessimistic outbound per viewer at 15 concurrent viewers).
     transcode_bitrate_ceiling_bps: int = 9_000_000
-    # D-137: the encoder's output ceiling for a full-height (1080p) frame;
+    # The encoder's output ceiling for a full-height (1080p) frame;
     # `mytube_media.transcode` scales this down by area for a smaller output
     # frame and never upsizes.
     transcode_target_bitrate_bps: int = 6_000_000
-    # D-148: the fallback speed estimate (finished duration / wall time) used
+    # The fallback speed estimate (finished duration / wall time) used
     # for the pre-start time estimate before any real transcode has finished.
     # A starting value only -- `queries.median_realtime_factor` replaces it
     # with measured history the moment any job has completed, and this
@@ -122,7 +122,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _admin_fqdn_must_differ_from_public_base_url(self) -> "Settings":
-        # D-77's fourth case: the two hostnames must not be the same name.
+        # The two hostnames must not be the same name.
         # nginx picks a server block by matching server_name exactly before
         # it falls back to the catch-all, regardless of the order the
         # blocks appear in the file. Two blocks claiming one name means the

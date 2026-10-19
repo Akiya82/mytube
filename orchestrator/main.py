@@ -1,17 +1,16 @@
 """FastAPI application entrypoint.
 
-/healthz, plus /v/{slug} and /refresh/{edition_id} (plan 04, D-04/D-06/D-08/
-D-09), plus the delayed-delete reaper (D-13) running as a background task
-for the lifetime of the process. Also the share-browsing interface (D-57
-onward): /static/ assets and the share router. The addition consumer
-(D-49/D-50, D-118) is a second lifespan-scoped background task, started
+/healthz, plus /v/{slug} and /refresh/{edition_id}, plus the delayed-delete reaper running as a
+background task for the lifetime of the process. Also the share-browsing interface:
+/static/ assets and the share router. The addition consumer
+is a second lifespan-scoped background task, started
 and cancelled exactly the way the reaper task already is -- see
 orchestrator.media.queue.run_add_consumer. The assembly consumer is a
 third, in the same shape and entirely independent of the addition
 consumer's own loop -- see
 orchestrator.media.playlist_queue.run_playlist_consumer.
 
-Two pieces of middleware run here, in this order (D-75, D-83):
+Two pieces of middleware run here, in this order:
 `auth.auth_gate`, registered last and therefore outermost, closes the
 interface by default; `reject_cross_origin_writes`, registered first and
 therefore innermost, refuses a same-site-cookie-bearing mutating request
@@ -51,7 +50,7 @@ STATIC_DIR = Path(__file__).parents[1] / "static"
 logger = logging.getLogger(__name__)
 
 # How often each consumer polls the durable queue when it finds nothing to
-# claim (D-118). The trade this makes: shorter means an addition or an
+# claim. The trade this makes: shorter means an addition or an
 # assembly starts sooner after it is confirmed; longer means fewer idle
 # queries against a queue that is empty most of the time. Weighted toward
 # the operator noticing a prompt start -- this service serves 7-15 people
@@ -167,17 +166,17 @@ async def reject_cross_origin_writes(request, call_next):
     arriving at the page the operator was originally going to after
     signing in. This middleware's deliberate allowance of a mutating
     request carrying no `Origin` at all stops being a hole for a different
-    reason than it used to be: the host port is gone (D-78) and the
-    application is closed by default (D-75), so such a request still needs
+    reason than it used to be: the host port is gone and the
+    application is closed by default, so such a request still needs
     a valid session cookie to reach anything.
 
     **What it compares.** Not `Host` any more -- `auth.request_host`
     instead, the same forwarded-host accessor `auth.auth_gate` uses, so
-    exactly one place in the application knows how a hostname reaches it
-    (T-02.1-56). Comparing against the literal `Host` header was inert
+    exactly one place in the application knows how a hostname reaches it.
+    Comparing against the literal `Host` header was inert
     only by accident: it worked while the operator reached this process on
     a published host port, where the browser's `Origin` and the `Host` it
-    sent agreed. Plan 03 retired that port and routes the interface
+    sent agreed. That port is gone: the interface is now routed
     through `proxy_pass` to the `orchestrator` upstream block -- and nginx
     derives the outgoing `Host` it sends upstream from the *upstream
     block's own name*, not from the client's request. `Host` therefore
@@ -233,24 +232,24 @@ async def reject_cross_origin_writes(request, call_next):
 
 # auth_gate must be registered last so it is outermost: Starlette inserts
 # each newly added @app.middleware("http") at the front of the stack, so
-# the last one registered runs first and last (D-83). See auth.auth_gate's
+# the last one registered runs first and last. See auth.auth_gate's
 # own docstring for the full ordering rationale.
 app.middleware("http")(auth.auth_gate)
 
 app.include_router(resolve_router)
 app.include_router(share_router)
-# The folder confirmation screen (D-166 onward) -- see routes_folder's own
+# The folder confirmation screen -- see routes_folder's own
 # module docstring for what it does and does not do yet.
 app.include_router(folder_router)
 app.include_router(titles_router)
-# Per-episode actions and per-episode/edition check pages (plan 10,
-# orchestrator/web/routes_episodes.py) -- routes scoped one level below
+# Per-episode actions and per-episode/edition check pages
+# (orchestrator/web/routes_episodes.py) -- routes scoped one level below
 # routes_titles's own title-wide ones.
 app.include_router(episodes_router)
 app.include_router(preview_router)
 app.include_router(auth_router)
 app.include_router(playlists_router)
-# The converter's own router (D-111) -- same application, same hostname, no
+# The converter's own router -- same application, same hostname, no
 # second host and no second port. Reachable through the existing edge
 # proxy exactly like every other route here; see routes_worker's own
 # module docstring for the authorization rule.
@@ -261,7 +260,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 @app.get("/healthz")
 async def healthz():
     """Docker's healthcheck calls this on localhost inside the container
-    (D-79) -- a failure here has to be a deliberate "unhealthy" answer,
+    -- a failure here has to be a deliberate "unhealthy" answer,
     never an unhandled exception. A crash mid-request is not a status
     Docker's healthcheck (or a test's ASGI transport) can read; a caught
     failure returning 503 is.

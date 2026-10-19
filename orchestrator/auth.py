@@ -1,7 +1,7 @@
 """Everything the interface needs to know who is asking: the password
 hash, the session token, the public path list and the gate.
 
-`auth_gate` is the whole of D-75/D-76: everything requires a session
+`auth_gate` is the whole policy: everything requires a session
 except a short, commented list of paths that do not, and that list is the
 only thing a future phase has to touch. The hashing calls are deliberately
 expensive -- that is the whole point of a password hash -- and therefore
@@ -27,7 +27,7 @@ from orchestrator.web.templates import resolve_lang, translator
 
 logger = logging.getLogger(__name__)
 
-# The sliding window (D-81): one constant both the cookie's Max-Age and
+# The sliding window: one constant both the cookie's Max-Age and
 # the database's expires_at are built from, so the two can never disagree.
 SESSION_LIFETIME_SECONDS = 30 * 24 * 3600
 
@@ -40,7 +40,7 @@ SESSION_RENEW_AFTER_SECONDS = 24 * 3600
 
 SESSION_COOKIE_NAME = "mytube_session"
 
-# --- The public path lists (D-75, D-90) -----------------------------------
+# --- The public path lists -----------------------------------
 #
 # HOST_EXEMPT_PREFIXES, PUBLIC_PATHS and PUBLIC_PREFIXES are the whole of
 # what does not require a session in this application. Everything else
@@ -93,7 +93,7 @@ PUBLIC_PATHS: frozenset[str] = frozenset({"/login", "/setup", "/healthz"})
 # narrow as the decision.
 PUBLIC_PREFIXES: tuple[str, ...] = ("/static/", "/lang/")
 
-# The worker prefix (D-111): opened by its own credential, never by being
+# The worker prefix: opened by its own credential, never by being
 # listed as exempt from the session check. This tuple is different in kind
 # from the three above -- checked inside `auth_gate` after the hostname
 # refusal and before the first-run branch, so a fresh deployment with no
@@ -108,7 +108,7 @@ PUBLIC_PREFIXES: tuple[str, ...] = ("/static/", "/lang/")
 # itself with its own credential check, never merely to skip the session.
 TOKEN_GATED_PREFIXES: tuple[str, ...] = ("/worker/",)
 
-# D-87's constant delay on every failed login attempt. No lockout and no
+# A constant delay on every failed login attempt. No lockout and no
 # attempt table: a lockout would let any passer-by lock the operator out
 # of their own interface by hammering the form with their username.
 FAILED_ATTEMPT_DELAY_SECONDS = 1.0
@@ -117,10 +117,10 @@ FAILED_ATTEMPT_DELAY_SECONDS = 1.0
 # `orchestrator.resolve` are bounded by this -- one constant so the two
 # surfaces answer on the same schedule. asyncpg's own pool.acquire() waits
 # forever by default; without a bound a saturated pool would leave a
-# request queued on an open socket with nothing ever returning (D-79).
+# request queued on an open socket with nothing ever returning.
 ACQUIRE_TIMEOUT_SECONDS = 5.0
 
-# --- First run (D-85) -------------------------------------------------
+# --- First run -------------------------------------------------
 
 # The floor the create-password screen enforces. Argon2 does the heavy
 # lifting against brute force, so this number exists to refuse the
@@ -289,7 +289,7 @@ def hash_session_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-# --- Hostname and redirect machinery (D-76, D-77, T-02.1-59) ---------------
+# --- Hostname and redirect machinery ---------------
 
 
 def normalize_host(value: str | None) -> str | None:
@@ -327,7 +327,7 @@ def request_host(request) -> str | None:
     compares an incoming `Origin` against, instead of the bare `Host`
     header it used to compare against -- `proxy_pass` overwrites `Host`
     with the upstream block's own name, which is not the operator's
-    browser-visible hostname at all (T-02.1-56).
+    browser-visible hostname at all.
     """
     host = forwarded_host(request)
     if host is not None:
@@ -345,7 +345,7 @@ def safe_next(value: str | None, fallback: str = "/library") -> str:
     browsers resolve a leading slash-backslash (`/\\evil.example`) to a
     foreign authority, and the post-login redirect is the canonical place
     such a value gets planted now that this surface is on the public
-    internet (T-02.1-59). Deliberately a character check, not a URL
+    internet. Deliberately a character check, not a URL
     parser -- there is nothing here a parser would catch that this does
     not.
     """
@@ -397,7 +397,7 @@ UNSAFE_REDIRECT_METHODS = frozenset({"GET", "HEAD"})
 
 async def auth_gate(request, call_next):
     """Deny by default: everything requires a session except
-    HOST_EXEMPT_PREFIXES, PUBLIC_PATHS and PUBLIC_PREFIXES (D-75, D-76).
+    HOST_EXEMPT_PREFIXES, PUBLIC_PATHS and PUBLIC_PREFIXES.
 
     Registered in `orchestrator.main` as the **outermost** piece of
     middleware -- Starlette inserts each newly added middleware at the
@@ -410,8 +410,8 @@ async def auth_gate(request, call_next):
        delivery `server` block forwards its own hostname on every `/v/`
        and `/refresh/` request it proxies to this application; running the
        hostname check before this step would answer 400 to every viewer
-       in VRChat. That is the whole of criterion 4's protection at this
-       layer, and `test_a_delivery_request_carrying_the_delivery_hostname_
+       in VRChat. That is the whole of the delivery path's protection at
+       this layer, and `test_a_delivery_request_carrying_the_delivery_hostname_
        is_not_refused` is what keeps saying so.
     2. The hostname check. A request carrying no forwarded host at all is
        allowed through -- the container healthcheck reaches this process
@@ -422,13 +422,13 @@ async def auth_gate(request, call_next):
        pre-localized plain-text 400 -- rendering no template and
        interpolating nothing the caller supplied, so there is no
        reflection surface and no page URLs built from a hostname just
-       refused (T-02.1-22, T-02.1-57).
+       refused.
     3. Public paths and prefixes reach their route with no session, but
        only after step 2 -- they need no session, but none of them has a
        reason to arrive on another hostname, and a bypass wide enough to
        serve the login screen to a stranger's hostname is wider than the
        refusal that was agreed.
-    3a. `TOKEN_GATED_PREFIXES` (D-111) reach their route with no session
+    3a. `TOKEN_GATED_PREFIXES` reach their route with no session
         either, also after step 2, but on the strength of a credential
         checked by the route itself rather than an exemption granted here
         -- see that constant's own comment for the distinction. Checked
@@ -448,7 +448,7 @@ async def auth_gate(request, call_next):
        no-store`, but only via `setdefault` (a route that has an opinion
        about its own caching keeps it -- `/poster/{edition_id}` answers
        `public, max-age=31536000, immutable` on purpose) and only when the
-       content type begins `text/html` (T-02.1-58): the sign-out route
+       content type begins `text/html`: the sign-out route
        deletes the session row, which closes the server half of that
        promise, but both major browsers restore a page from their
        back-forward cache without making a request at all, so the library
@@ -463,7 +463,7 @@ async def auth_gate(request, call_next):
        the operator is signed out thirty days after logging in
        regardless.
     6. Otherwise: redirect to the login form, built from the request's
-       method rather than from its path alone (T-02.1-81). A `GET`/`HEAD`
+       method rather than from its path alone. A `GET`/`HEAD`
        carries `?next=`; any other method redirects to bare `/login`,
        because a browser follows a 302 with a GET, so a `next` captured
        from a `POST` would send the operator, after a correct sign-in, to

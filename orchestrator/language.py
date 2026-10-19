@@ -2,7 +2,7 @@
 resolve to one canonical language tag -- or to an honest nothing. Never a
 guess: the product would rather show "language unknown" with the folder
 name still visible than label a studio folder or a resolution tag as a
-resolved language (D-184).
+resolved language.
 
 The CLDR data behind `langcodes`/`language_data` is the dictionary this
 project would otherwise have to hand-type one language at a time -- see
@@ -15,7 +15,7 @@ languages are, by adding words.
 import langcodes
 from langcodes import Language
 
-# D-185's own vocabulary, English and Russian to start. A plain dict, not
+# The track-kind vocabulary, English and Russian to start. A plain dict, not
 # a library: track kind is a closed, small enumeration, unlike a language
 # name, which is an open set with a maintained data source behind it.
 TRACK_KIND_WORDS = {
@@ -77,7 +77,7 @@ def language_from_tokens(tokens: list[str]) -> tuple[str | None, str | None]:
     operator exactly where the answer came from, or that nothing
     resolvable was found at all. This function never guesses: a token
     list with nothing recognisable returns `(None, None)`, the same
-    "language unknown, folder name still visible" answer D-184 asks for.
+    "language unknown, folder name still visible" answer.
     """
     for token in tokens:
         tag = resolve_language(token)

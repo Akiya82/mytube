@@ -1,8 +1,8 @@
 """Slug and edition-id resolution: GET /v/{slug}, GET /refresh/{edition_id}.
 
 Both routes only ever redirect (302) to a signed /blob/ URL -- the bytes
-themselves are served by edge nginx (plan 03's `slice` + tmpfs cache), not
-here. D-06: even though experiment 3 (01-CONTEXT.md D-07) showed an
+themselves are served by edge nginx (`slice` + tmpfs cache), not
+here. Even though an experiment showed an
 extensionless address with the right Content-Type plays directly, direct
 serving is not implemented -- there is nowhere to put the signature without
 dirtying the short link.
@@ -24,12 +24,12 @@ router = APIRouter()
 
 def external_base_url(request: Request) -> str:
     """Build the "scheme://host" prefix for a redirect Location from the
-    *requested* host (ADDR-07, D-11) -- never a config constant, since the
+    *requested* host -- never a config constant, since the
     same slug can be reached through more than one hostname (LAN vs. public,
     or a domain change) and the redirect has to stay on whichever one the
     request actually came in on.
 
-    `api` publishes no port at all as of plan 03 -- it is reachable only
+    `api` publishes no port at all -- it is reachable only
     through `edge`, which overwrites `X-Forwarded-Host`/`X-Forwarded-Proto`
     on every request it proxies to `/v/` and `/refresh/` (see
     `edge/nginx.conf.template`). A client can still steer the value it
@@ -42,8 +42,8 @@ def external_base_url(request: Request) -> str:
     a different route.
 
     One case is handled specially rather than left to that same fate: a
-    request arriving on the *interface's own* hostname (D-77's
-    `admin_fqdn`) is real -- an operator pasting a short link into the tab
+    request arriving on the *interface's own* hostname
+    (`admin_fqdn`) is real -- an operator pasting a short link into the tab
     they are already signed in on -- and building the redirect from that
     hostname would point at a `/blob/` address the interface's own server
     block does not serve. That case is caught below and answered from
@@ -86,7 +86,7 @@ def _readiness_status_code(row) -> int | None:
     answer it deserves, or `None` when the row names a playable edition
     ready to redirect to.
 
-    Shared by all four delivery routes (D-157) so a fifth route added later
+    Shared by all four delivery routes so a fifth route added later
     cannot answer differently from the rest by accident -- see the module
     docstring's own history for why this collapsed into 410 alone before
     this phase.
@@ -131,7 +131,7 @@ def _readiness_status_code(row) -> int | None:
     if edition_status == "failed":
         return 404
     if edition_status == "pending_delete":
-        # Plan 11 (D-178): an edition mid-countdown is gone the moment the
+        # An edition mid-countdown is gone the moment the
         # delete route flips it, exactly like a pending_delete episode two
         # lines above -- the operator's own undo window, not a window a
         # viewer's still-open address gets to play through.
@@ -142,7 +142,7 @@ def _readiness_status_code(row) -> int | None:
 async def _acquire_and(pool, work):
     """`async with pool.acquire() as conn: return await work(conn)`, kept
     as its own coroutine so the caller can bound the whole acquire-and-query
-    pair with `asyncio.wait_for` (D-79) without passing a `timeout=` kwarg
+    pair with `asyncio.wait_for` without passing a `timeout=` kwarg
     to `pool.acquire()` itself -- the real `asyncpg.Pool.acquire` accepts
     one, but every test double in this suite's `_DummyPool` classes is a
     bare `def acquire(self):` with no parameters, and this module is not
@@ -180,7 +180,7 @@ async def resolve_slug_route(slug: str, request: Request):
 async def resolve_episode_or_edition_route(slug: str, segment: str, request: Request):
     """A numbered episode (GET /v/{slug}/{number}), or a film's alternative
     edition (GET /v/{slug}/{edition_slug}) -- decided by
-    `orchestrator.slugs.parse_public_address` (D-156, T-05-23) from
+    `orchestrator.slugs.parse_public_address` from
     `segment`'s own shape, before either resolver runs: a segment made only
     of digits is an episode number, parsed to an integer, which is what
     collapses every leading-zero form onto the same episode; anything else
@@ -227,7 +227,7 @@ async def resolve_episode_edition_route(
 ):
     """An episode's own alternative edition -- the three-segment address a
     series' numbered episode gets when it, too, carries more than one
-    edition. Read through `parse_public_address` (D-156, T-05-23) exactly
+    edition. Read through `parse_public_address` exactly
     as the two-segment route is; a refusal (the second segment is not a
     number, an absurdly long digit run, an edition slug that fails the
     edition rule) answers not found, the same as before this moved.
@@ -282,7 +282,7 @@ async def refresh_edition_route(edition_id: str, request: Request):
     if code is not None:
         return Response(status_code=code)
 
-    # retry=1: the D-04 loop-guard marker. edge's map ($secure_link:$arg_retry)
+    # retry=1: the loop-guard marker. edge's map ($secure_link:$arg_retry)
     # sends a second bad-signature attempt to the stub clip instead of
     # bouncing back here again.
     return _sign_redirect(request, parsed, extra_query="&retry=1")
