@@ -4,7 +4,7 @@
 # acceptance record was once validated against 3 MiB of random bytes that
 # happened to have the right size and status code: the delivery mechanics
 # (302 -> signed 206 -> right byte count) were proven, but nobody checked
-# that a decoder could actually open the file (see 01-05-SUMMARY.md).
+# that a decoder could actually open the file.
 #
 # ffprobe on this machine reorders `-of csv=p=0` output, so this parses
 # named fields from `-of json` instead -- do not switch back to csv.

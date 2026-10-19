@@ -1,7 +1,6 @@
-// Hand-written browser behaviour for this phase -- no HTMX, no client
-// framework (see 02-02-PLAN.md "Decisions this plan makes, that later
-// plans inherit"). Delegated listeners so elements added by a later plan's
-// server-rendered fragment swap work without re-binding anything.
+// Hand-written browser behaviour -- no HTMX, no client framework.
+// Delegated listeners so elements added by a server-rendered fragment swap
+// work without re-binding anything.
 //
 // Copy-to-clipboard: reads the address from data-copy-text on the clicked
 // element, writes it to the clipboard, swaps the button label to the
@@ -62,7 +61,7 @@ document.addEventListener("click", (event) => {
 });
 
 // A disclosure's open state and a focused control's identity both key off
-// data-episode-id plus a control name (05-UI-SPEC.md Screen D item 3):
+// data-episode-id plus a control name:
 // neither the DOM node nor its own identity survive a poll's row
 // replacement, but this pair does, since the fresh fragment carries the
 // identical attributes for the identical episode. data-control (set on
@@ -102,8 +101,7 @@ function _restoreFocus(freshRow, key) {
   }
 }
 
-// Preparing-row poll (D-49, 02-UI-SPEC.md States -> Preparing; 04-UI-
-// SPEC.md Amendment 2): every 4 seconds, fetch a row's own fragment
+// Preparing-row poll: every 4 seconds, fetch a row's own fragment
 // address and replace only that row's element -- never the page, so
 // scroll position and focus elsewhere survive. Stops once the returned
 // row is no longer "preparing". The address comes off the row's own
@@ -143,7 +141,7 @@ document
   .querySelectorAll('.library-row[data-row-status="preparing"]')
   .forEach((row) => setTimeout(() => pollLibraryRow(row), 4000));
 
-// Delete/undo/purge confirmation (D-62): a native confirm() dialog, the
+// Delete/undo/purge confirmation: a native confirm() dialog, the
 // deliberately minimal mechanism -- keyboard- and screen-reader-operable
 // for free, no custom modal. A form carrying data-confirm blocks its own
 // submit unless the operator accepts the dialog.
@@ -161,7 +159,7 @@ document.addEventListener("submit", (event) => {
   if (message && !confirm(message)) return event.preventDefault();
   if (event.target.hasAttribute("data-submit-once"))
     event.target.querySelector('[type="submit"]').disabled = true;
-  // The folder button's own disable-and-relabel (05-UI-SPEC.md Screen A):
+  // The folder button's own disable-and-relabel:
   // any submit button carrying data-loading-label swaps to it and
   // disables, so a wait for N probes has feedback from the first
   // millisecond and a second click cannot start a second burst of them.
@@ -172,7 +170,7 @@ document.addEventListener("submit", (event) => {
   }
 });
 
-// Delete countdown tick (D-62): computed every second from the
+// Delete countdown tick: computed every second from the
 // server-rendered absolute data-deadline (ms since epoch) on the row --
 // never polled from the server, so a reload shows the true remaining time
 // instead of restarting the clock.
@@ -191,9 +189,9 @@ document
   .forEach((row) => tickCountdown(row));
 
 // Playlist reorder: drag-and-drop layered on top of the required up/down
-// arrows (D-107) -- hand-written against native drag events, no library.
+// arrows -- hand-written against native drag events, no library.
 // A drop fires the same one-step move request an arrow's own form
-// submits, repeated once per position crossed (T-03-20): one server-side
+// submits, repeated once per position crossed: one server-side
 // reorder path, not a client-computed order posted wholesale.
 let _draggedItemId = null;
 
@@ -231,7 +229,7 @@ document.addEventListener("drop", (event) => {
   reorderPlaylistMember(playlistId, itemId, to > from ? "down" : "up", Math.abs(to - from)).catch(() => {});
 });
 
-// The move POST always redirects (D-107's baseline), success included --
+// The move POST always redirects (the baseline), success included --
 // res.redirected is true either way, so a dead session is told apart by
 // WHERE it landed (login) rather than whether it redirected at all. A
 // request that fails outright, or lands on login, reloads rather than
@@ -260,7 +258,7 @@ async function reorderPlaylistMember(playlistId, itemId, direction, steps) {
   if (fresh && current) current.replaceWith(fresh);
 }
 
-// The on-demand preview (04-UI-SPEC.md States -> Preview): two delegated
+// The on-demand preview: two delegated
 // click handlers, same disable-and-swap-the-label mechanism the copy-link
 // button already uses above, extended with a second mechanism this screen
 // needs -- replacing only the .preview-panel element with the fragment
@@ -284,7 +282,7 @@ function _previewFormValues(form) {
   return body;
 }
 
-// 05-UI-SPEC.md Screen B item 8: the folder screen's own row carries its
+// The folder screen's own row carries its
 // path on an ancestor of the clicked control; the single-file form has no
 // such ancestor, so this falls through to the shared panel's own
 // attribute unchanged -- the byte-for-byte behaviour that form already
@@ -349,8 +347,7 @@ document.addEventListener("click", (event) => {
   _requestPreview(button, form, after);
 });
 
-// The preview gate (05-UI-SPEC.md Keyboard and Accessibility, folded todo
-// "grey out Preview while No subtitles is selected"): disabled with a
+// The preview gate: disabled with a
 // visible reason while the subtitle choice is "none", enabled the moment
 // a real track is chosen -- embedded, external or manual -- with no page
 // reload. Reads the same radio group `_previewFormValues` already reads
@@ -399,7 +396,7 @@ document.addEventListener("change", (event) => {
 
 document.querySelectorAll("[data-row-include]").forEach(_updateMoveGate);
 
-// The manual audio/subtitle path field (T-05-14): its own hidden radio
+// The manual audio/subtitle path field: its own hidden radio
 // carries no static value in the template at all (grep's own check that
 // the manual entry is no longer a track-shaped option) -- this listener
 // gives it one only once the operator actually types into the field, so
@@ -438,7 +435,7 @@ document.addEventListener("input", (event) => {
   if (form) _updatePreviewGate(form);
 });
 
-// The sidecar/audio picker (T-05-14): opens a server-rendered candidate
+// The sidecar/audio picker: opens a server-rendered candidate
 // list into the static, initially-empty `.picker-panel` beside the
 // manual field it belongs to -- the fragment route reuses the exact
 // search the form itself already ran, never a second scan. Picking a row

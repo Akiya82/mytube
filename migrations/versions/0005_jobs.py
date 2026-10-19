@@ -4,7 +4,7 @@ table, and the five columns a converted edition needs to explain itself
 later.
 
 Three tables would be three mechanisms to keep in step and would still
-leave a restart losing work (D-118) -- `jobs` is one table, and `kind` is
+leave a restart losing work -- `jobs` is one table, and `kind` is
 constrained to exactly the three literals this codebase's call sites use,
 so a typo in a future caller fails loudly instead of creating a job
 nothing will ever consume.
@@ -52,7 +52,7 @@ def upgrade() -> None:
             -- job is either working or uploading, and "uploading" is not a
             -- different status, it is a different sentence over the same
             -- 'running' row. Also carries 'cancelling', the confirmed-but-
-            -- not-yet-actioned state D-129 needs between the cancel request
+            -- not-yet-actioned state the cancel flow needs between the cancel request
             -- and the worker (or the reaper) actually finishing the job.
             stage       text NOT NULL DEFAULT 'queued'
                         CHECK (stage IN
@@ -63,7 +63,7 @@ def upgrade() -> None:
             progress_pct  double precision,
             eta_seconds   integer,
             realtime_factor  double precision,
-            -- D-129: the cancel button sets this rather than mutating
+            -- The cancel button sets this rather than mutating
             -- status directly -- a running job's worker learns of it from
             -- the heartbeat response and finishes the job itself; a queued
             -- job with no worker to tell is finished immediately instead
@@ -124,7 +124,7 @@ def upgrade() -> None:
         CREATE TABLE worker_checkins (
             worker_name  text PRIMARY KEY,
             last_seen_at timestamptz NOT NULL DEFAULT now(),
-            -- D-113: a converter that is up but waiting for room on the
+            -- A converter that is up but waiting for room on the
             -- shared card is a third sentence, not a fallback onto the
             -- other two -- without it the interface can only say "this
             -- converter, N minutes ago" or "none has ever connected",
@@ -137,13 +137,13 @@ def upgrade() -> None:
     )
 
     # A converted edition's library row explains itself a month later
-    # (D-146): the codec AND the profile it was converted from (the
+    #: the codec AND the profile it was converted from (the
     # profile is the half that usually explains WHY conversion was
     # needed -- a ten-bit high profile is the single most common reason in
     # this library), which subtitle was burned in, and what stereo layout
     # the stored object is in. Nullable: every existing row predates these
     # and none of them is knowable retroactively. stereo_layout is written
-    # by both add branches (see plan 10), not only the conversion one -- a
+    # by both add branches not only the conversion one -- a
     # file that arrived already side-by-side needs its badge too.
     op.execute("ALTER TABLE editions ADD COLUMN source_codec text")
     op.execute("ALTER TABLE editions ADD COLUMN source_profile text")

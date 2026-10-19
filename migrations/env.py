@@ -1,12 +1,10 @@
 """Alembic environment — async engine against MYTUBE_DATABASE_URL.
 
-Deliberately minimal (verdict M1, second half): zero revisions exist yet.
-This scaffold is the plan-03 Wave 0 requirement that lets
-`alembic upgrade head` succeed as a no-op inside docker-entrypoint.sh so
-`docker compose up --wait` can come up healthy before any schema exists.
-Plan 04 adds the actual titles/seasons/episodes/editions revisions under
-migrations/versions/ and wires target_metadata for autogenerate; it should
-extend this file, not replace it.
+Deliberately minimal: this scaffold lets `alembic upgrade head` succeed
+as a no-op inside docker-entrypoint.sh, so `docker compose up --wait` can
+come up healthy before any schema exists. The revisions under
+migrations/versions/ and target_metadata for autogenerate extend this
+file, they do not replace it.
 
 MYTUBE_DATABASE_URL is stored as `postgresql://...` (the form asyncpg.connect
 accepts directly) — this file is the one place that swaps the scheme to

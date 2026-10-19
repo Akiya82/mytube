@@ -1,4 +1,4 @@
-"""An edition gets its own delete countdown (plan 11, D-178).
+"""An edition gets its own delete countdown .
 
 The library now offers "Make default" and "Delete" on every non-default
 edition of an episode (`orchestrator/web/routes_episodes.py`'s four new

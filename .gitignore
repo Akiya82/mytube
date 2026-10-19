@@ -38,7 +38,7 @@ htmlcov/
 /media/
 /tmp/
 
-# Stub clips shipped with the repo (D-31): small, checked in on purpose so
+# Stub clips shipped with the repo: small, checked in on purpose so
 # error_page has something to point at on a fresh clone.
 !edge/errors/*.mp4
 

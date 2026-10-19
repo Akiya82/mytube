@@ -1,4 +1,4 @@
 # edge/cache-off.conf.template — included from location ~ ^/blob/ when
-# MYTUBE_CACHE_MODE=off (DELIV-08). Plain proxying, no tmpfs cache.
+# MYTUBE_CACHE_MODE=off. Plain proxying, no tmpfs cache.
 proxy_cache off;
 add_header X-Cache-Status OFF always;

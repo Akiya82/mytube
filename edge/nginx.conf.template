@@ -2,7 +2,7 @@
 # by the official nginx:1.27-alpine entrypoint. Only ${MYTUBE_*} placeholders are
 # substituted (NGINX_ENVSUBST_FILTER=^MYTUBE_ in docker-compose.yml) so that native
 # nginx variables ($uri, $slice_range, $secure_link_expires, $host,
-# $upstream_cache_status) survive envsubst untouched (Pitfall A, 01-RESEARCH.md).
+# $upstream_cache_status) survive envsubst untouched.
 #
 # secure_link_md5 below uses ${uri} in curly-braced form, not bare $uri. This is
 # load-bearing, not style: nginx's variable-name parser greedily consumes the
@@ -18,7 +18,7 @@ log_format cache_audit '$time_iso8601 $uri $slice_range $upstream_cache_status $
 
 proxy_cache_path /dev/shm/vid levels=1:2 keys_zone=vid:16m max_size=${MYTUBE_CACHE_SIZE} inactive=${MYTUBE_CACHE_INACTIVE} use_temp_path=off;
 
-# Address comes from a variable, not a constant (verdict M7, D-16): edge must talk
+# Address comes from a variable, not a constant: edge must talk
 # to the same storage the orchestrator writes to, including an external endpoint.
 #
 # The upstream is NAMED after the storage host rather than something descriptive
@@ -43,7 +43,7 @@ upstream orchestrator {
     keepalive 8;
 }
 
-# External scheme for the 302 Location (ADDR-07, D-11). $scheme is the scheme as
+# External scheme for the 302 Location. $scheme is the scheme as
 # the edge sees it, which is http whenever TLS is terminated by an upstream proxy.
 # Using it directly hands the client an http redirect from an https page: mixed
 # content in a browser, and the wrong scheme for the player. So an incoming
@@ -55,16 +55,16 @@ map $http_x_forwarded_proto $external_proto {
 }
 
 # Nested `if` is forbidden by nginx ("if" directive is not allowed here) — all
-# branching lives in this map (verdict B4). Order matters: regexes are tried in
+# branching lives in this map. Order matters: regexes are tried in
 # the order they appear, and "serve" must win over "stub" so that a valid
 # signature accompanied by a stale retry=1 marker still serves bytes.
 #
 # $secure_link == ""  -> signature invalid (forged/corrupt param)
-# $secure_link == "0" -> signature valid, but $secure_link_expires has passed (D-03)
+# $secure_link == "0" -> signature valid, but $secure_link_expires has passed
 # $secure_link == "1" -> valid and current -> serve
 map "$secure_link:$arg_retry" $blob_action {
     "~^1:"    serve;    # valid signature -> bytes, regardless of retry marker
-    "~:1$"    stub;     # already retried once -> stub clip, not another redirect (D-04 loop-guard)
+    "~:1$"    stub;     # already retried once -> stub clip, not another redirect (loop guard)
     default   refresh;  # first attempt with a bad/expired signature -> re-sign
 }
 
@@ -97,17 +97,15 @@ server {
     # `return 302 /refresh/$edition_id` below is relative, but nginx expands a
     # relative Location into an absolute URL using the scheme IT sees — http
     # whenever TLS is terminated upstream. That handed an https client an http
-    # redirect and broke the D-04 loop guard behind a TLS-terminating proxy.
+    # redirect and broke the redirect loop guard behind a TLS-terminating proxy.
     # Off means the Location stays relative and the client resolves it against
     # whatever scheme, host and port it actually used. Scheme-agnostic, so it
     # needs no forwarded headers to be correct.
     absolute_redirect off;
 
-    # D-21 originally listed only /v/, /p/, /blob/. This adds /refresh/ as a direct
-    # consequence of D-04: nginx only knows edition_id (no slug), so re-signing goes
-    # through edition_id and the player reopens this address itself — it must be
-    # publicly reachable, not internal. Recorded here so the divergence from D-21 is
-    # a visible decision, not silent drift.
+    # /refresh/ is a public address alongside /v/, /p/ and /blob/: nginx only knows
+    # edition_id (no slug), so re-signing goes through edition_id and the player
+    # reopens this address itself — it must be publicly reachable, not internal.
     location /v/ {
         proxy_intercept_errors on;
         proxy_set_header X-Forwarded-Host  $http_host;
@@ -115,7 +113,7 @@ server {
         proxy_pass http://orchestrator;
     }
 
-    # The public playlist address (D-101..D-104), shaped identically to /v/
+    # The public playlist address, shaped identically to /v/
     # above: it only ever redirects, so it carries no signing, no slicing
     # and no caching of its own. Public rather than internal because a
     # video player reopens this address itself, the same reason /v/ and
@@ -127,7 +125,7 @@ server {
         proxy_pass http://orchestrator;
     }
 
-    # Public, NOT internal: the player reopens this address itself (D-04).
+    # Public, NOT internal: the player reopens this address itself.
     # Prefix match, NOT exact: always /refresh/{uuid}.
     # retry=1 on the /blob/ address is added by the orchestrator's own 302, not edge.
     location /refresh/ {
@@ -151,12 +149,12 @@ server {
         # Two SIBLING ifs, one return each — the officially safe subcase. Nested if
         # is forbidden; all branching already lives in the map above.
         if ($blob_action = refresh) { return 302 /refresh/$edition_id; }
-        if ($blob_action = stub)    { return 403; }  # error_page below -> stub clip (D-31)
+        if ($blob_action = stub)    { return 403; }  # error_page below -> stub clip
 
-        # Mandatory (verdict B2): nginx does not log subrequests by default, and
+        # Mandatory: nginx does not log subrequests by default, and
         # slice works entirely through subrequests. Without this line
         # blob_access.log gets one line per client request instead of dozens, and
-        # cache-report (plan 05) would measure nothing while reporting green.
+        # cache-report would measure nothing while reporting green.
         log_subrequest on;
 
         slice ${MYTUBE_SLICE_SIZE};
@@ -170,7 +168,7 @@ server {
 
         # Scheme is a variable because the storage can be either the one this
         # compose brings up (plain http inside an internal network) or an
-        # external S3 over TLS (D-16). These three directives are inert when the
+        # external S3 over TLS. These three directives are inert when the
         # scheme is http, so one config covers both without branching.
         # Verification is ON deliberately: an unverified TLS connection is
         # encrypted but not authenticated, which buys nothing over http against
@@ -183,12 +181,12 @@ server {
         proxy_pass ${MYTUBE_S3_SCHEME}://${MYTUBE_S3_HOST}/${MYTUBE_S3_BUCKET}/$edition_id.mp4;
     }
 
-    # Stub clips instead of raw error codes (D-31, Pitfall G): AVPro shows every
+    # Stub clips instead of raw error codes : AVPro shows every
     # error code as the same black screen, so every failure mode gets an explicit
     # =200 override — without it the client won't even try to play the body. The
     # fourth entry distinguishes one more failure a video player otherwise cannot
     # tell apart from a broken server: a playlist the operator has not finished
-    # building yet (D-104). 425 is the application's own
+    # building yet. 425 is the application's own
     # PLAYLIST_NOT_READY_STATUS constant (orchestrator/web/routes_playlists.py) —
     # tests/test_edge_config.py ties the two together so they cannot drift apart.
     error_page 404             =200 /errors/not-found.mp4;

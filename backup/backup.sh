@@ -1,12 +1,12 @@
 #!/bin/bash
 # backup.sh -- pg_dump on a loop, running straight inside the postgres:16-
-# alpine image already used by service `db` (D-15): no scheduler daemon,
+# alpine image already used by service `db`: no scheduler daemon,
 # no extra image, `pg_dump` is already on this image's PATH. Runs as the
 # `db-backup` service in docker-compose.yml.
 #
-# Why this exists in phase 1 already, not "later": video files can be
+# Why this exists from the start, not "later": video files can be
 # re-uploaded from source; the slug history (which address plays what,
-# and which addresses are tombstoned per D-10) cannot -- it only exists in
+# and which addresses are tombstoned) cannot -- it only exists in
 # this database. Losing it breaks every link already handed out to friends.
 #
 # Usage:
@@ -55,7 +55,7 @@ dump_once() {
   fi
 
   # `find -delete` on zero matches is a no-op, not an error -- safe under
-  # `set -e`, unlike a `grep` with no match (the shell trap from plan 02).
+  # `set -e`, unlike a `grep` with no match (a shell trap).
   find "$BACKUP_DIR" -name 'mytube-*.sql.gz' -mtime "+${KEEP_DAYS}" -delete
 }
 

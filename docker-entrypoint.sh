@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Entrypoint for the orchestrator image (verdicts M1, m2). Runs before uvicorn
+# Entrypoint for the orchestrator image. Runs before uvicorn
 # on every container start: alembic upgrade head, then ensure_bucket(). Both
 # are idempotent, so a restart is safe. There is deliberately no separate
 # one-shot migration/init service in docker-compose.yml: `docker compose up

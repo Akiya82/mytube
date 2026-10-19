@@ -1,8 +1,7 @@
-/* Design tokens -- both palettes, computed contrast figures recorded in
-   02-UI-SPEC.md, not repeated here. Every rule below this block references
+/* Design tokens -- both palettes. Every rule below this block references
    a custom property; no literal hex color appears anywhere past it. */
 :root {
-  /* Light palette (default, D-71) */
+  /* Light palette (default) */
   --surface-dominant: #FAFAF8;
   --surface-secondary: #FFFFFF;
   --surface-secondary-border: #E4E4E0;
@@ -50,9 +49,9 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    /* Dark palette (D-71) -- independently designed status tints, not the
+    /* Dark palette -- independently designed status tints, not the
        light set darkened; dark-mode buttons use dark foreground text on
-       the accent/destructive fills (see 02-UI-SPEC.md Color). */
+       the accent/destructive fills. */
     --surface-dominant: #121212;
     --surface-secondary: #1E1E1E;
     --surface-secondary-border: #33332E;
@@ -173,9 +172,8 @@ button.site-nav__link {
   font-weight: var(--text-heading-weight);
 }
 
-/* The page is centered and sized to its content (05-UI-SPEC.md Design
-   System, page width): as wide as its widest line needs, never narrower
-   than 960px -- the width every screen was designed at -- and never wider
+/* The page is centered and sized to its content: as wide as its widest line
+   needs, never narrower than 960px -- the width every screen was designed at -- and never wider
    than the viewport. A library whose widest row needs 1780px gets 1780px
    in the middle of a 1920px or a 3440px monitor; one whose rows fit in
    960px stays at 960px. The 960px cap that lived here from the first
@@ -193,7 +191,7 @@ button.site-nav__link {
   padding: var(--space-xl) var(--space-lg) var(--space-3xl);
 }
 
-/* The login and create-password screens (02.1-UI-SPEC.md Screens A/B).
+/* The login and create-password screens.
    Without this, the heading and error banner span the full-width page
    while the .auth-card sits at 400px in the middle -- three widths on two
    axes, reading as a broken layout rather than a chosen one. One class
@@ -206,9 +204,8 @@ button.site-nav__link {
   max-width: 100%;
 }
 
-/* .auth-card is `.add-form` reused verbatim (02.1-UI-SPEC.md Component
-   Inventory) -- a form is a block element that already fills its
-   .page--narrow parent, so no width rule of its own is needed; the class
+/* .auth-card is `.add-form` reused verbatim -- a form is a block element
+   that already fills its .page--narrow parent, so no width rule of its own is needed; the class
    exists as the semantic name these two screens' markup uses. */
 
 /* The header on the same two screens: the storage element (the flexible
@@ -227,7 +224,7 @@ button.site-nav__link {
 }
 
 /* The create-password screen's one-sentence intro, directly under the
-   heading (02.1-UI-SPEC.md Screen B) -- Body size, muted, the one place
+   heading -- Body size, muted, the one place
    this project needs a muted paragraph at 16px rather than the 14px
    every existing muted note (.audio-note, .cost-line, .check-page__intro)
    already uses. */
@@ -373,7 +370,7 @@ button.site-nav__link {
   font-size: var(--text-label-size);
 }
 
-/* Already-added chip on a share row (D-48) */
+/* Already-added chip on a share row */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -390,7 +387,7 @@ button.site-nav__link {
   gap: var(--space-sm);
 }
 
-/* Add form (Screen 2) */
+/* Add form */
 .add-form {
   display: flex;
   flex-direction: column;
@@ -426,7 +423,7 @@ button.site-nav__link {
   border-radius: 4px;
 }
 
-/* One numeric-input width variant (05-UI-SPEC.md Spacing Scale): an
+/* One numeric-input width variant: an
    episode number is at most a few digits, so the field is visually
    narrow while keeping the same 44px height and border every other
    .form-field__input has. */
@@ -514,7 +511,7 @@ button.site-nav__link {
   color: var(--text-on-destructive);
 }
 
-/* Cancel (04-UI-SPEC.md Component Inventory): destructive, ghost-outline
+/* Cancel: destructive, ghost-outline
    -- an in-flight job's own irreversible-but-not-yet-final action, one
    register lighter than Delete/Purge's filled destructive button, no new
    colour value. */
@@ -530,8 +527,8 @@ button.site-nav__link {
   cursor: not-allowed;
 }
 
-/* Library (Screen 3) -- thumbnail, technical detail, preparing/failed
-   states (02-UI-SPEC.md Screen 3 and States). */
+/* Library -- thumbnail, technical detail, preparing/failed
+   states. */
 .library-list {
   list-style: none;
   margin: 0;
@@ -541,7 +538,7 @@ button.site-nav__link {
   gap: var(--space-sm);
 }
 
-/* The row wraps (05-UI-SPEC.md Design System, row layout rule): when the
+/* The row wraps: when the
    thumbnail, the text column and the action cluster do not fit on one
    line, the actions drop to a line of their own under the text, rather
    than the text column giving way. */
@@ -558,7 +555,7 @@ button.site-nav__link {
 }
 
 /* Failed row: destructive left border and tint, no thumbnail reserved
-   (D-61) -- shorter than the 104px active/preparing rows, which is
+   -- shorter than the 104px active/preparing rows, which is
    acceptable here because the border and tint already read as a
    different kind of row, not a peer that happens to be shorter. */
 .library-row--failed {
@@ -638,7 +635,7 @@ button.site-nav__link {
   gap: var(--space-sm);
 }
 
-/* Series row expansion (05-UI-SPEC.md Screen D items 1-4). No new colour
+/* Series row expansion. No new colour
    or spacing token anywhere below -- every tint and gap already exists
    for a matching meaning elsewhere in this file. library-row--series
    itself needs no rule: every .library-row wraps, and the class stays in
@@ -661,7 +658,7 @@ button.site-nav__link {
 }
 
 /* The reused chevron_down icon rotates to chevron_up's own orientation on
-   [open] -- no second icon macro needed (05-UI-SPEC.md Screen D item 3). */
+   [open] -- no second icon macro needed. */
 .episode-list__chevron {
   transition: transform 0.15s ease;
 }
@@ -726,7 +723,7 @@ button.site-nav__link {
   gap: var(--space-sm);
 }
 
-/* Nested edition disclosure (05-UI-SPEC.md Screen D item 5): the same
+/* Nested edition disclosure: the same
    .episode-list mechanism one level down, reused rather than duplicated --
    no new custom property, no new colour, no new spacing value. */
 .edition-list {
@@ -754,7 +751,7 @@ button.site-nav__link {
 
 /* Edition row (Component Inventory): the .picker-row density (40px), the
    default included -- badge instead of Make default, disabled Delete with
-   its hint (05-UI-SPEC.md States -> Edition default state). */
+   its hint. */
 .edition-row {
   display: flex;
   flex-direction: column;
@@ -813,7 +810,7 @@ button.site-nav__link {
   color: var(--status-failed-text);
 }
 
-/* Job progress states (04-UI-SPEC.md Color) -- every one of these three
+/* Job progress states -- every one of these three
    reuses a tint already computed for the same meaning, no new custom
    property and no new hex value. */
 .chip--waiting {
@@ -832,7 +829,7 @@ button.site-nav__link {
   margin-left: var(--space-xs);
 }
 
-/* Playlist row states (03-UI-SPEC.md Color) -- three tints reused from
+/* Playlist row states -- three tints reused from
    existing meanings, no new custom property and no new hex value. */
 .chip--empty {
   background: var(--status-info-bg);
@@ -849,7 +846,7 @@ button.site-nav__link {
   color: var(--status-failed-text);
 }
 
-/* Check page (Screen 4) -- video, address, copy button, hairpin-NAT note.
+/* Check page -- video, address, copy button, hairpin-NAT note.
    Deliberately minimal: no related list, no comments, no recommendations. */
 .check-page__video {
   width: 100%;
@@ -867,7 +864,7 @@ button.site-nav__link {
   max-width: 640px;
 }
 
-/* Body size, not label size (04-UI-SPEC.md Typography): the one sentence
+/* Body size, not label size: the one sentence
    on this page an operator has to act on before handing the link to a
    world, not a standing caption like the hairpin note above it. */
 .check-page__layout-hint {
@@ -881,7 +878,7 @@ button.site-nav__link {
   overflow-wrap: anywhere;
 }
 
-/* Playlist assembly screen (03-UI-SPEC.md Screen 5) -- the member-order
+/* Playlist assembly screen -- the member-order
    list, its icon-only control cluster, and the picker below it. Reuses
    the spacing scale and the .share-row density already established
    above; no new custom property, no new colour. */
@@ -908,7 +905,7 @@ button.site-nav__link {
   border-bottom: 1px solid var(--surface-secondary-border);
 }
 
-/* The gap row (D-102): dashed rather than the destructive treatment --
+/* The gap row: dashed rather than the destructive treatment --
    nothing failed, the video was deliberately deleted elsewhere. */
 .member-row--gap {
   border-bottom-style: dashed;
@@ -962,9 +959,9 @@ button.site-nav__link {
   display: contents;
 }
 
-/* The one deliberate icon-only exception in this interface (03-UI-SPEC.md
-   Spacing Scale): square rather than the default .btn padding, same 44px
-   floor, accessible name from aria-label rather than a visible label. */
+/* The one deliberate icon-only exception in this interface: square
+   rather than the default .btn padding, same 44px floor, accessible name
+   from aria-label rather than a visible label. */
 .member-row__control {
   width: 44px;
   padding: 0;
@@ -981,7 +978,7 @@ button.site-nav__link {
   padding: var(--space-sm) var(--space-xs);
 }
 
-/* Conversion block (04-UI-SPEC.md Screens, Add form item 7) -- the
+/* Conversion block -- the
    subtitle picker, the 3D-refuses-subtitles note, the preview panel and
    the convert estimate, all inside one section of the same .add-form.
    No new custom property, no new colour: the heading reuses
@@ -993,11 +990,10 @@ button.site-nav__link {
   gap: var(--space-md);
 }
 
-/* The manual audio/subtitle path field (05-UI-SPEC.md External audio and
-   subtitle labelling): always visible now, the fallback beside the real
+/* The manual audio/subtitle path field: always visible now, the fallback beside the real
    picker rather than a state gated on a visible radio option -- the
    `:has()`-driven reveal this replaced is gone along with the radio
-   option it watched for (T-05-14, static/app.js). */
+   option it watched for. */
 .manual-path-field {
   display: flex;
   flex-direction: column;
@@ -1014,7 +1010,7 @@ button.site-nav__link {
   min-width: 0;
 }
 
-/* The sidecar/audio picker's own container (T-05-14): empty and hidden
+/* The sidecar/audio picker's own container: empty and hidden
    until static/app.js fetches a candidate list into it, the same
    `:empty` mechanism `.preview-panel` already uses. */
 .picker-panel {
@@ -1027,8 +1023,7 @@ button.site-nav__link {
   display: none;
 }
 
-/* External track captions (05-UI-SPEC.md States -> External audio and
-   subtitle labelling): a second line under an external option's own
+/* External track captions: a second line under an external option's own
    filename. The muted caption reuses .audio-note's own tint; only the
    stacked alignment and the inline warning line are new selectors, and
    neither introduces a colour or a spacing value this stylesheet does
@@ -1049,7 +1044,7 @@ button.site-nav__link {
   margin: 0;
 }
 
-/* The preview panel (04-UI-SPEC.md States -> Preview) -- empty until a
+/* The preview panel -- empty until a
    render is requested, then holds the frame image, the frame-time field
    and the "Try another frame" control. Reuses .form-field__input's
    border/radius for the frame image so it reads as part of the same
@@ -1076,7 +1071,7 @@ button.site-nav__link {
   margin: 0;
 }
 
-/* Folder confirmation screen (05-UI-SPEC.md Screen B, Component Inventory)
+/* Folder confirmation screen
    -- the five-column grid every per-file row shares: include checkbox,
    narrow number field, filename-and-meta (the flexible column), the
    already-added chip slot, the row's own preview button. Everything that

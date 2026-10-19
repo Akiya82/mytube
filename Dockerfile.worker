@@ -58,7 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends tini \
 # --- fonts -----------------------------------------------------------------
 #
 # The exact same two packages and the same family the interface image
-# installs for its own preview burn-in. D-125's whole parity claim is
+# installs for its own preview burn-in. The whole parity claim is
 # that a preview rendered in the interface and the conversion rendered
 # here produce the same picture -- a family present on one image and
 # absent on the other substitutes silently, which is exactly the kind of
@@ -87,7 +87,7 @@ RUN pip install --no-cache-dir ".[worker]"
 RUN mkdir -p /work
 
 # The value the host's container runtime reads to decide which of
-# the card's capabilities to expose to this container (D-144). All three,
+# the card's capabilities to expose to this container. All three,
 # spelled exactly this way -- `utility` is what injects the vendor's own
 # query tool (nvidia-smi); worker/gpu.py reads the card through that tool
 # on every single poll, and without `utility` that check fails
@@ -99,7 +99,7 @@ RUN mkdir -p /work
 ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
 
 # A fixed, non-root uid so an ffmpeg invocation over untrusted media (probe,
-# attachment dump, burn-in) never runs as root (IN-11) -- /work is this
+# attachment dump, burn-in) never runs as root -- /work is this
 # user's own scratch space, the only local path anything here writes to.
 # tini stays PID 1 unchanged: it needs no elevated right to run.
 RUN useradd -r -u 10001 mytube && chown mytube /work

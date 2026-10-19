@@ -7,7 +7,7 @@
 # (hex only), so they can never contain a sed-special `/` or `&`.
 #
 # Identity "mytube" gets Admin/Read/Write/List/Tagging; identity "anonymous"
-# gets Read only — the sole mechanism SeaweedFS has for the D-38 anonymous
+# gets Read only — the sole mechanism SeaweedFS has for the anonymous
 # in-network read that edge depends on (OSS-nginx cannot sign AWS SigV4).
 set -eu
 

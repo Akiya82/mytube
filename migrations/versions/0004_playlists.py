@@ -39,7 +39,7 @@ def upgrade() -> None:
             id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
             name        text NOT NULL,
             -- A plain unique slug, not tombstoned, unlike a video's
-            -- address (D-103): renaming a playlist breaks its old
+            -- address: renaming a playlist breaks its old
             -- address. Chosen for schema simplicity; the retrofit, if
             -- ever revisited, is a polymorphic owner column on the slug
             -- history table plus a migration.
@@ -87,7 +87,7 @@ def upgrade() -> None:
             -- a reorder rewrites every position in the list in one
             -- statement and a unique constraint would fire on the
             -- transient overlap. The same edition is allowed to appear
-            -- twice at different positions (D-101) because a position is
+            -- twice at different positions because a position is
             -- its own entity, not a reference.
             position    integer NOT NULL
         )

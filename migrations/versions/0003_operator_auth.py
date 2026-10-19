@@ -1,4 +1,4 @@
-"""Operator credential and session tables (D-80, D-81, D-86, D-91).
+"""Operator credential and session tables.
 
 Gives the interface an operator to be and a session to hold. Both are
 tables rather than process state: an in-process dictionary would sign the
@@ -76,7 +76,7 @@ def upgrade() -> None:
     # password_changed_at moves on every rotation and is the column a
     # reset is visible in. The credential row deliberately survives a
     # pg_dump restore, unlike sessions below -- a restore that produces a
-    # stack with nobody able to sign in would be the worse outcome (D-91).
+    # stack with nobody able to sign in would be the worse outcome.
 
     op.execute(
         """
@@ -94,7 +94,7 @@ def upgrade() -> None:
     # removing an operator removes their sessions without a second
     # statement. `expires_at` moves forward on every renewed request,
     # which is what makes the 30-day window sliding rather than absolute
-    # (D-81).
+    #.
     op.execute(
         "CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions (expires_at)"
     )

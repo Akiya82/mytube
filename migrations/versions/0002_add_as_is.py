@@ -1,7 +1,7 @@
 """Schema for the as-is add flow: a title mid-flight, an edition that
 remembers its source and its poster.
 
-Every column here exists because plan 03's add form needs to answer one of
+Every column here exists because the add form needs to answer one of
 four questions the schema could not answer before: is this file already
 added (source_path), what did ffprobe already tell us about it
 (size/duration/width/height/audio_*), where does its poster frame live
@@ -24,7 +24,7 @@ depends_on = None
 
 def upgrade() -> None:
     # titles.failure_reason holds a TRANSLATION CATALOG KEY, never a
-    # sentence -- the interface is localized (D-66), so an English sentence
+    # sentence -- the interface is localized, so an English sentence
     # stored here would be untranslatable at render time. A value looks
     # like "failed.reason.upload", matching the keys already living in
     # orchestrator/locales/{en,ru}.json.
@@ -34,7 +34,7 @@ def upgrade() -> None:
     # a worker actually picks it up (mark_title_started, called by the
     # worker at dequeue time, never by the route). Two things need this and
     # neither can be faked from a single-value status column: the interface
-    # has to tell "waiting" from "working" (D-45's estimate line reads
+    # has to tell "waiting" from "working" (the estimate line reads
     # differently for each), and restart reconciliation (preparing_rows_at_
     # startup below) has to tell a row that was mid-remux from a row that
     # never started -- calling both "interrupted" would be a lie about the
@@ -42,7 +42,7 @@ def upgrade() -> None:
     # that word.
     op.execute("ALTER TABLE titles ADD COLUMN started_at timestamptz")
 
-    # titles.status gains 'preparing' and 'failed' (D-49/D-53). The
+    # titles.status gains 'preparing' and 'failed'. The
     # constraint declared inline in 0001 was unnamed and Postgres named it
     # titles_status_check by its own default convention for a single-column
     # inline CHECK -- confirmed live against the running database
@@ -59,7 +59,7 @@ def upgrade() -> None:
         """
     )
 
-    # editions.source_path (D-48): the share-relative path the edition came
+    # editions.source_path: the share-relative path the edition came
     # from, so a second attempt at the same file can be recognised and
     # offered its existing link instead of silently creating a duplicate.
     # Nullable -- older rows (and any future non-share source) have none.
@@ -72,8 +72,8 @@ def upgrade() -> None:
         """
     )
 
-    # Technical detail the library row shows (D-60), all produced by the
-    # ffprobe call the add form already makes on click (D-56).
+    # Technical detail the library row shows, all produced by the
+    # ffprobe call the add form already makes on click.
     op.execute("ALTER TABLE editions ADD COLUMN size_bytes bigint")
     op.execute("ALTER TABLE editions ADD COLUMN duration_seconds double precision")
     op.execute("ALTER TABLE editions ADD COLUMN width integer")
@@ -86,14 +86,14 @@ def upgrade() -> None:
 
     # editions.audio_stream_index / audio_channels: not display fields --
     # the two facts a background job cannot reconstruct on its own once the
-    # in-process queue (D-49/D-50) is gone from memory. With them on the
+    # in-process queue is gone from memory. With them on the
     # row, a job is rebuildable from the catalog alone (job_row below), and
     # the queue stops being the only place the operator's audio-track
     # choice exists.
     op.execute("ALTER TABLE editions ADD COLUMN audio_stream_index integer")
     op.execute("ALTER TABLE editions ADD COLUMN audio_channels integer")
 
-    # editions.poster_key (D-72): the object key of the poster frame.
+    # editions.poster_key: the object key of the poster frame.
     # Nullable -- extraction can fail and a missing poster must degrade to
     # a placeholder rather than block an add.
     op.execute("ALTER TABLE editions ADD COLUMN poster_key text")

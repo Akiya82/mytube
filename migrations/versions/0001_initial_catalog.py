@@ -1,15 +1,13 @@
 """Initial catalog schema: titles, slug_history, seasons, episodes, editions.
 
-Skeleton laid down all at once (D-14) even though phase 1 only ever has one
-title with one season/episode: retrofitting the title -> season -> episode
+Skeleton laid down all at once even though the first release only ever has
+one title with one season/episode: retrofitting the title -> season -> episode
 hierarchy later would mean migrating exactly the addresses that leave first
-for other people's VRChat worlds (Pitfall 1, Recovery Cost HIGH).
+for other people's VRChat worlds.
 
 slug_history has a COMPOSITE primary key (slug, title_id), not a single-
-column `slug` key (diverges from the sketch in 01-RESEARCH.md "Code
-Examples" -- that sketch predates the reuse decision below, planner verdict
-B3 in 01-04-PLAN.md is authoritative). A single-column `slug` PK cannot hold
-two rows for the same slug text, which is exactly what D-10 needs: a
+column `slug` key. A single-column `slug` PK cannot hold
+two rows for the same slug text, which is exactly what slug reuse needs: a
 tombstoned title's slug row must survive, and a second title must be able to
 take the same slug text without an UPDATE that would overwrite (and thus
 lose) the tombstone. Resolve rule for the app layer (orchestrator/db/
@@ -19,10 +17,9 @@ still resolves after rename) and reuse (a slug has two rows, the newer one
 wins, the older stays as history) -- see slug_history_slug_created_at below.
 
 episodes.default_edition_id and editions.episode_id reference each other
-(D-09's "slug resolves to title + pointer to default edition" needs the
-pointer to live at the episode level, per 01-RESEARCH.md Assumptions Log
-A4). Postgres allows the cycle but not within a single CREATE TABLE, since
-each table would need to exist before the other's FK can point at it:
+(a slug resolves to a title plus a pointer to its default edition, and the
+pointer has to live at the episode level). Postgres allows the cycle but
+not within a single CREATE TABLE, since each table would need to exist before the other's FK can point at it:
 editions is created first (episode_id column present but unconstrained),
 then episodes (with its FK to editions.id), then a separate ALTER TABLE adds
 editions.episode_id's FK now that episodes exists. downgrade() undoes this
@@ -74,10 +71,10 @@ def upgrade() -> None:
         )
         """
     )
-    # ADDR-05: history rows are never deleted, only is_current flips on
+    # History rows are never deleted, only is_current flips on
     # rename. At most one current row per title (not per slug -- a title can
     # only have one "live" slug at a time, but a slug text can belong to two
-    # different titles' history rows at once during a D-10 reuse).
+    # different titles' history rows at once during a slug reuse).
     op.execute(
         """
         CREATE UNIQUE INDEX slug_history_one_current_per_title

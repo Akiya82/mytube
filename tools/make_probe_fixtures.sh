@@ -3,9 +3,8 @@
 # enumeration test suites: two stereo-tagged Matroska clips and one clip
 # carrying a mixed text-subtitle track pair. Captures what this project's
 # own pinned ffmpeg actually emits -- never a value copied out of
-# documentation (04-RESEARCH.md's Open Questions 1 and 2 exist precisely
-# because the tag vocabulary and the side-data shape were not yet proven
-# against a real file when that document was written).
+# documentation, because the tag vocabulary and the side-data shape were not
+# proven against a real file when the tests were first written.
 #
 # Run this to regenerate the fixtures; do not hand-edit their JSON output.
 #

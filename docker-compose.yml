@@ -16,8 +16,8 @@ services:
     networks:
       - db_net
 
-  # Image/tag/command/volumes/bring-up sequence are fixed by the DIST-02
-  # verdict in src/docs/experiments/07-object-storage.md — not re-chosen here.
+  # Image/tag/command/volumes/bring-up sequence are fixed by the storage
+  # experiment in docs/experiments/07-object-storage.md — not re-chosen here.
   storage:
     image: chrislusf/seaweedfs:3.97
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
@@ -34,13 +34,13 @@ services:
       start_period: 10s
     networks:
       - storage_net
-    # No ports published — reachable only from storage_net (D-38). Anonymous
+    # No ports published — reachable only from storage_net. Anonymous
     # read inside the network comes from the "anonymous" identity baked into
     # s3.json.template; the boundary is unreachability from outside, not ACL.
 
   # Dumps go to a host bind mount under ./data/ (already covered by
   # the top-level /data/ rule in .gitignore, same pattern as storage's own
-  # data — nothing new to ignore) (D-15). No scheduler daemon and no extra image:
+  # data — nothing new to ignore). No scheduler daemon and no extra image:
   # this is the same postgres:16-alpine that already ships pg_dump, entry
   # point overridden to run backup/backup.sh's loop instead of a server.
   db-backup:
@@ -112,7 +112,7 @@ services:
       # Defaults keep the out-of-the-box path working: this compose brings up
       # its own storage over plain http, so a fresh clone needs neither of
       # these in .env. Setting them there overrides the default and points edge
-      # at an external S3 instead (D-16) -- MYTUBE_S3_HOST is the bare hostname,
+      # at an external S3 instead -- MYTUBE_S3_HOST is the bare hostname,
       # without the port, because nginx uses it as both the TLS SNI name and
       # the Host header (see the upstream block in edge/nginx.conf.template).
       MYTUBE_S3_SCHEME: "${MYTUBE_S3_SCHEME:-http}"
@@ -139,7 +139,7 @@ services:
     healthcheck:
       # No dedicated /healthz on edge itself; any unmatched path hits nginx's
       # own 404, which error_page maps to the not-found stub clip with =200
-      # (D-31) — a real request through the whole rendered config, not just
+      # — a real request through the whole rendered config, not just
       # "the process is running".
       test: ["CMD-SHELL", "wget -q -T2 -O /dev/null http://127.0.0.1/ >/dev/null 2>&1"]
       interval: 5s
@@ -157,7 +157,7 @@ services:
       - edge_net
       - storage_net
     # Terminates behind the owner's own external reverse proxy; TLS ends
-    # there (D-19/D-20), not in this compose stack.
+    # there, not in this compose stack.
 
 networks:
   edge_net: {}

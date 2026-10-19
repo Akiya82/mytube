@@ -1,4 +1,4 @@
-# The converter's own compose file (D-112) -- run on the machine that has
+# The converter's own compose file -- run on the machine that has
 # the card, not a profile inside docker-compose.yml. That file is how
 # somebody outside this project brings the service up on its own, and
 # this file must not complicate that path in any way; it keeps working
@@ -32,7 +32,7 @@ services:
     # `.env.example` for that pair's own names). Deliberately not among
     # these names: the service's own storage key, its database URL, its
     # signing secret and its share password -- a leak from this host
-    # hands out none of them (D-115). This list has
+    # hands out none of them. This list has
     # to stay equal to what worker/settings.py's WorkerSettings declares
     # (that module's own docstring is the source of truth); a field added
     # there without a matching entry here fails
@@ -49,7 +49,7 @@ services:
       MYTUBE_WORKER_VRAM_MIN_MIB: ${MYTUBE_WORKER_VRAM_MIN_MIB:-1536}
       MYTUBE_WORKER_POLL_SECONDS: ${MYTUBE_WORKER_POLL_SECONDS:-5.0}
       MYTUBE_WORKER_MAX_OUTPUT_WIDTH: ${MYTUBE_WORKER_MAX_OUTPUT_WIDTH:-1920}
-      # Exactly what the image itself also sets -- repeated here (D-144)
+      # Exactly what the image itself also sets -- repeated here
       # because the host's container runtime reads this from the
       # container's own environment at run time, not from the image's
       # baked-in default alone, on every compose stack that sets its own
@@ -57,7 +57,7 @@ services:
       # what injects the vendor's own query tool (nvidia-smi), and
       # worker/gpu.py's free-memory check runs that tool on every single
       # poll -- trim this to the two that sound like an encoder's own
-      # business and the floor check (D-113) fails permanently.
+      # business and the floor check fails permanently.
       NVIDIA_DRIVER_CAPABILITIES: "video,compute,utility"
     deploy:
       resources:
@@ -77,8 +77,8 @@ services:
       - ${MYTUBE_SHARE_HOST_PATH:-./share}:/share:ro
       # Scratch space for the encoder's own output and the +faststart
       # rewrite that follows it -- a bind mount onto a disk with room for
-      # a large file plus its rewrite (D-114 names a spinning disk on the
-      # real deployment host; any disk with enough free space works for
-      # an outside user's own machine).
+      # a large file plus its rewrite (the real deployment host uses a
+      # spinning disk; any disk with enough free space works for an outside
+      # user's own machine).
       - ${MYTUBE_WORKER_SCRATCH_PATH:-./worker-scratch}:/work
     restart: unless-stopped

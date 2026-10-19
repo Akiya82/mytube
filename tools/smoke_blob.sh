@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke test for the delivery skeleton (01-03): signature -> edge ->
+# End-to-end smoke test for the delivery skeleton: signature -> edge ->
 # storage -> bytes, through slice + tmpfs cache. Thirteen numbered steps, one
 # pass/fail line each. Cleans up nothing it didn't create except by resetting
 # the log; it deliberately leaves the compose stack running so a human can
@@ -85,8 +85,8 @@ fi
 
 # ---------------------------------------------------------------------------
 # Step 2: storage unreachable from the host -- only when the bundled
-# storage service is the one actually in the delivery path (D-38, verdict
-# B1). An external endpoint's reachability is the operator's own network
+# storage service is the one actually in the delivery path.
+# An external endpoint's reachability is the operator's own network
 # boundary, not this stack's; when one is configured this step says so and
 # skips the check rather than passing for a container that is no longer
 # in the delivery path.
@@ -116,8 +116,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 3: anonymous read inside the network + endpoint/upstream consistency
-# (D-38, verdict M7).
+# Step 3: anonymous read inside the network + endpoint/upstream consistency.
 # ---------------------------------------------------------------------------
 info "step 3: anonymous read from inside the network, endpoint/upstream consistency"
 ANON_PUT_KEY="smoke-anon-probe.txt"
@@ -260,7 +259,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 10: full download through edge, sha256 match, log line count (B2, M8).
+# Step 10: full download through edge, sha256 match, log line count.
 # ---------------------------------------------------------------------------
 info "step 10: full download + sha256 + access_log line count"
 reset_log
@@ -273,21 +272,20 @@ if [ "$DL_CODE" = "200" ] && [ "$SHA_DL" = "$SHA_ORIG" ]; then
 else
   fail "step 10: full download mismatch — code=$DL_CODE sha=$SHA_DL expected=$SHA_ORIG"
 fi
-# Measured truth per src/docs/experiments/07-object-storage.md: 64 lines for a
-# 64 MiB object at slice 1m, not 65 as the plan's original acceptance
-# criterion assumed — the first slice merges into the main request's log
-# line instead of getting its own subrequest entry. Flagging the
-# discrepancy rather than bending this measurement to match 65.
+# Measured per src/docs/experiments/07-object-storage.md: 64 lines for a
+# 64 MiB object at slice 1m, not 65 — the first slice merges into the main
+# request's log line instead of getting its own subrequest entry. 65 is
+# accepted too, for an nginx build that logs it separately.
 if [ "$LINES10" = "64" ]; then
-  pass "step 10: access_log has 64 lines for 64 MiB @ slice 1m (matches measured truth from 01-02/experiment 7, NOT the plan's original '65' assumption — log_subrequest on is confirmed working: 64 >> 1)"
+  pass "step 10: access_log has 64 lines for 64 MiB @ slice 1m (matches the count measured in experiment 7 — log_subrequest on is confirmed working: 64 >> 1)"
 elif [ "$LINES10" = "65" ]; then
-  pass "step 10: access_log has 65 lines (plan's original assumption held on this nginx build — log_subrequest on confirmed working)"
+  pass "step 10: access_log has 65 lines (this nginx build logs the first slice separately — log_subrequest on confirmed working)"
 else
-  fail "step 10: access_log has $LINES10 lines, expected 64 (measured truth) or 65 (plan's original assumption)"
+  fail "step 10: access_log has $LINES10 lines, expected 64 (measured) or 65 (first slice logged separately)"
 fi
 
 # ---------------------------------------------------------------------------
-# Step 11: signature expiring mid-download (assumption A1, verdict M6).
+# Step 11: signature expiring mid-download.
 # ---------------------------------------------------------------------------
 info "step 11: signature expiring mid-download"
 dc restart edge >/dev/null 2>&1
@@ -310,12 +308,11 @@ BAD_STATUS_COUNT=$(echo "$BAD_STATUS_COUNT" | tr -d '\r ')
 if [ "$SHA11" = "$SHA_ORIG" ] && [ "${BAD_STATUS_COUNT:-0}" = "0" ]; then
   pass "step 11: sha256 matches after mid-stream expiry, zero 302/403 among subrequests"
 else
-  fail "step 11 (assumption A1): sha256=$SHA11 (expected $SHA_ORIG), 302/403 count=$BAD_STATUS_COUNT — see src/docs/experiments/05-secure-link-on-slices.md for the recorded verdict"
+  fail "step 11: sha256=$SHA11 (expected $SHA_ORIG), 302/403 count=$BAD_STATUS_COUNT — see src/docs/experiments/05-secure-link-on-slices.md for the recorded verdict"
 fi
 
 # ---------------------------------------------------------------------------
-# Step 12: parallel requests to one cold chunk -> exactly one origin fetch
-# (DELIV-05, verdict m9).
+# Step 12: parallel requests to one cold chunk -> exactly one origin fetch.
 # ---------------------------------------------------------------------------
 info "step 12: ten parallel requests, one cold chunk"
 dc restart edge >/dev/null 2>&1
@@ -350,7 +347,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 13: MYTUBE_CACHE_MODE=off switch (DELIV-08).
+# Step 13: MYTUBE_CACHE_MODE=off switch.
 # ---------------------------------------------------------------------------
 info "step 13: MYTUBE_CACHE_MODE=off"
 # NOT a `sed -i` on .env: `set -a; source .env; set +a` at the top of this

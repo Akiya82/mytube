@@ -80,7 +80,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: the interface publishes no host port any more (D-78).
+# Step 2: the interface publishes no host port any more.
 # ---------------------------------------------------------------------------
 info "step 2: api publishes no host port"
 PORT_OUT=$(dc port api 8000 2>&1)
@@ -166,7 +166,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6: /healthz is not proxied externally (D-79).
+# Step 6: /healthz is not proxied externally.
 # ---------------------------------------------------------------------------
 info "step 6: /healthz is refused by nginx, not answered by the application"
 HEALTHZ_CODE=$(curl -s -o /dev/null -w '%{http_code}' $ADMIN "${EDGE_URL}/healthz")
@@ -178,7 +178,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # Step 7: a wrong password takes the constant delay and gives the generic
-# error (D-87).
+# error.
 # ---------------------------------------------------------------------------
 info "step 7: wrong password -> generic error, at least one second wall-clock"
 START7=$(date +%s%N)
