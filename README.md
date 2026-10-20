@@ -35,7 +35,9 @@ docker compose ps
 
 By default the stack pulls the published images, `ghcr.io/akiya82/mytube`
 and `ghcr.io/akiya82/mytube-worker`, and mounts a local `./share` directory
-as the source library. Two overrides change that:
+as the source library. The images are built for amd64; on an ARM machine
+such as an Apple silicon Mac, Docker runs them under emulation, slower but
+working. Two overrides change that:
 
 - `docker-compose.build.yml` builds the images from this checkout instead.
 - `docker-compose.cifs.yml` mounts a network share in place of `./share`.
