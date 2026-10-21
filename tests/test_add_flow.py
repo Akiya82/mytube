@@ -1829,9 +1829,7 @@ async def test_a_restart_mid_remux_leaves_the_row_in_flight_rather_than_failed(
 ):
     """The property this plan exists to change, proven against the
     real durable table rather than a real process restart -- this project
-    no longer runs a local dev stand to kill and bring back (`.claude
-    /CLAUDE.md`: the workstation stand is retired, the service only runs
-    in the owner's k3s cluster). What a restart actually does to a
+    no longer runs a local dev stand to kill and bring back. What a restart actually does to a
     process is stop it from writing anything further; that is reproduced
     directly here by claiming a job, marking its title started (the point
     a real consumer would have reached before a mid-remux crash), and then

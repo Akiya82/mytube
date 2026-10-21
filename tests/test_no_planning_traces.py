@@ -38,9 +38,10 @@ read, so a comment or a docstring is as published as a help string:
   removes on purpose and this one reads;
 - the `/* ... */` and `//` comments of `orchestrator/static/style.css` and
   `orchestrator/static/app.js`;
-- the full-line comments of the sample environment file, both compose
-  files, the Dockerfiles, the shell entrypoints and tools, `.gitignore`
-  and the nginx templates under `edge/`;
+- the full-line comments of the sample environment file, every compose
+  file, the Dockerfiles, the shell entrypoints and tools, `pyproject.toml`,
+  `.dockerignore`, `alembic.ini`, `.gitignore` and the nginx templates
+  under `edge/`;
 - every line of the Markdown files at the repository root and of the
   Markdown and YAML files under `.github/`.
 
@@ -101,14 +102,17 @@ PYTHON_COMMENT_DIRS = (
 # The only file no source-surface pass reads: this one.
 EXCLUDED_FILES = frozenset({Path(__file__).resolve()})
 
-# The sample environment file, both compose files, both Dockerfiles, the
-# shell entrypoints and tools, `.gitignore` and the nginx templates -- the
+# The sample environment file, every compose file, both Dockerfiles, the
+# shell entrypoints and tools, the build and tool configuration, `.gitignore`
+# and the nginx templates -- the
 # shipped configuration an operator reads, none of it Python.
 CONFIG_FILES_FOR_COMMENT_SCAN = (
     REPO_ROOT / ".env.example",
     REPO_ROOT / ".gitignore",
-    REPO_ROOT / "docker-compose.yml",
-    REPO_ROOT / "docker-compose.worker.yml",
+    *sorted(REPO_ROOT.glob("docker-compose*.yml")),
+    REPO_ROOT / "pyproject.toml",
+    REPO_ROOT / ".dockerignore",
+    REPO_ROOT / "alembic.ini",
     REPO_ROOT / "Dockerfile",
     REPO_ROOT / "Dockerfile.worker",
     REPO_ROOT / "docker-entrypoint.sh",
@@ -169,6 +173,7 @@ _POINTER_PATTERN = re.compile(
     r"|\bUI-SPEC\b"
     r"|\b(?:ROADMAP|REQUIREMENTS|STATE|PROJECT)\.md\b"
     r"|\.planning/"
+    r"|\.claude/"
     r"|\b(?:CR|WR|IN)-[0-9]{2}\b"
     r"|\bScreen [A-Z0-9]\b"
     r"|\bAmendment [0-9]+\b"
@@ -881,6 +886,7 @@ def test_root_markdown_and_github_files_are_collected_and_a_missing_github_is_no
         "(04-11)",
         "gap closure 05-17",
         "plan 06.1-02",
+        "see .claude/CLAUDE.md",
     ],
 )
 def test_the_pointer_pattern_matches_what_it_exists_to_catch(text):
@@ -902,6 +908,7 @@ def test_the_pointer_pattern_matches_what_it_exists_to_catch(text):
         "ISO-8859-1",
         "a Screen reader",
         "a function in screen.py",
+        "a claude/ directory",
     ],
 )
 def test_the_pointer_pattern_leaves_ordinary_text_alone(text):

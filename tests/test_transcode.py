@@ -66,13 +66,12 @@ _DANGEROUS_SUBTITLE_PATH = r"/share/O'Brien: back\slash sub.srt"
 _BRACKETED_SUBTITLE_PATH = "/share/Show - 01 [BDRip 1080p, HEVC; FLAC].srt"
 
 
-# --- encoder flags: the part CLAUDE.md already paid for once ---------------
+# --- encoder flags: the part that already cost a debugging session ---------
 
 
 def test_the_transcode_argv_carries_the_explicit_pixel_format_profile_and_level():
     """A source that leaves the pixel format implicit hands a ten-bit
-    stream to a player that shows a black screen (`.claude/CLAUDE.md`
-    trap 2) -- adjacency by index, not membership, because a flag whose
+    stream to a player that shows a black screen -- adjacency by index, not membership, because a flag whose
     value drifted to another position is not the same command.
     """
     from mytube_media.transcode import build_transcode_command
