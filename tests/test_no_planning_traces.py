@@ -6,14 +6,16 @@ plan or task number, the name of a planning document, a UI-spec screen
 label -- leads a reader to a file they will never have. Everything below
 fails the build when one is written into something that ships.
 
-Two compiled patterns define "pointer". `_ID_PATTERN` covers the id
+Three compiled patterns define "pointer". `_ID_PATTERN` covers the id
 families and the phase/plan/task/criterion wording, in English and Russian.
 `_POINTER_PATTERN` covers the families `_ID_PATTERN` does not: threat ids
 with a dotted or lettered tail, planning-document names, review-finding
 ids, UI-spec screen and amendment labels, and bare plan numbers such as
-`04-11`. It is a separate pattern so the two families can be tested at
-their edges independently; `_has_pointer` applies both, and every pass
-uses it.
+`04-11`. `_PROCESS_PATTERN` covers process prose -- "this phase", "a later
+plan", "the phase's own edit" -- which names no identifier but leans on a
+process the reader cannot see. They are separate patterns so the families
+can be tested at their edges independently; `_has_pointer` applies all
+three, and every pass uses it.
 
 **Output surfaces.** What a person reads while using the tool:
 
@@ -180,9 +182,39 @@ _POINTER_PATTERN = re.compile(
     r"|(?<![0-9A-Za-z.-])0[0-9](?:\.[0-9])?-[0-9]{2}(?![0-9A-Za-z-])"
 )
 
+# Process prose: a sentence that leans on the development process instead of
+# stating the fact -- "this phase", "a later plan", "the phase's other new
+# settings", "plan-10 tests", "Wave 0". The words "plan" and "phase" also
+# have domain meanings the pattern has to leave alone: the conversion plan
+# the analyzer computes ("the plan the analyzer returns", `TranscodePlan`,
+# `plan_slug`) and a stage of a request or a job ("a request phase"). So it
+# never matches a bare "the plan" or "a <word> phase"; it needs a deictic
+# ("this", "that"), a time word ("later", "next"), a possessive or a number.
+# The same family also covers the other words the process leaves behind:
+# "Pitfall 4", "RED state", "per the plan", "the research document".
+_PROCESS_PATTERN = re.compile(
+    r"\b(?:this|that)\s+(?:phase|plan)\b"
+    r"|\b(?:these|those|later|earlier|next|previous|prior|future|following|upcoming)"
+    r"\s+(?:phase|plan)s?\b"
+    r"|\b(?:the|every|each|any)\s+phases?\b"
+    r"|\b(?:phase|plan)'s\b"
+    r"|\b(?:phase|plan)-[0-9]+\b"
+    r"|\b(?:phase|plan)s [0-9]"
+    r"|\bwave [0-9]\b"
+    r"|\bpitfall [0-9A-Z]\b"
+    r"|\bred state\b"
+    r"|\bper the (?:plan|research|verdict)\b"
+    r"|\bthe research(?:'s| document)\b",
+    re.IGNORECASE,
+)
+
 
 def _has_pointer(text: str) -> bool:
-    return bool(_ID_PATTERN.search(text) or _POINTER_PATTERN.search(text))
+    return bool(
+        _ID_PATTERN.search(text)
+        or _POINTER_PATTERN.search(text)
+        or _PROCESS_PATTERN.search(text)
+    )
 
 
 def _literal_text(node: ast.AST) -> str | None:
@@ -914,3 +946,59 @@ def test_the_pointer_pattern_matches_what_it_exists_to_catch(text):
 def test_the_pointer_pattern_leaves_ordinary_text_alone(text):
     assert not _POINTER_PATTERN.search(text), text
     assert not _has_pointer(_SVG_GEOMETRY.sub(" ", text)), text
+
+
+# --- The process-prose pattern's edges ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "this phase",
+        "This phase's schema revision",
+        "a later plan",
+        "Later plans append the countdown",
+        "this plan's query",
+        "the phase's other new settings",
+        "the playlist phase's own block",
+        "an earlier phase wrote",
+        "the next phase actually writes",
+        "the phase measured a cancel",
+        "every phase after it",
+        "phase-2 additions",
+        "plan-10 tests",
+        "plans 03, 04 and 05",
+        "Wave 0",
+        "(Pitfall 4)",
+        "RED state",
+        "Order per the plan",
+        "the research document",
+        "this\nplan",
+    ],
+)
+def test_the_process_pattern_matches_what_it_exists_to_catch(text):
+    assert _PROCESS_PATTERN.search(text), text
+    assert _has_pointer(text), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "the conversion plan",
+        "TranscodePlan",
+        "plan_slug",
+        "plan_edition_slug",
+        "the plan the analyzer returns",
+        "a request phase",
+        "a caller that plans a slug",
+        "Verdict.plan is one of two values",
+        "plan.stereo_layout",
+        "the plan for the title itself",
+        "a three-phase handshake",
+        "two phase commit",
+        "the wavelength",
+    ],
+)
+def test_the_process_pattern_leaves_domain_words_alone(text):
+    assert not _PROCESS_PATTERN.search(text), text
+    assert not _has_pointer(text), text
