@@ -44,7 +44,7 @@ SENTINEL = "# ==== admin surface begins here ===="
 # that one needed, since the public prefix location needed no change
 # and every numbered/edition address reaches the application through the
 # existing `location /v/` block unmodified.
-DELIVERY_DIGEST = "a0a963e6cecb55449caa12642387caeaca396cc03b1cb497c6bdde98cdd280a0"
+DELIVERY_DIGEST = "325c2de89674868237b269dfd867951d44012df50cd01a11aae07be06c42cb74"
 
 # A prefix `location` block (not a regex `location ~ ...` block) whose body
 # proxies to the `orchestrator` upstream. The object-storage location is a

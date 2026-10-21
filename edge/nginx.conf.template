@@ -10,7 +10,7 @@
 # secret in place, a secret starting with an alnum character (every
 # `openssl rand -hex` secret does) gets read as part of an unknown variable name
 # ("$uri<secret-prefix>") and nginx refuses to start. Found while writing the
-# integration test in src/tests/test_signing.py — the Python side of the formula
+# integration test in tests/test_signing.py — the Python side of the formula
 # (orchestrator/signing.py) is unaffected, since it does plain string
 # concatenation and never touches nginx's own variable parser.
 
