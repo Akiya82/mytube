@@ -795,15 +795,14 @@ async def test_the_setup_page_refuses_a_wrong_token(
 
 
 @pytest.mark.integration
-async def test_creating_the_password_signs_the_operator_in(app_pool, auth_tables):
-    """The live token is minted at process startup (app.state.setup_token),
-    which this in-process transport never runs -- this test is written
-    against that eventual mechanism and stays red until the app exposes a
-    way to set it directly for a test.
+async def test_creating_the_password_signs_the_operator_in(
+    app_pool, auth_tables, monkeypatch
+):
+    """The live token is minted at process startup, which this in-process
+    transport never runs, so the test sets it directly.
     """
-    token = getattr(app.state, "setup_token", None)
-    if token is None:
-        pytest.skip("app.state.setup_token is not wired yet")
+    token = "test-setup-token"
+    monkeypatch.setattr(app.state, "setup_token", token, raising=False)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -883,11 +882,10 @@ async def test_a_second_operator_cannot_be_created(app_pool, auth_tables, raw_co
 
 @pytest.mark.integration
 async def test_setup_refuses_once_an_operator_exists_even_with_the_live_token(
-    app_pool, auth_tables, raw_conn, integration_client
+    app_pool, auth_tables, raw_conn, integration_client, monkeypatch
 ):
-    token = getattr(app.state, "setup_token", None)
-    if token is None:
-        pytest.skip("app.state.setup_token is not wired yet")
+    token = "test-setup-token"
+    monkeypatch.setattr(app.state, "setup_token", token, raising=False)
 
     await _signed_up_operator(raw_conn)
 
