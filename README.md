@@ -33,13 +33,16 @@ docker compose up -d
 docker compose ps
 ```
 
-By default the stack pulls the published images, `ghcr.io/akiya82/mytube`
-and `ghcr.io/akiya82/mytube-worker`, and mounts a local `./share` directory
-as the source library. The images are built for amd64; on an ARM machine
-such as an Apple silicon Mac, Docker runs them under emulation, slower but
-working. Two overrides change that:
+By default the stack pulls the published interface image,
+`ghcr.io/akiya82/mytube`, and mounts a local `./share` directory as the
+source library. The optional converter (`docker-compose.worker.yml`) is built
+on the GPU machine that runs it; a published `ghcr.io/akiya82/mytube-worker`
+image exists too. The images are built for amd64; on an ARM machine such as
+an Apple silicon Mac, Docker runs them under emulation, slower but working.
+Two overrides change that:
 
-- `docker-compose.build.yml` builds the images from this checkout instead.
+- `docker-compose.build.yml` builds the interface image from this checkout
+  instead of pulling it.
 - `docker-compose.cifs.yml` mounts a network share in place of `./share`.
 
 Combine them with `-f`, for example
@@ -54,6 +57,11 @@ file starts SeaweedFS for that role because it needs something that runs on a
 clean machine. The author's own deployment does not use it: it points at an
 external MinIO. If you already run MinIO or another S3 store, point the
 `MYTUBE_S3_*` variables at it and leave the bundled one idle.
+
+The edge reads objects without a signature, so an external bucket must allow
+anonymous reads and be reachable only from the stack's internal network.
+Never point it at a public hosted bucket: making that bucket readable would
+publish the whole library. SETUP.md has the details.
 
 ## Licence
 
