@@ -769,9 +769,10 @@ with `docker rmi mytube-check-api mytube-check-worker`.
 ## Upgrading
 
 `docker compose up -d --wait` — the only bring-up command elsewhere in this
-document — **builds an image only when one is absent.** An existing
-deployment that pulls a change and runs that command as-is gets the new
-edge template and the new compose file running against the **old**
+document — **does not fetch a newer image.** The interface runs from the
+published image, and Docker keeps whatever copy of the tag it already has. An
+existing deployment that pulls a change and runs that command as-is gets the
+new edge template and the new compose file running against the **old**
 application image: no gate, no login screen, no first run. If the interface
 hostname is already published by then, the whole operator surface is on the
 public internet with nothing in front of it, and `--wait` reports every
@@ -782,12 +783,17 @@ gate.
 2. Add `MYTUBE_ADMIN_FQDN` to `.env` if it is not already there. The
    interface refuses to start without it and names it in its own log; every
    other compose subcommand keeps working while you fix it.
-3. **Rebuild and bring up in one command:**
+3. **Pick the image, fetch it and bring up:** leave `MYTUBE_IMAGE_TAG` unset
+   (or `latest`) to follow the newest release, or set it in `.env` to the
+   dated tag you want (see [Releases](#releases)), then:
    ```bash
-   docker compose up -d --build --wait
+   docker compose pull
+   docker compose up -d --wait
    ```
-   `--build` is not optional here — the application is baked into its
-   image, and the plain form reuses whatever image is already there.
+   The pull is not optional — the application is baked into its image, and
+   the plain form reuses whatever copy of the tag is already on the machine.
+   If you build the image from your checkout instead, use
+   `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build --wait`.
 4. **Check the interface is closed before it is reachable**, from the
    machine itself, with a forged host header:
    ```bash
@@ -818,11 +824,16 @@ step with no obvious symptom until it kills the container.
    ```bash
    docker compose exec api alembic downgrade -1
    ```
-   This phase's schema revision is unknown to an older version's migration
-   history, so an older container's start-up migration cannot proceed past
+   The schema revision of this version is unknown to an older version's
+   migration history, so an older container's start-up migration cannot proceed past
    it and the container would die on a message naming a revision it cannot
    find.
-3. Check out the previous revision and run `docker compose up -d --build --wait`.
+3. Set `MYTUBE_IMAGE_TAG` in `.env` to the previous dated tag (see
+   [Releases](#releases)), then run `docker compose pull` and
+   `docker compose up -d --wait`. Checking out the previous revision alone
+   changes nothing while the tag stays `latest`. If you build from your
+   checkout, check out the previous revision and run
+   `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build --wait`.
 4. Confirm delivery — which is what the rollback was for.
 
 The interface is unreachable between steps 1 and 4, and that is deliberate:
