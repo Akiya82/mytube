@@ -712,8 +712,13 @@ git tag v2026.10.19
 git push github v2026.10.19
 ```
 
-The run builds both images and pushes each under the tag you pushed and under
-`latest`. The package-write permission exists on that one job and nowhere else.
+Only a tag of the form `vYYYY.MM.DD` starts a release. The run first repeats
+the lint and the full test suite on the tagged commit; if either fails,
+nothing is published. It then builds both images, checks the ffmpeg licence
+file inside each, and pushes both under the dated tag. `latest` is moved for
+both images only after both pushes have succeeded, so the two never advertise
+different releases. Releases run one at a time. The package-write permission
+exists on the publishing job and nowhere else.
 
 **Which tag gets pulled.** The default `docker-compose.yml` resolves
 `${MYTUBE_IMAGE_TAG:-latest}`, so somebody who sets nothing pulls `latest`. A
