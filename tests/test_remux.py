@@ -149,7 +149,7 @@ def test_aac_bitrate_scales_with_channel_count():
     surround = aac_bitrate_for(6)
     seven_one = aac_bitrate_for(8)
     assert len({stereo, surround, seven_one}) == 3
-    # the research's flagged placeholder was a flat 192k -- the 5.1 value
+    # an early placeholder was a flat 192k -- the 5.1 value
     # must sit above it, not merely differ from it.
     assert surround > 192
 

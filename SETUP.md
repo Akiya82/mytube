@@ -972,7 +972,7 @@ and, without this note, would look broken in a confusing way. Such a dump
 carries no `operator_credential` table and no `sessions` table, so it emits
 no drop for either — but it does restore the recorded schema version to
 what it was when the dump was taken. The stack then comes back up with both
-tables already standing (this phase's migration created them earlier) and a
+tables already standing (the migration created them earlier) and a
 schema version that predates them; the migration is written to tolerate
 that, which is what keeps the container alive. What the operator sees next
 is an interface with no account. Restart the `api` container, read

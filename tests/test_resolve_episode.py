@@ -140,7 +140,7 @@ async def test_migration_backfill_writes_one_current_history_row_for_a_pre_exist
     function now writes its own current episode_number_history row on
     every call, which the 0005 schema this test downgrades to has no table
     for at all -- this is exactly the pre-migration row shape the real
-    function itself used to produce before this phase existed.
+    function itself used to produce before the migration.
     """
     _run_alembic(migrated_db_url, "downgrade", "0005")
 
@@ -314,7 +314,7 @@ async def test_migration_cancel_a_never_active_title_completes_after_the_upgrade
     assert surviving_slug["episode_id"] is None
 
 
-# --- The queries the rest of the phase reads and writes through ------------
+# --- The queries the rest of this file reads and writes through ------------
 
 
 async def _season_id_for_title(conn, title_id) -> uuid.UUID:
@@ -332,7 +332,7 @@ async def _add_episode(
 ) -> tuple:
     """A second (or later) episode of an existing title, added directly by
     SQL -- no folder-add flow exists yet to drive this through, so the test
-    setup builds the row shape a later plan's own add path will produce.
+    setup builds the row shape the add path will produce.
     """
     edition_id = uuid.uuid4()
     episode_id = await conn.fetchval(

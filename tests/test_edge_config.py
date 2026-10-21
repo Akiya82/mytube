@@ -3,22 +3,20 @@ fixtures.
 
 `test_the_delivery_server_block_is_byte_identical_to_the_pinned_digest` and
 `test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_check`
-were the two red-on-purpose tests an earlier phase wrote against a template
-and an `orchestrator.auth` module that did not exist yet; both have been
-green for several phases now. The digest has since been re-pinned twice,
-each time deliberately: once for the playlist phase's own `location /p/`
-block and its `error_page 425` mapping, and once more in this phase for
-the fifth `error_page 423` mapping, `EDITION_PREPARING_STATUS`'s own line
--- see `DELIVERY_DIGEST`'s own comment for what each re-pin was taken
-after. Below both of the original tests is a third and fourth, added
-across those same two phases: this project adopted a pinned digest
+guard the delivery block of the edge template and the hostname exemption
+of every delivery location. The digest has been re-pinned twice, each time
+deliberately: once for the playlist `location /p/` block and its
+`error_page 425` mapping, and once more for the fifth `error_page 423`
+mapping, `EDITION_PREPARING_STATUS`'s own line -- see `DELIVERY_DIGEST`'s own
+comment for what each re-pin was taken after. Below both of the original
+tests is a third and fourth: this project adopted a pinned digest
 precisely because a comment asking a future reader to remember one line is
 not enforcement, and relying on exactly that to keep an application status
 constant and a template directive in agreement would be the same mistake
 one file over -- so `test_the_not_ready_status_the_application_answers_is_mapped_to_a_clip`
 ties `orchestrator.web.routes_playlists.PLAYLIST_NOT_READY_STATUS` to the
 template's own `error_page` mapping, parsed out of the template rather than
-restated as a literal, and this phase's own
+restated as a literal, and
 `test_the_preparing_status_the_application_answers_is_mapped_to_a_clip`
 does the identical thing for `orchestrator.resolve.EDITION_PREPARING_STATUS`.
 """
@@ -39,11 +37,11 @@ SENTINEL = "# ==== admin surface begins here ===="
 # SENTINEL (UTF-8 bytes) -- pasted here as a literal, never recomputed
 # from the same file at test time, which would make this test always
 # pass. Re-pinned twice, each time deliberately: once after the playlist
-# phase's own edit to the delivery block (a fourth `location /p/` block
+# playlist edit to the delivery block (a fourth `location /p/` block
 # mirroring `/v/`, and a fourth `error_page 425 ... playlist-not-ready.mp4`
-# mapping), and once more in this phase for its own one-line addition, a
-# fifth `error_page 423 ... preparing.mp4` mapping -- this phase's one and
-# only digest re-pin, since the public prefix location needed no change
+# mapping), and once more for a one-line addition, a
+# fifth `error_page 423 ... preparing.mp4` mapping -- the only re-pin
+# that one needed, since the public prefix location needed no change
 # and every numbered/edition address reaches the application through the
 # existing `location /v/` block unmodified.
 DELIVERY_DIGEST = "a0a963e6cecb55449caa12642387caeaca396cc03b1cb497c6bdde98cdd280a0"
@@ -127,7 +125,7 @@ def test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_ch
 
     # Pinned so a future change to the regex above cannot silently turn
     # this test into a no-op that finds nothing and asserts nothing. Three
-    # since the playlist phase's own `location /p/` joined `/v/` and
+    # since the playlist `location /p/` joined `/v/` and
     # `/refresh/` -- this is that deliberate update, not a future one.
     assert len(prefixes) == 3, (
         f"expected exactly three delivery locations proxying to orchestrator "

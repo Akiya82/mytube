@@ -1,11 +1,9 @@
 """The worker's own HTTP client (`worker.client.WorkerClient`) against a
 mocked transport -- no network.
 
-RED state: the `worker` package does not exist at all yet -- every
-subject below is imported inside its own test body (mirrors
-`tests/test_playlist_build.py`), so the module still collects cleanly and
-each test fails as its own `ModuleNotFoundError` rather than one
-collection error hiding the whole file.
+Every subject below is imported inside its own test body (as in
+`tests/test_playlist_build.py`), so a broken import fails one test instead
+of hiding the whole file in a single collection error.
 """
 
 import json

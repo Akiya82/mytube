@@ -432,7 +432,7 @@ def test_the_effective_audio_codec_describes_the_stored_object_not_the_source(
     identical stored objects look like a mismatch, and the joinability
     check would refuse a list that would have joined perfectly. In a
     library of as-is rips this is the most common case there is, and it
-    is exactly the refusal this phase promises to make trustworthy.
+    is exactly the refusal that has to be trustworthy.
 
     The video parameters need no such reconciliation -- the video stream
     is always copied -- and the audio sample rate and channel layout
@@ -444,10 +444,9 @@ def test_the_effective_audio_codec_describes_the_stored_object_not_the_source(
 
 
 # --- the extended verdict ---------------------------------------------------
-# All failing today: `Verdict` does not yet carry `plan`, `plan_reason_key`,
-# `plan_reason_params`, `bitrate_bps`, `over_bitrate_ceiling`,
-# `subtitle_tracks`, `stereo_layout` or `stereo_layout_source`. This section
-# fixes those field names as the contract a later plan implements against.
+# `Verdict` carries `plan`, `plan_reason_key`, `plan_reason_params`,
+# `bitrate_bps`, `over_bitrate_ceiling`, `subtitle_tracks`, `stereo_layout`
+# and `stereo_layout_source`. This section pins those field names.
 
 
 def test_a_compatible_source_plans_a_passthrough():

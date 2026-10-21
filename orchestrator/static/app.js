@@ -4,8 +4,7 @@
 //
 // Copy-to-clipboard: reads the address from data-copy-text on the clicked
 // element, writes it to the clipboard, swaps the button label to the
-// "copied" text for two seconds. Later plans append the delete countdown
-// tick and the status poll to this same file.
+// "copied" text for two seconds.
 //
 // navigator.clipboard exists only in a secure context, and the interface
 // is reached over the operator's own TLS from here on -- but a secure
@@ -402,7 +401,7 @@ document.querySelectorAll("[data-row-include]").forEach(_updateMoveGate);
 // gives it one only once the operator actually types into the field, so
 // leaving it untouched never sends a stray choice.
 //
-// Subtitle's own manual grammar is unchanged from before this plan
+// Subtitle's own manual grammar is unchanged
 // (orchestrator.media.add.parse_subtitle_choice still joins
 // subtitle_manual_path onto the source's own folder server-side): the
 // static `data-manual-static-choice="manual"` attribute on that one field

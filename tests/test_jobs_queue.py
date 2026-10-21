@@ -5,17 +5,6 @@ behaviour under test (row visibility across two connections, a check
 constraint, a stale-heartbeat sweep) is not something a connection double
 can exhibit.
 
-RED state: none of `orchestrator.db.queries`'s new job-queue functions
-(`enqueue_job`, `claim_job`, `heartbeat_job`, `finish_job`,
-`request_job_cancel`, `due_for_requeue`, `requeue_job`,
-`fail_job_exhausted`, `record_worker_seen`, `last_worker_seen`,
-`count_queued_ahead`) or `JOB_MAX_ATTEMPTS` exist yet, and neither does the
-`jobs`/`worker_checkins` schema -- every call below fails as an
-`AttributeError` or a database error, not a collection error, since
-`orchestrator.db.queries` itself already exists and imports cleanly
-(mirrors `tests/test_queries.py`'s own extension style for the phase-2
-additions to this same module).
-
 Only the six claiming tests are marked `integration`:
 they are the ones that genuinely need two independent, committed
 connections racing against the real `FOR UPDATE SKIP LOCKED` query --
@@ -46,7 +35,7 @@ def _slug(tag: str) -> str:
 async def _title_and_edition(conn, tag: str = "jobq") -> tuple:
     """A real title+edition row -- `enqueue_job`'s `title_id`/`edition_id`
     are real foreign keys once the schema exists, so setup builds them the
-    same way `tests/test_queries.py`'s own phase-2 extension tests do.
+    same way `tests/test_queries.py` does.
     """
     edition_id = uuid.uuid4()
     title_id = await queries.create_title_with_edition(
@@ -70,9 +59,7 @@ async def _reset_jobs_tables(conn) -> None:
     """Truncated before and after: this file's tests share the one
     session-scoped Postgres every other test module in this run shares,
     and a committed claim/heartbeat row from one test is a precondition
-    the next test does not expect. Swallows the missing-table error this
-    plan's own RED state produces -- the schema does not exist until a
-    later plan's migration lands.
+    the next test does not expect.
     """
     try:
         await conn.execute("TRUNCATE jobs, worker_checkins CASCADE")
@@ -602,7 +589,7 @@ async def test_a_progress_write_against_a_job_that_is_no_longer_running_returns_
 async def test_a_raise_after_the_terminal_write_inside_one_transaction_leaves_the_job_running(
     db_conn,
 ):
-    """The primitive every atomic-write caller in this plan (the success
+    """The primitive every atomic-write caller (the success
     route, the add consumer, the playlist consumer) relies on: a failure
     anywhere else inside the same `conn.transaction()` rolls the terminal
     write back along with it, so a job never ends up `done` with its own
@@ -787,7 +774,7 @@ async def test_a_stale_job_that_was_already_cancelled_finishes_as_cancelled_not_
     )
     assert row["cancel_requested"] is True
 
-    # The reaper's own sweep (a later plan's concern, orchestrator.reaper)
+    # The reaper's own sweep (the reaper's concern, orchestrator.reaper)
     # reads cancel_requested off exactly this row and calls finish_job with
     # outcome="cancelled" instead of requeue_job -- asserted directly
     # against the query primitive the sweep will call.

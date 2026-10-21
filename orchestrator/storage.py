@@ -303,7 +303,7 @@ def reconcile(listing: dict[str, int], referenced) -> Reconciliation:
     and catalog rows whose object is missing from the bucket.
 
     Lives here, as a function of two arguments, precisely so that two
-    different callers in two different plans can use it without either
+    different callers can use it without either
     importing the other: a library header can render the counts from it,
     an operator's audit command can print the detail from it. One
     definition of "unreferenced", not two that disagree at 3am.

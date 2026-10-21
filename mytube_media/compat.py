@@ -320,8 +320,8 @@ def audio_tracks(probe_json: dict) -> list[AudioTrack]:
 # measurement -- ordinary container-overhead differences between a video
 # and a standalone dub sit well under a second, so a few seconds already
 # distinguishes "different container, same cut" from "wrong episode" or
-# "trimmed intro." Named and documented so a later plan can retune it
-# against real dubs rather than guess a second time.
+# "trimmed intro." Named and documented so it can be retuned
+# against real dubs rather than guessed a second time.
 DURATION_MISMATCH_THRESHOLD_SECONDS = 5.0
 
 

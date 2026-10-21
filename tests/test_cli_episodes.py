@@ -86,7 +86,7 @@ async def test_add_standalone_unchanged_when_no_new_option_given(
     out = capsys.readouterr().out
     lines = out.splitlines()
     assert "/v/cli-episodes-standalone" in lines
-    # No numbered-address line: unchanged from before this plan.
+    # No numbered-address line: unchanged for a standalone title.
     assert not any("/01" in line for line in lines)
 
 

@@ -31,8 +31,8 @@ async def resolve_slug(conn: asyncpg.Connection, slug: str) -> asyncpg.Record | 
     non-null `episode_id` (see migrations/versions/0006_series_and_editions
     .py for what writes it -- a slug that followed one standalone file into
     a series), the episode picked is that exact episode, not the title's
-    lowest-numbered one. When it is null -- every row written before this
-    phase, and every ordinary title slug since -- the original lowest-
+    lowest-numbered one. When it is null -- every row written before the
+    episode pointer existed, and every ordinary title slug since -- the original lowest-
     episode lateral runs unchanged, so this branch is a complete no-op for
     the whole catalog that predates it. Without it, the address handed out
     for a standalone episode would start playing episode one of whatever
@@ -464,8 +464,8 @@ async def set_edition_technical(
     the source is not already that codec. The caller does that
     reconciliation (see `mytube_media.compat.effective_audio_codec`)
     before calling this; a caller that passes the raw probe output here is
-    passing the wrong thing. All seven default to `None` so a caller that
-    predates this phase (or a row this phase's migration left null) keeps
+    passing the wrong thing. All seven default to `None` so a caller written
+    before these fields existed (or a row the migration left null) keeps
     working unchanged.
     """
     await conn.execute(
@@ -544,9 +544,9 @@ async def editions_by_source_paths(
 
     `edition_kind` is the `kind` of the earliest `jobs` row
     ever created for this title -- `'remux'` for an as-is addition,
-    `'transcode'` for a conversion, or `None` for a title this phase never
-    queued a job for at all (every title the CLI creates directly, from
-    before this phase existed).
+    `'transcode'` for a conversion, or `None` for a title that never had a
+    job queued (every title the CLI creates directly, and every title from
+    before jobs existed).
 
     `episode_id` and `number` are this exact edition's own episode
     and its current number, read the same way `episode_by_number`'s own
@@ -800,8 +800,8 @@ async def episodes_for_library(
     an in-flight second edition of an already-ready episode still shows
     on that episode's own row rather than vanishing until it either wins
     or fails. `edition_count` is a plain per-episode count of its own
-    editions, read for a later plan's own nested edition disclosure
-    -- unused by this plan's own row, carried now so that plan
+    editions, read for the nested edition disclosure
+    -- unused by the row itself, carried now so that disclosure
     adds no second query either. `source_path` is the default
     edition's own share-relative path, read here for the "Add edition"
     row action to build its target href from -- the same field `library_
@@ -1162,8 +1162,7 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     while the deletion can still be undone, so a bucket missing them
     genuinely is a broken address.
 
-    **A reaped episode is excluded the same way, one level down** (plan
-    10). A per-episode delete tombstones the episode alone and leaves its
+    **A reaped episode is excluded the same way, one level down**. A per-episode delete tombstones the episode alone and leaves its
     title active -- `ep.status = 'deleted'` is the one new predicate on
     both edition branches below, added beside the title exclusion rather
     than as a second rule stated twice, closing the exact false positive
@@ -1252,7 +1251,7 @@ async def referenced_objects(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     this one result -- and because it is where `playlist_artifacts` is
     created; nothing has produced an artifact yet on a fresh database, so
     the branch is inert until the first build. It names no edition and no
-    title at all, so neither of this plan's two new exclusions touches it.
+    title at all, so neither of the two edition exclusions touches it.
     """
     return await conn.fetch(
         """
@@ -1294,8 +1293,8 @@ async def touch_title_changed(conn: asyncpg.Connection, title_id) -> None:
     (migrations/versions/0006_series_and_editions.py). Called by the
     edition-scoped readiness twins below, so a title rises to the top of
     the library the moment one of its episodes finishes or fails, exactly
-    as an operator watching the screen would expect. A later plan's own
-    catalog write calls this directly for the same reason.
+    as an operator watching the screen would expect. A catalog write
+    calls this directly for the same reason.
     """
     await conn.execute("UPDATE titles SET changed_at = now() WHERE id = $1", title_id)
 
@@ -3074,8 +3073,8 @@ async def active_editions_for_picker(conn: asyncpg.Connection) -> list[dict]:
     """Every active edition of every active, non-deleted episode, newest
     title first then in episode/creation order within it -- the assembly
     screen's member picker (this query's own one-edition-per-
-    title assumption stopped being true the moment this phase's first
-    edition existed).
+    title assumption stopped being true the moment a title could hold
+    more than one edition).
 
     `title_edition_count` (a plain `count(*) OVER (PARTITION BY t.id)`, no
     second query) is what lets the picker's own label rule tell a genuine

@@ -30,7 +30,7 @@
 # It leaves the library exactly as it found it: it adds no clip, deletes no
 # clip, and purges the one playlist it creates.
 #
-# Usage: cd src && bash tools/smoke_playlist.sh
+# Usage, from the repository root: bash tools/smoke_playlist.sh
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

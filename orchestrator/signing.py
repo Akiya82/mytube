@@ -18,7 +18,7 @@ does not affect this module: the bounding only matters for nginx's own
 string-interpolation syntax, not for this plain Python concatenation.
 
 This codebase carries a bare identifier in one place (an edition id, the
-shape every caller before the playlist phase has ever passed) and an
+shape every caller before playlists existed has ever passed) and an
 identifier with an extension already on it in another (a playlist
 artifact's stored object key, mirroring `editions.object_key`'s own
 shape) — the delivery address pattern accepts exactly one shape at the
@@ -76,7 +76,7 @@ def sign_object_key(object_key: str, secret: str, ttl_seconds: int) -> tuple[str
 
 def sign_blob_url(edition_id: str, secret: str, ttl_seconds: int) -> tuple[str, int]:
     """Sign a /blob/ URL for an edition. Kept as its own name and signature
-    so every caller from before this phase is untouched; delegates to
+    so every existing caller is untouched; delegates to
     `sign_object_key` — `blob_path`'s own idempotent `.mp4` handling means
     this produces byte-identical output to before for a bare edition id,
     and the correct single-extension output if it is ever handed a key

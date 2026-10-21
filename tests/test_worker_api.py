@@ -25,9 +25,9 @@ from orchestrator.web.routes_worker import WORKER_PROTOCOL_VERSION
 
 STUB_JOB_ID = uuid.uuid4()
 
-# The six new failure-reason keys this phase introduces: four for the
+# The six new failure-reason keys: four for the
 # transcode branch's own new ways to fail, plus a name each for an
-# unreadable source and a full scratch disk (Pitfall 4) -- the frozen
+# unreadable source and a full scratch disk -- the frozen
 # vocabulary `ALLOWED_FAILURE_REASONS` must carry.
 NEW_FAILURE_REASON_KEYS = frozenset(
     {
@@ -106,7 +106,7 @@ def client():
 
 
 def _valid_done_body(**overrides) -> dict:
-    """A `DoneBody` with every field this plan added filled in with a
+    """A `DoneBody` with every field filled in with a
     plausible value -- the baseline every route test below posts, then
     mutates one field at a time to prove the field's own bound or its own
     required-but-nullable shape. `source_profile`, `subtitle_burned_*`,
@@ -147,7 +147,7 @@ def _valid_done_body(**overrides) -> dict:
 
 def _worker_requests():
     """(path, body) for each of the five worker-facing routes, in the
-    frozen shape this plan fixes.
+    frozen shape.
     """
     return [
         ("/worker/claim", {"protocol": WORKER_PROTOCOL_VERSION, "worker": "ml-server"}),
@@ -419,7 +419,7 @@ async def test_an_empty_queue_answers_no_content(client):
 
 
 async def test_a_claim_carries_only_the_operator_s_choices(monkeypatch, client):
-    """A later plan cannot quietly start shipping a built command over the
+    """A later change cannot quietly start shipping a built command over the
     network.
 
     `_DummyPool`/`_DummyConn` carry no real data (this file drives no
@@ -771,7 +771,7 @@ def _accepted_job_row(title_id=None):
     """A job row with `title_id=None` by default -- the minimal shape
     that lets `wrote=True` short-circuit every route's own further write
     (set_edition_conversion_detail, mark_edition_failed, etc.), which
-    this plan does not touch and does not need mocked to prove the cache
+    is not touched here and does not need mocking to prove the cache
     is cleared on the accepted branch.
     """
     return {
@@ -1487,7 +1487,7 @@ async def _title_and_edition_for_claim(conn) -> tuple:
 #
 # The two tests below drive `worker.__main__._process_job` directly, the
 # same layer `test_worker_job.py` exercises -- placed here rather than
-# there because this plan's own file list names this module, and the
+# there because the
 # claim response this file already pins (`external_audio_path`) is the
 # field that makes the job below reachable at all.
 
@@ -1657,7 +1657,7 @@ def test_a_missing_embedded_index_with_no_external_audio_still_raises_probe_mism
 ):
     """The embedded guard was branched around for an external-audio job,
     not weakened or removed -- a job naming an embedded index that is no
-    longer on the file still fails exactly as it did before this plan.
+    longer on the file still fails exactly as it did before.
     """
     job = _external_audio_job(audio_stream_index=99, external_audio_path=None)
 

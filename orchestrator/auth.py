@@ -3,7 +3,7 @@ hash, the session token, the public path list and the gate.
 
 `auth_gate` is the whole policy: everything requires a session
 except a short, commented list of paths that do not, and that list is the
-only thing a future phase has to touch. The hashing calls are deliberately
+only thing a new public route has to touch. The hashing calls are deliberately
 expensive -- that is the whole point of a password hash -- and therefore
 never run on the event loop this process shares with every viewer's
 `/v/{slug}` request.
@@ -57,8 +57,8 @@ SESSION_COOKIE_NAME = "mytube_session"
 # cannot render is the failure this line prevents, and it protects the
 # public playlist address exactly as it already protects the video one.
 #
-# That note is not the guard. A comment asking a future phase to remember
-# one line is the same class of protection this phase already rejected for
+# That note is not the guard. A comment asking a future maintainer to remember
+# one line is the same class of protection already rejected for
 # the delivery `server` block, where a pinned digest replaced "please do
 # not edit this". `tests/test_edge_config.py::
 # test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_check`

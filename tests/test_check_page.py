@@ -346,7 +346,7 @@ async def test_layout_hint_sits_below_the_inactive_note_when_not_active(
 async def test_copy_control_still_copies_only_the_address_on_a_3d_title(
     client, queries_stub
 ):
-    """The copy control's own copied value is unchanged by this plan --
+    """The copy control's own copied value is unchanged --
     it copies the address and nothing else, never an instruction."""
     title_id = uuid.uuid4()
     queries_stub.resolved_by_slug["copy-3d-clip"] = _resolved(
@@ -428,7 +428,7 @@ async def test_film_check_page_unaffected_for_a_one_episode_title(client, querie
     second segment is not made only of digits) resolves through
     `resolve_title_edition_slug`, not `resolve_episode_slug` -- exercised
     here to prove that branch renders too, distinctly from the bare
-    `/check/{slug}` film route this plan never touches.
+    `/check/{slug}` film route, which is unaffected.
     """
     title_id = uuid.uuid4()
     episode_id = uuid.uuid4()

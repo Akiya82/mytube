@@ -2,11 +2,9 @@
 # End-to-end smoke test for operator authentication: the interface answers on
 # its own FQDN, stays closed without a session, and delivery is untouched.
 # Fourteen numbered steps, one pass/fail line each. Mirrors
-# tools/smoke_blob.sh's scaffold. Written now (Wave 0) and run for real once
-# plans 03, 04 and 05 land -- it is expected to fail from step 2 onward until
-# then.
+# tools/smoke_blob.sh's scaffold.
 #
-# Usage: cd src && bash tools/smoke_auth.sh
+# Usage, from the repository root: bash tools/smoke_auth.sh
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

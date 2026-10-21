@@ -46,7 +46,7 @@ def upgrade() -> None:
     # constraint declared inline in 0001 was unnamed and Postgres named it
     # titles_status_check by its own default convention for a single-column
     # inline CHECK -- confirmed live against the running database
-    # (`\d titles`) rather than assumed, per this revision's own plan.
+    # (`\d titles`) rather than assumed.
     # Consequence for GET /v/{slug}, stated once here rather than left
     # implicit: a title in 'preparing' or 'failed' is not 'active', so the
     # existing resolve route already answers 410 for it with no code

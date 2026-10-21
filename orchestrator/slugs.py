@@ -122,7 +122,7 @@ def pick_unique_slug(candidate: str, taken: set[str]) -> tuple[str, list[str]]:
 #
 # What a second (and third) path segment of GET /v/{slug}/... means used to
 # be decided twice: once inline in orchestrator.resolve's own routes, and
-# a second time -- the plan was -- inline in the command line. One pasted
+# a second time inline in the command line. One pasted
 # or typed address deciding what gets read or written on the command line
 # and what a browser redirects to are the exact same trust boundary, so
 # this is one function instead of two: the route and the command line both

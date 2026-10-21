@@ -160,8 +160,8 @@ async def reject_cross_origin_writes(request, call_next):
     """Refuse a state-changing request whose `Origin` is some other site.
 
     The argument for keeping this middleware no longer rests on "one
-    operator, no accounts, and no login to fixate" -- this phase makes all
-    three false. It stays anyway, as a second layer: the session cookie is
+    operator, no accounts, and no login to fixate" -- all
+    three are now false. It stays anyway, as a second layer: the session cookie is
     `SameSite=Lax`, which browsers do not attach to a cross-site POST, so
     cross-site request forgery is already closed by the session itself,
     and per-form tokens threaded through nine templates would buy nothing

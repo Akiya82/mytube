@@ -1,5 +1,5 @@
 """Tests for orchestrator.signing — including the golden vector and the live
-nginx cross-check for Pitfall C (Python/secure_link_md5 formula drift)."""
+nginx cross-check for Python/secure_link_md5 formula drift."""
 
 import subprocess
 import textwrap

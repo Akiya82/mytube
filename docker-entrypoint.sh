@@ -4,8 +4,7 @@
 # are idempotent, so a restart is safe. There is deliberately no separate
 # one-shot migration/init service in docker-compose.yml: `docker compose up
 # --wait` treats a container exit as failure, and a one-shot service would
-# break the top-level SETUP command. With a single `api` replica in this
-# phase there is no migration race; if a second replica is ever added,
+# break the top-level SETUP command. With a single `api` replica there is no migration race; if a second replica is ever added,
 # migrations need to move out of here — recorded so a future reader doesn't
 # hit this silently.
 set -eu

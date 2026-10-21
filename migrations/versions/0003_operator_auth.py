@@ -2,8 +2,7 @@
 
 Gives the interface an operator to be and a session to hold. Both are
 tables rather than process state: an in-process dictionary would sign the
-operator out on every rebuild, and this phase changes the image, as will
-every phase after it.
+operator out on every rebuild, and every release changes the image.
 
 **Every `CREATE` below carries `IF NOT EXISTS`, and the reason is a real
 recovery path rather than defensive habit.** The documented restore applies
@@ -17,7 +16,7 @@ still standing, and the next start replays this revision against them.
 Without `IF NOT EXISTS` the `CREATE` fails, the entrypoint runs under
 `set -eu` and dies, and `edge` waits on a health condition that will never
 come -- so restoring a backup would take video down for viewers as well as
-the interface. That is the most expensive failure this phase can produce
+the interface. That is the most expensive failure this migration can produce
 and it costs three words to close.
 
 **Migrations still run from the container entrypoint with no advisory

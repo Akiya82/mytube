@@ -16,8 +16,8 @@ identical kind of column.
 This migration changes only the column default. It rewrites no existing
 row: every job already in the queue keeps the `created_at` it already has.
 Jobs that predate this migration and were enqueued together still share a
-tied timestamp, and the ordering key `(created_at, id)` this plan's query
-changes use resolves that tie on the row's own random identifier rather
+tied timestamp, and the ordering key `(created_at, id)` the queue's queries
+use resolves that tie on the row's own random identifier rather
 than on enqueue order -- an arbitrary order among those tied rows, once,
 not a reconstruction of the order they were actually written in. A
 migration that rewrote timestamps to reconstruct enqueue order would be

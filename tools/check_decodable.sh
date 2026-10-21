@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Assert that a URL or local file is an actually decodable MP4 -- not just a
-# 200/206 with a plausible Content-Length. This exists because the phase-1
+# 200/206 with a plausible Content-Length. This exists because an early
 # acceptance record was once validated against 3 MiB of random bytes that
 # happened to have the right size and status code: the delivery mechanics
 # (302 -> signed 206 -> right byte count) were proven, but nobody checked

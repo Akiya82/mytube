@@ -304,7 +304,7 @@ def _subtitle_term(subtitle: SubtitleChoice) -> str:
     # own design end-to-end and never gets this style forced onto it.
     # Taking the family from a sidecar font's own name table instead of the
     # bundled fallback needs that font's name table read, which is not one
-    # line and stays open for a later plan.
+    # line and is left undone.
     suffix = Path(subtitle.path).suffix.lstrip(".").lower() if subtitle.path else ""
     if suffix in ("srt", "vtt"):
         style = SRT_FORCE_STYLE.format(family=BUNDLED_FONT_FAMILY)

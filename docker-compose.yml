@@ -49,7 +49,7 @@ services:
     env_file: .env
     environment:
       # Compose-level fallback so these are always set on the container even
-      # on an .env predating this plan (backup.sh has its own ${VAR:-default}
+      # on an older .env that lacks them (backup.sh has its own ${VAR:-default}
       # too, but that only helps callers going through the script itself --
       # this also covers direct inspection like `test -d "$MYTUBE_BACKUP_DIR"`).
       MYTUBE_BACKUP_DIR: "${MYTUBE_BACKUP_DIR:-/backups}"
@@ -69,7 +69,7 @@ services:
     # Published for amd64 only; an ARM host runs it under emulation instead
     # of refusing the pull.
     platform: linux/amd64
-    # env_file carries MYTUBE_WORKER_TOKEN and this phase's other new
+    # env_file carries MYTUBE_WORKER_TOKEN and the other converter
     # settings through to Settings() the same way every existing MYTUBE_*
     # variable already reaches this container -- no explicit environment:
     # entry needed for any of them.

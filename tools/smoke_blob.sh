@@ -5,7 +5,7 @@
 # the log; it deliberately leaves the compose stack running so a human can
 # keep poking at it afterwards.
 #
-# Usage: cd src && bash tools/smoke_blob.sh
+# Usage, from the repository root: bash tools/smoke_blob.sh
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -165,7 +165,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4: 64 MiB test object, sha256, put via storage.py (Pitfall F).
+# Step 4: 64 MiB test object, sha256, put via storage.py.
 # ---------------------------------------------------------------------------
 info "step 4: create + upload 64 MiB test object"
 SHA_ORIG=$(api_exec python3 -c "

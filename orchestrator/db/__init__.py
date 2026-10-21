@@ -9,9 +9,9 @@ import asyncpg
 
 from orchestrator.config import get_settings
 
-# `asyncpg.Pool.acquire()` waits forever by default. Until this phase that
+# `asyncpg.Pool.acquire()` waits forever by default. Before the login gate that
 # was invisible, because the only things holding connections were operator
-# actions on a LAN-only interface. From this phase on, every gated request
+# actions on a LAN-only interface. Since the gate, every gated request
 # takes a connection to look up a session, and the interface is on the
 # public internet -- so a stall on the database, or simply more operator
 # traffic than the pool has connections, turns into viewer requests

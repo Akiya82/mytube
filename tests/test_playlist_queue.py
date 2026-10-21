@@ -5,8 +5,7 @@ hands out an object nothing looks at, the catalog calls the worker makes
 are replaced at the module boundary, and every storage and subprocess
 call is a fake that records what it was asked to do. What is under test
 is the worker's own decisions -- what it refuses to start, what it
-deletes when a step fails, what it declines to publish, and (since this
-plan) how it reports progress and honours a cancellation through the same
+deletes when a step fails, what it declines to publish, and how it reports progress and honours a cancellation through the same
 durable job lifecycle every other kind of work now shares.
 
 These are the branches that only run when something has already gone
@@ -605,7 +604,7 @@ async def test_a_rebuild_writes_fresh_keys_and_deletes_nothing(build):
     assert calls["aborted"] == []
 
 
-# --- progress and cancellation (this plan) -----------------------------
+# --- progress and cancellation -----------------------------
 
 
 async def test_the_combined_percentage_advances_across_segments(build):

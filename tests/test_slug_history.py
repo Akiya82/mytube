@@ -51,7 +51,7 @@ async def test_resolve_slug_never_existed_returns_none(db_conn):
 
 
 async def test_rename_pitfall_1_old_address_keeps_resolving(db_conn):
-    """Pitfall 1, verbatim: create a title, rename it, hit the OLD address.
+    """Create a title, rename it, hit the OLD address.
     If it doesn't resolve, the rake is in the schema, not the UI.
     """
     title_id = await _create_title(db_conn, "Original Name", "slug-a")

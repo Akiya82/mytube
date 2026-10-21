@@ -413,8 +413,7 @@ def test_the_preview_and_the_conversion_command_share_the_same_filter_value():
     `mytube_media.transcode`, the module both `build_preview_command` and
     `build_transcode_command` draw their one shared `build_filter_chain`
     call from (already unit-tested in tests/test_transcode.py; this is
-    the route-adjacent restatement the plan's own acceptance criteria
-    ask for).
+    the route-adjacent restatement of it).
     """
     plan = TranscodePlan(
         width=1920,
@@ -621,7 +620,7 @@ async def test_the_preview_and_the_converter_resolve_the_same_choice_for_the_sam
     in from.
 
     This is the standing, cheap version of a divergence a picture
-    comparison would not have caught: this plan's own Summary records the
+    comparison would not have caught: the
     converter having stopped reading an embedded track's encoding while
     its own preview kept reading it correctly -- a missing `charenc` term
     still burns something in, so a rendered-frame comparison would not

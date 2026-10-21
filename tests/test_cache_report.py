@@ -110,7 +110,7 @@ def test_hit_ratio_counted_correctly(tmp_path, capsys):
 def test_five_point_range_requests_to_five_offsets_are_five_chunks_not_one(
     tmp_path, capsys
 ):
-    """The gap this plan closes: five viewers each open the file with a
+    """The gap the old code left: five viewers each open the file with a
     point Range request landing in a different slice. Every one of those
     requests logs as a master line (empty $slice_range) -- the OLD code
     bucketed all five under the single literal key "-", reporting one

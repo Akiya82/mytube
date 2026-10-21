@@ -4,7 +4,7 @@ Regression: `upload_file()` with no `ExtraArgs` sends no type, S3 stores
 `application/octet-stream`, and that reaches the client. A browser downloads
 such a response instead of playing it. The delivery path still looks healthy
 while this is broken — 302, 200, bytes match — which is why no end-to-end
-test in the phase caught it.
+test caught it.
 """
 
 from unittest.mock import MagicMock
@@ -141,7 +141,7 @@ def test_reconcile_reports_missing_object_with_its_slug_carried_through():
 # --- The cached listing stops outliving the bucket -----------------------
 #
 # storage_usage() caches the raw bucket listing for _USAGE_CACHE_SECONDS.
-# Before this plan, nothing ever cleared that cache early: a delete or an
+# Nothing used to clear that cache early: a delete or an
 # upload made from this same process left the next read comparing a
 # listing from before the write against catalog rows from after it, for
 # up to sixty seconds. These tests stub the S3 client's paginator (the

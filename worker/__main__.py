@@ -67,7 +67,7 @@ _BYTES_PER_MIB = 1024 * 1024
 TRANSCODE_TIMEOUT_SECONDS = 10800
 
 # Deliberately below the library row's own 4-second poll interval, not a
-# round "every 30 seconds" figure: the phase measured a cancel reaching
+# round "every 30 seconds" figure: a measurement showed a cancel reaching
 # the card in 4.6 seconds end to end, and the row's own progress must
 # never visibly stand still for longer than one poll. A request every
 # three seconds from one converter costs the service nothing -- what it

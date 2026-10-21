@@ -6,8 +6,8 @@ protocol version and the converter's own name. The claim
 returns nothing on an empty-queue answer rather than raising. Every call
 retries a genuine network failure and a server error (5xx) with a
 backoff that grows and is capped, giving up at a bounded window and
-raising then -- a server error joined the retryable set in this
-plan, since a transient database failure at the moment of reporting is
+raising then -- a server error joined the retryable set
+because a transient database failure at the moment of reporting is
 exactly the condition this retry exists for, and it must not cost a
 finished GPU encode. A refusal of the credential (401), a conflict
 answer (409), a not-found answer (404) and a protocol mismatch (400) are
@@ -123,7 +123,7 @@ class WorkerClient:
 
         Retried: a genuine transport failure (the network refusing the
         attempt, a name lookup failure, a timeout) and a server error
-        (5xx) -- the second joined this plan, since a transient database
+        (5xx) -- the second because a transient database
         failure at the moment of reporting is exactly the condition this
         retry exists for. Not retried: a definite 4xx answer (401, 404,
         409, 400) is handled by the caller immediately, once, without
@@ -233,8 +233,8 @@ class WorkerClient:
         poster_key: str | None,
         realtime_factor: float,
     ) -> None:
-        """A finished transcode. The body widened past `attempt`/
-        `object_key` in this plan: the route's own `DoneBody` needs what
+        """A finished transcode. The body carries more than `attempt`/
+        `object_key`: the route's own `DoneBody` needs what
         the conversion measured to fill the library row's detail line and
         its poster, and every field name here matches the route's own,
         so nothing between the wire and the write has to translate. See

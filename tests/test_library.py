@@ -1561,7 +1561,7 @@ def test_app_js_has_a_poll_timer_and_stays_short():
 
 
 def test_no_htmx_or_cdn_references():
-    # Case-sensitive, matching the plan's own grep criterion exactly --
+    # Case-sensitive, matching the repository's own grep check exactly --
     # the module docstrings say "no HTMX" (capitalized, documentation
     # prose) on purpose; the lowercase token is the one that must never
     # appear as a vendored/CDN reference.
@@ -1772,8 +1772,8 @@ async def test_delete_marks_pending_and_row_carries_a_future_deadline(
     # The row's technical-detail line has to survive a real render -- give
     # this edition the fields the add worker always sets before flipping a
     # title to 'active' (create_title_with_edition alone, the CLI's own
-    # path, never does; that gap is pre-existing and out of this plan's
-    # scope, but the row this test renders needs to look like a real one).
+    # path, never does; that gap is pre-existing and out of
+    # scope here, but the row this test renders needs to look like a real one).
     await queries.set_edition_technical(
         raw_conn,
         edition_id,
@@ -3578,7 +3578,7 @@ async def test_move_merges_two_standalone_titles_with_both_old_addresses_alive(
 async def test_move_then_renumber_the_same_episode_every_address_it_ever_had_still_resolves(
     action_client, raw_conn
 ):
-    """The plan's own overall verification: a move and a renumber on the
+    """The overall check: a move and a renumber on the
     same episode, in sequence -- every address that episode has ever
     answered at (its old standalone slug, its first numbered address in
     the series, and its renumbered address) still resolves to it

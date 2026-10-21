@@ -10,7 +10,7 @@ episode has to answer while the twelfth is still queued -- one column
 blanketing every address a title owns can no longer say that. `editions
 .status` (preparing/active/failed) and `episodes.status`
 (active/pending_delete/deleted) are the two new signals; `resolve_slug`,
-`resolve_edition` and the two numbered resolvers this phase adds all read
+`resolve_edition` and the two numbered resolvers all read
 them instead of trusting the title alone. The alternative rejected here is
 a single richer title-level enum trying to encode "which of my episodes are
 ready" -- that pushes the fan-out into a single column's values instead of
@@ -106,7 +106,7 @@ that last claimed it.
 **Backfill, in the same upgrade.** Without this, the numbered address
 resolves nothing for the whole catalog the owner already has -- every
 title that predates this migration would need re-adding for its own
-address to work, which is exactly the manual step this phase exists to
+address to work, which is exactly the manual step this migration exists to
 remove. One `INSERT ... SELECT` writes a current `episode_number_history`
 row for every episode that already exists, taking its title id from the
 episode's own season and its number from the episode row itself. A second

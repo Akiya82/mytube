@@ -1,4 +1,4 @@
-"""Integration tests for the phase-2 additions to orchestrator/db/queries.py
+"""Integration tests for the additions to orchestrator/db/queries.py
 -- the schema and query surface laid down by 0002_add_as_is.py.
 Marked `integration`, same as test_slug_history.py -- these need Docker.
 """
@@ -198,7 +198,7 @@ async def test_failed_title_object_keys_returns_both_keys_without_deleting_anyth
 
     assert set(keys) == {f"{edition_id}.mp4", f"{edition_id}-poster.jpg"}
 
-    # Read-only: the row this plan relies on for a crash-safe
+    # Read-only: the row a crash-safe
     # dismiss (delete objects, using these keys, before the rows go) must
     # still exist after asking for the keys.
     still_there = await raw_conn.fetchrow(
@@ -478,7 +478,7 @@ async def test_concurrent_create_with_same_candidate_gets_two_different_slugs(
 
 async def _add_second_episode(conn, title_id) -> uuid.UUID:
     """A second season/episode/edition under an existing title -- what the
-    schema has always allowed and the next phase actually writes.
+    schema has always allowed and a later feature actually writes.
     """
     season_id = await conn.fetchval(
         "INSERT INTO seasons (title_id, number) VALUES ($1, 2) RETURNING id", title_id
@@ -741,7 +741,7 @@ async def test_a_built_artifact_reads_as_referenced_from_the_real_query(raw_conn
     """Against the real query over the migrated database, not a hand-built
     row: storage.reconcile reads only key/kind/title_name/slug and is
     entirely kind-agnostic, so a hand-built row carrying a playlist kind
-    would pass today, before a line of this phase is written, and would
+    would pass today, before the union branch exists, and would
     keep passing if the union branch were never added. Assert the key is
     the full storage key with its extension, byte-identical to what a
     bucket listing holds.

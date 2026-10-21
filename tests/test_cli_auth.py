@@ -4,17 +4,13 @@ ever touch Postgres. `_create_operator`/`_reset_password` are called
 directly, bypassing typer's argument parsing, which has nothing to do with
 the behaviour under test here (mirrors `test_cli_add.py`).
 
-RED state: `orchestrator.cli.auth` does not exist yet. This module fails to
-import until a later plan creates it, which is the expected Wave 0 shape --
-the module docstring in `test_auth.py` explains the same thing for the
-gate.
 """
 
 import pytest
 import typer
 from conftest import WORKER_TOKEN
 
-from orchestrator.cli import auth as cli_auth  # RED: created by a later plan
+from orchestrator.cli import auth as cli_auth
 from orchestrator.config import get_settings
 
 pytestmark = pytest.mark.integration

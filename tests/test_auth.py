@@ -10,11 +10,7 @@ Python's cookie jar silently refuses to attach a `Secure` cookie to a
 plaintext request, so an `http://` client would turn every "the stale
 cookie no longer works" assertion into a tautology.
 
-RED state: `orchestrator.auth` does not exist yet. This whole module fails
-to import until a later plan creates it -- that failure is this plan's
-deliverable, not a bug in this file. Written against the module's assumed
-future shape so the module that finally exists has something concrete to
-satisfy:
+The module under test exposes:
 
 - `HOST_EXEMPT_PREFIXES: tuple[str, ...]` -- delivery addresses the edge
   proxies, skipped by the hostname check entirely.
@@ -22,7 +18,7 @@ satisfy:
 - `SESSION_COOKIE_NAME = "mytube_session"`.
 - `async def session_operator_id(request) -> tuple[uuid.UUID | None, bool]`
   -- the one function both the gate and this suite's stubbed-session
-  fixture call; monkeypatched here exactly the way a later plan's own
+  fixture call; monkeypatched here exactly the way the
   `conftest.py` fixture does it for every other screen's tests.
 - `safe_next(value, fallback="/library") -> str`.
 """

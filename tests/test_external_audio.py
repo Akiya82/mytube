@@ -5,8 +5,7 @@ sidecar walker); probing a dub file into the same `AudioTrack` shape an
 embedded stream takes; the duration-mismatch comparison the interface
 warns from; and the mux command contract both builders now carry --
 never `-shortest`, since that flag truncates the video to the shorter
-dub, exactly backwards for a video stream this project never touches
-(Pitfall 4).
+dub, exactly backwards for a video stream this project never touches.
 
 The walker and matching tests below use bare touch files, in the style of
 `test_subtitles.py`'s own `external_tracks` tests -- nothing here needs a
@@ -397,7 +396,7 @@ def test_the_transcode_builder_still_carries_faststart_with_an_external_track():
     assert cmd[idx + 1] == "+faststart"
 
 
-# --- a real run: the video is full length, the dub simply ends (Pitfall 4) --
+# --- a real run: the video is full length, the dub simply ends --
 
 
 @_NEEDS_REAL_FFMPEG

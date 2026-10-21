@@ -92,7 +92,7 @@ def _readiness_status_code(row) -> int | None:
     Shared by all four delivery routes so a fifth route added later
     cannot answer differently from the rest by accident -- see the module
     docstring's own history for why this collapsed into 410 alone before
-    this phase.
+    readiness moved onto the episode and the edition.
 
     Readiness now lives on the episode and the edition, not on the title
     alone: the title's status still decides "gone" for the whole address
@@ -104,7 +104,7 @@ def _readiness_status_code(row) -> int | None:
 
     **Falls back to the title-status-only rule** when the row carries
     neither `episode_status` nor `edition_status` at all -- the shape every
-    row had before this phase, and the shape a caller unaware of the new
+    row had before that, and the shape a caller unaware of the new
     columns (a test double built against the old query surface) still hands
     in. Every existing caller keeps its exact prior behaviour.
     """

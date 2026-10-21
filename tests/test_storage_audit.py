@@ -4,7 +4,7 @@ Both the catalog query and the bucket listing are stubbed at the module
 boundary -- no real Postgres, no real S3, quick-loop only. The comparison
 itself (`storage.reconcile`) is already covered by `tests/test_storage.py`;
 these tests cover what `storage_audit()` does with the result: the report
-shape, the exit code, and the two extra requirements the plan calls out --
+shape, the exit code, and the two extra requirements --
 naming a missing object by the `/v/{slug}` address it breaks, and never
 calling anything that deletes or aborts.
 """
@@ -28,7 +28,7 @@ class _DummyConn:
 @pytest.fixture(autouse=True)
 def _no_real_connect(request, monkeypatch):
     """Every test in this file is a fast CLI-level unit test against a
-    stubbed `asyncpg.connect` -- except the handful of plan-10 tests below
+    stubbed `asyncpg.connect` -- except the handful of tests below
     marked `integration`, which need `raw_conn`'s own real connection to
     exercise `queries.referenced_objects` directly against a real
     Postgres. Patching unconditionally would silently hand `raw_conn` this

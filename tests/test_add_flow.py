@@ -8,8 +8,7 @@ and content type, the way `tests/test_deletion.py` already asserts
 deletion against a fake `delete_object` -- there is no bucket this test
 can reach (the `storage` service publishes no port and sits on an
 `internal: true` network, and the endpoint the stack is actually
-configured against now is the owner's real storage). The real object is
-confirmed in the manual live-run row of this plan's own SUMMARY.
+configured against now is the owner's real storage).
 """
 
 import asyncio
@@ -1827,10 +1826,10 @@ async def test_the_recorded_size_is_the_uploaded_object_not_the_source(
 async def test_a_restart_mid_remux_leaves_the_row_in_flight_rather_than_failed(
     raw_conn, env
 ):
-    """The property this plan exists to change, proven against the
+    """A restart mid-remux leaves the row in flight, proven against the
     real durable table rather than a real process restart -- this project
-    no longer runs a local dev stand to kill and bring back. What a restart actually does to a
-    process is stop it from writing anything further; that is reproduced
+    no longer runs a local dev stand to kill and bring back. What a restart
+    actually does to a process is stop it from writing anything further; that is reproduced
     directly here by claiming a job, marking its title started (the point
     a real consumer would have reached before a mid-remux crash), and then
     never calling `process_add` again -- exactly what a killed process

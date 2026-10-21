@@ -254,9 +254,7 @@ m3u8_count=$(find "$OUTPUT_DIR" -maxdepth 1 -name '*.m3u8' | wc -l)
 [ "$m3u8_count" -eq 3 ] || fail "expected exactly 3 combined manifests in $OUTPUT_DIR, found $m3u8_count."
 
 # Serve the output directory with a throwaway container rather than by
-# editing this project's own edge configuration -- see the plan this
-# script was built from for why editing edge/nginx.conf.template is
-# refused here. Docker Desktop on Windows needs a native Windows path for
+# editing this project's own edge configuration (edge/nginx.conf.template stays untouched). Docker Desktop on Windows needs a native Windows path for
 # a bind mount; cygpath does that conversion when it is present, and the
 # already-POSIX path works unmodified everywhere else.
 if command -v cygpath >/dev/null 2>&1; then

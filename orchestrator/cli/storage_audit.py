@@ -29,9 +29,8 @@ imported here at all, and every branch below only ever prints. When
 objects are found unreferenced, the exact removal command is printed for
 the operator to run through their own storage client -- a command that
 could reclaim space on the strength of a comparison run against the wrong
-database pairing is exactly the kind of command this phase's own history
-argues against (the active storage endpoint changed once already, mid
-phase).
+database pairing is exactly the kind of command this project's own history
+argues against (the active storage endpoint changed once already, mid-development).
 """
 
 import asyncio

@@ -220,8 +220,8 @@ async def sweep_sessions_once(pool: asyncpg.Pool) -> None:
 # a service outage its own retry was built to tolerate.
 #
 # The cost is real and is paid on the other failure mode: recovery from a
-# genuinely dead converter now takes correspondingly longer. The phase
-# measured that recovery once, at the previous 180-second threshold, at
+# genuinely dead converter now takes correspondingly longer. That recovery
+# was measured once, at the previous 180-second threshold, at
 # roughly three and a half minutes end to end (threshold plus one reaper
 # poll cycle). At this threshold the same recovery is expected to take
 # roughly six and a half minutes -- a slower recovery from a rare failure

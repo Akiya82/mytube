@@ -10,11 +10,10 @@ Fixtures were captured locally with this project's own pinned ffmpeg
 (`ffmpeg version 2025-10-01-git-...-full_build`) by
 `tools/make_probe_fixtures.sh`. Capturing them settled
 an open question: the real Matroska tag key is lowercase `stereo_mode` (not
-the uppercase `STEREO_MODE` the research document had only cross-
-referenced from documentation), and the side-data entry's type name lives
+the uppercase `STEREO_MODE` that documentation cross-references), and the side-data entry's type name lives
 under `side_data_type` ("Stereo 3D"), with the actual orientation as a
 human string in its own `type` field ("side by side" / "top and bottom") --
-also not what the research document's untested code sketch guessed.
+also not what an untested code sketch guessed.
 """
 
 import copy

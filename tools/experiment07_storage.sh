@@ -203,7 +203,7 @@ EOF
   CANDIDATE_CONTAINER="$C_GARAGE"
   CANDIDATE_PORT=3900
 
-  # Step 3: anonymous read from inside the network. Order per the plan:
+  # Step 3: anonymous read from inside the network. Order:
   # PutBucketPolicy -> the ordinary garage bucket subcommands shown by --help.
   set +e
   local policy_out
@@ -223,7 +223,7 @@ EOF
 # ---------------------------------------------------------------------------
 # SeaweedFS bring-up: identities.json with an "anonymous" identity
 # (action Read) is the standard mechanism for anonymous read (see the
-# plan's own read_first and the SeaweedFS wiki).
+# SeaweedFS wiki).
 # ---------------------------------------------------------------------------
 bring_up_seaweed() {
   local s3json="$WORKDIR/seaweed/s3.json"
