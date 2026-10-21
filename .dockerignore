@@ -11,5 +11,6 @@ __pycache__
 build
 data
 ingest
+worker-scratch
 docs
 mytube.egg-info

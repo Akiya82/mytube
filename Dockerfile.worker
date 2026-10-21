@@ -15,9 +15,8 @@ WORKDIR /app
 
 # --- the pinned, checksummed media binary --------------------------------
 #
-# Downloaded and verified as a build step, not copied by digest from a
-# published image the way the interface's ffmpeg is -- there is no such
-# image for this redistribution-safe LGPL build. The tag, asset name and
+# Downloaded and verified as a build step, the same pinned, checksummed
+# archive the interface image uses. The tag, asset name and
 # checksum below are exactly what
 # docs/experiments/10-lgpl-ffmpeg-nvenc.md's "What the image must use"
 # block records: BtbN/FFmpeg-Builds, the n8.1 line (not n9.0 -- n9.0's
