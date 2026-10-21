@@ -1,7 +1,7 @@
 """URL signing for the /blob/ delivery path.
 
 This module's formula MUST mirror, character for character, the
-`secure_link_md5` expression in src/edge/nginx.conf.template:
+`secure_link_md5` expression in edge/nginx.conf.template:
 
     secure_link_md5 "$secure_link_expires${uri}${MYTUBE_SECURE_LINK_SECRET}";
 
@@ -55,7 +55,7 @@ def sign_object_key(object_key: str, secret: str, ttl_seconds: int) -> tuple[str
     """Sign a /blob/ URL for `object_key`, whichever shape `blob_path`
     accepts (bare id or already-extensioned key).
 
-    Mirrors src/edge/nginx.conf.template's secure_link_md5 expression
+    Mirrors edge/nginx.conf.template's secure_link_md5 expression
     (see module docstring): expires + blob_path(object_key) + secret,
     concatenated with no separators, MD5-digested, then base64url-encoded
     with the padding `=` characters stripped.

@@ -5,7 +5,7 @@ create_bucket. No vendor-specific admin calls — swapping the storage
 candidate must not break on one particular call.
 Client parameters (signature_version, addressing_style) are the ones
 confirmed working against chrislusf/seaweedfs:3.97 in
-src/docs/experiments/07-object-storage.md.
+docs/experiments/07-object-storage.md.
 """
 
 import logging
@@ -331,7 +331,7 @@ def ensure_bucket() -> None:
     """Idempotent bucket bootstrap — safe to call on every
     container start. head_bucket, and only create_bucket if it's actually
     missing; any other failure gets a message pointing at the exact manual
-    command from src/docs/experiments/07-object-storage.md rather than a
+    command from docs/experiments/07-object-storage.md rather than a
     bare boto3 traceback.
     """
     settings = get_settings()
@@ -346,7 +346,7 @@ def ensure_bucket() -> None:
             raise RuntimeError(
                 f"head_bucket on '{settings.s3_bucket}' failed unexpectedly "
                 f"({exc}). Fall back to the manual bring-up sequence in "
-                "src/docs/experiments/07-object-storage.md: "
+                "docs/experiments/07-object-storage.md: "
                 f"aws --endpoint-url {settings.s3_endpoint} s3api create-bucket "
                 f"--bucket {settings.s3_bucket}"
             ) from exc
@@ -358,6 +358,6 @@ def ensure_bucket() -> None:
         raise RuntimeError(
             f"create_bucket for '{settings.s3_bucket}' failed ({exc}). "
             "Fall back to the manual bring-up sequence in "
-            f"src/docs/experiments/07-object-storage.md: aws --endpoint-url "
+            f"docs/experiments/07-object-storage.md: aws --endpoint-url "
             f"{settings.s3_endpoint} s3api create-bucket --bucket {settings.s3_bucket}"
         ) from exc

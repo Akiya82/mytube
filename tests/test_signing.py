@@ -93,7 +93,7 @@ NGINX_TEST_CONF = textwrap.dedent(
 @pytest.mark.integration
 def test_nginx_accepts_python_signature(tmp_path: Path, signing_secret: str):
     """Live nginx:1.27-alpine, secure_link_md5 with the same expression as
-    src/edge/nginx.conf.template, accepts a URL signed by sign_blob_url()."""
+    edge/nginx.conf.template, accepts a URL signed by sign_blob_url()."""
     conf_path = tmp_path / "nginx.conf"
     conf_path.write_text(NGINX_TEST_CONF % signing_secret, encoding="utf-8")
 

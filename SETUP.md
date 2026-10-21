@@ -159,11 +159,12 @@ real reason is in `docker compose logs api`.
 Changing any of these four settings later is not enough on its own. Docker
 records a named volume's mount options when it first creates the volume and
 keeps using the recorded ones, so an edited `.env` changes nothing until the
-volume is thrown away:
+volume is thrown away. Compose names the volume after the project directory,
+so the command below derives the name from the current one:
 
 ```bash
 docker compose down
-docker volume rm src_share
+docker volume rm "$(basename "$PWD")_share"
 docker compose -f docker-compose.yml -f docker-compose.cifs.yml up -d
 ```
 
@@ -484,7 +485,7 @@ Add a first title from the command line:
 
 ```bash
 docker compose exec api python -m orchestrator.cli add \
-  --file /ingest/<file under src/ingest/> --name "<title>"
+  --file /ingest/<file under ingest/> --name "<title>"
 ```
 
 The command prints an address of the form `/v/<slug>`.

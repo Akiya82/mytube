@@ -1,7 +1,7 @@
 #!/bin/sh
 # Entrypoint for the `storage` service (chrislusf/seaweedfs:3.97). The image
 # has no envsubst (no gettext package), so s3.json.template is substituted
-# with sed instead — an equivalent per src/docs/experiments/07-object-storage.md's
+# with sed instead — an equivalent per docs/experiments/07-object-storage.md's
 # instruction, not a literal envsubst call. Safe here specifically because
 # MYTUBE_S3_KEY/MYTUBE_S3_SECRET are generated with `openssl rand -hex`
 # (hex only), so they can never contain a sed-special `/` or `&`.

@@ -132,14 +132,14 @@ def upgrade() -> None:
         """
     )
 
-    # A converted edition's library row explains itself a month later
-    #: the codec AND the profile it was converted from (the
+    # A converted edition's library row explains itself a month later:
+    # the codec AND the profile it was converted from (the
     # profile is the half that usually explains WHY conversion was
     # needed -- a ten-bit high profile is the single most common reason in
     # this library), which subtitle was burned in, and what stereo layout
     # the stored object is in. Nullable: every existing row predates these
     # and none of them is knowable retroactively. stereo_layout is written
-    # by both add branches not only the conversion one -- a
+    # by both add branches, not only the conversion one -- a
     # file that arrived already side-by-side needs its badge too.
     op.execute("ALTER TABLE editions ADD COLUMN source_codec text")
     op.execute("ALTER TABLE editions ADD COLUMN source_profile text")

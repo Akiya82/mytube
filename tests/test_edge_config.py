@@ -143,7 +143,7 @@ def test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_ch
             "HOST_EXEMPT_PREFIXES does not exempt it from the interface "
             "hostname check, so every viewer request through this address "
             "would be refused with a plain-text 400 it cannot render. Add "
-            f"{prefix!r} to HOST_EXEMPT_PREFIXES in src/orchestrator/auth.py"
+            f"{prefix!r} to HOST_EXEMPT_PREFIXES in orchestrator/auth.py"
         )
 
 

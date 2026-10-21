@@ -29,7 +29,7 @@ na() { echo "[ N/A] $*"; }
 
 command -v docker >/dev/null 2>&1 || { echo "ERROR: docker not found in PATH" >&2; exit 1; }
 dk info >/dev/null 2>&1 || { echo "ERROR: docker daemon unreachable (docker info failed) — this is an environment failure, not a smoke-test result." >&2; exit 1; }
-[ -f .env ] || { echo "ERROR: src/.env missing — copy .env.example and fill in real values first." >&2; exit 1; }
+[ -f .env ] || { echo "ERROR: .env missing — copy .env.example and fill in real values first." >&2; exit 1; }
 
 set -a
 source .env
@@ -272,7 +272,7 @@ if [ "$DL_CODE" = "200" ] && [ "$SHA_DL" = "$SHA_ORIG" ]; then
 else
   fail "step 10: full download mismatch — code=$DL_CODE sha=$SHA_DL expected=$SHA_ORIG"
 fi
-# Measured per src/docs/experiments/07-object-storage.md: 64 lines for a
+# Measured per docs/experiments/07-object-storage.md: 64 lines for a
 # 64 MiB object at slice 1m, not 65 — the first slice merges into the main
 # request's log line instead of getting its own subrequest entry. 65 is
 # accepted too, for an nginx build that logs it separately.
@@ -308,7 +308,7 @@ BAD_STATUS_COUNT=$(echo "$BAD_STATUS_COUNT" | tr -d '\r ')
 if [ "$SHA11" = "$SHA_ORIG" ] && [ "${BAD_STATUS_COUNT:-0}" = "0" ]; then
   pass "step 11: sha256 matches after mid-stream expiry, zero 302/403 among subrequests"
 else
-  fail "step 11: sha256=$SHA11 (expected $SHA_ORIG), 302/403 count=$BAD_STATUS_COUNT — see src/docs/experiments/05-secure-link-on-slices.md for the recorded verdict"
+  fail "step 11: sha256=$SHA11 (expected $SHA_ORIG), 302/403 count=$BAD_STATUS_COUNT — see docs/experiments/05-secure-link-on-slices.md for the recorded verdict"
 fi
 
 # ---------------------------------------------------------------------------
@@ -336,7 +336,7 @@ for pid in "${PIDS[@]}"; do wait "$pid"; done
 # single chunk, so no need to filter by byte range: for a request that is
 # already exactly one slice, nginx merges it into the main request's log
 # line and $slice_range logs as "-" (same "first slice has no subrequest
-# line of its own" behavior measured in src/docs/experiments/07-object-storage.md),
+# line of its own" behavior measured in docs/experiments/07-object-storage.md),
 # so grepping for a literal "bytes=..." string here would never match.
 ORIGIN_FETCHES=$(edge_exec sh -c "awk '{print \$4}' /var/log/nginx/blob_access.log | grep -c -E '^(MISS|EXPIRED|STALE)$'; true" 2>/dev/null)
 ORIGIN_FETCHES=$(echo "$ORIGIN_FETCHES" | tr -d '\r ')

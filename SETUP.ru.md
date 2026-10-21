@@ -160,11 +160,12 @@ MYTUBE_SHARE_DOMAIN=
 Поменять любую из этих четырёх настроек потом — само по себе недостаточно.
 Docker запоминает опции монтирования именованного тома в момент его создания и
 дальше пользуется запомненными, так что отредактированный `.env` ничего не
-изменит, пока том не выброшен:
+изменит, пока том не выброшен. Compose называет том по каталогу проекта,
+поэтому команда ниже берёт имя из текущего:
 
 ```bash
 docker compose down
-docker volume rm src_share
+docker volume rm "$(basename "$PWD")_share"
 docker compose -f docker-compose.yml -f docker-compose.cifs.yml up -d
 ```
 
@@ -489,7 +490,7 @@ docker compose logs api      # ищем строку про успешную м�
 
 ```bash
 docker compose exec api python -m orchestrator.cli add \
-  --file /ingest/<файл в src/ingest/> --name "<название>"
+  --file /ingest/<файл в ingest/> --name "<название>"
 ```
 
 Команда напечатает адрес вида `/v/<слаг>`.

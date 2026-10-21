@@ -1,7 +1,7 @@
 """Unit tests for `orchestrator.cli.cache_report`.
 
 All synthetic logs use the exact field order of `log_format cache_audit` in
-src/edge/nginx.conf.template:
+edge/nginx.conf.template:
 
     $time_iso8601 $uri $slice_range $upstream_cache_status $status
     $body_bytes_sent $client_range_start

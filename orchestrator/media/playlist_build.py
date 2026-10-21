@@ -17,7 +17,7 @@ file. That was measured rather than assumed: a video player inside
 VRChat was watched across three boundaries -- differing resolution,
 differing frame rate, differing audio channel layout -- and carried every
 one of them with the next clip starting, no black frame and no audio
-drift (`src/docs/experiments/04-avpro-discontinuity.md`). Physical
+drift (`docs/experiments/04-avpro-discontinuity.md`). Physical
 joining would have required every member to share stream parameters and
 would therefore have refused exactly the heterogeneous as-is library a
 playlist is most wanted for. A single continuous re-muxed stream was

@@ -2,7 +2,7 @@
 code, instead of a phrase someone eyeballs at 3am after movie night.
 
 The regex below is synchronized field-for-field, in the same order, with
-the `log_format cache_audit` directive in src/edge/nginx.conf.template:
+the `log_format cache_audit` directive in edge/nginx.conf.template:
 
     log_format cache_audit '$time_iso8601 $uri $slice_range '
                             '$upstream_cache_status $status $body_bytes_sent '
@@ -29,7 +29,7 @@ first slice a client asks for directly inside the master request, not as
 an internal-redirect subrequest -- so a master-request line never gets its
 own `bytes=N-...` line, and a download of N chunks therefore produces
 exactly N log lines, not N+1 (matching the 64-vs-65 discrepancy already
-recorded in src/docs/experiments/07-object-storage.md; that observation is
+recorded in docs/experiments/07-object-storage.md; that observation is
 still correct). What was wrong was the inference drawn from it: an earlier
 version of this module bucketed every master-request line under the
 literal `-`, on the assumption that "the first slice a client asks for" is
@@ -169,7 +169,7 @@ def cache_report(log_path: str, since: str | None = None) -> int:
             "there is nothing to measure, which does not mean there are no violations"
         )
         print(
-            "likely cause: src/edge/nginx.conf.template's "
+            "likely cause: edge/nginx.conf.template's "
             "location ~ ^/blob/ does not have `log_subrequest on;` enabled, "
             "or access_log's format has drifted from log_format cache_audit"
         )
