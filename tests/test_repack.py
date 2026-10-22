@@ -55,6 +55,16 @@ def test_edge_log_window_finds_the_start_and_the_last_fetch(tmp_path):
     assert repack.edge_log_window(log, "/blob/never.mp4")[1] is None
 
 
+def test_an_empty_edge_log_starts_when_the_edge_created_it(tmp_path):
+    log = tmp_path / "blob_access.log"
+    log.touch()
+
+    start, last = repack.edge_log_window(log, f"/blob/{EDITION}.mp4")
+
+    assert last is None
+    assert abs((datetime.now(timezone.utc) - start).total_seconds()) < 60
+
+
 @pytest.mark.parametrize(
     ("changes", "expected"),
     [

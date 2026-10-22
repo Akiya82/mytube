@@ -90,7 +90,8 @@ def edge_log_window(
     log_path: Path, uri: str
 ) -> tuple[datetime | None, datetime | None]:
     """When the edge log starts, and when `uri` was last fetched (None if
-    never).
+    never). A log nobody has written to yet starts when the edge created
+    it: an empty file's change time is its creation time.
     """
     first = last = None
     # ponytail: reads the whole log per video; a day of heavy viewing is a
@@ -103,6 +104,8 @@ def edge_log_window(
                 first = datetime.fromisoformat(stamp)
             if rest.startswith(uri + " "):
                 last = stamp
+    if first is None:
+        first = datetime.fromtimestamp(log_path.stat().st_ctime, tz=timezone.utc)
     return first, (datetime.fromisoformat(last) if last else None)
 
 
