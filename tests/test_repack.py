@@ -256,12 +256,18 @@ async def test_the_catalog_offers_live_editions_newest_first_and_tracks_their_fa
     older_title = await queries.create_title_with_edition(
         db_conn, "Older", "older", older, f"{older}.mp4"
     )
-    await queries.create_title_with_edition(
+    newer_title = await queries.create_title_with_edition(
         db_conn, "Newer", "newer", newer, f"{newer}.mp4"
     )
     await db_conn.execute(
         "UPDATE editions SET created_at = now() - interval '1 day' WHERE id = $1", older
     )
+    # A series added as a folder numbers its episodes only in the history
+    # table; the episode row itself keeps the schema default of 1.
+    newer_episode = await db_conn.fetchval(
+        "SELECT episode_id FROM editions WHERE id = $1", newer
+    )
+    await queries.claim_episode_number(db_conn, newer_title, newer_episode, 7)
 
     rows = [
         r
@@ -269,7 +275,7 @@ async def test_the_catalog_offers_live_editions_newest_first_and_tracks_their_fa
         if r["edition_id"] in (newer, older)
     ]
     assert [r["edition_id"] for r in rows] == [newer, older]
-    assert rows[0]["title_name"] == "Newer" and rows[0]["episode_number"] == 1
+    assert rows[0]["title_name"] == "Newer" and rows[0]["episode_number"] == 7
     assert await queries.edition_is_live(db_conn, older) is True
     assert await queries.playlist_build_in_progress(db_conn) is False
 

@@ -4377,17 +4377,21 @@ async def editions_to_repack(conn: asyncpg.Connection) -> list[asyncpg.Record]:
     """Every stored video a viewer can reach today, newest addition first:
     the edition, its episode and its title all active. A reaped title
     keeps its edition rows, which is why the title's own status is part of
-    the filter and not only the edition's.
+    the filter and not only the edition's. The episode number is the one
+    its address carries, from `episode_number_history`, for the same reason
+    `resolve_edition` reads it there.
     """
     return await conn.fetch(
         """
         SELECT e.id AS edition_id, e.object_key, e.slug AS edition_slug,
                t.name AS title_name, s.number AS season_number,
-               ep.number AS episode_number
+               COALESCE(enh.number, ep.number) AS episode_number
         FROM editions e
         JOIN episodes ep ON ep.id = e.episode_id
         JOIN seasons s ON s.id = ep.season_id
         JOIN titles t ON t.id = s.title_id
+        LEFT JOIN episode_number_history enh
+            ON enh.episode_id = ep.id AND enh.is_current
         WHERE e.status = 'active' AND ep.status = 'active' AND t.status = 'active'
         ORDER BY e.created_at DESC
         """
