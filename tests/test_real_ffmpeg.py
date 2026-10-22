@@ -203,8 +203,16 @@ def test_collect_fonts_never_writes_outside_its_scratch_directory_for_a_hostile_
 
 def _layout(path):
     probe = _run(
-        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams",
-         "-show_chapters", str(path)]
+        [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_chapters",
+            str(path),
+        ]
     )
     assert probe.returncode == 0, probe.stderr
     probe_json = json.loads(probe.stdout)
@@ -224,10 +232,31 @@ def test_a_remuxed_file_is_audio_first_without_a_chapter_track(tmp_path):
     )
     source = tmp_path / "source.mp4"
     mux = _run(
-        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=d=2:s=64x64:r=24",
-         "-f", "lavfi", "-i", "sine=d=2", "-i", str(chapters),
-         "-map", "0:v", "-map", "1:a", "-map_chapters", "2",
-         "-c:v", "mpeg4", "-c:a", "aac", str(source)]
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=d=2:s=64x64:r=24",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=d=2",
+            "-i",
+            str(chapters),
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-map_chapters",
+            "2",
+            "-c:v",
+            "mpeg4",
+            "-c:a",
+            "aac",
+            str(source),
+        ]
     )
     assert mux.returncode == 0, mux.stderr
     assert _layout(source) == (["video", "audio", "data"], 2)

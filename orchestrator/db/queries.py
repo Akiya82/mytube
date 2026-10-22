@@ -4421,7 +4421,9 @@ async def playlist_build_in_progress(conn: asyncpg.Connection) -> bool:
     )
 
 
-async def set_edition_size(conn: asyncpg.Connection, edition_id, size_bytes: int) -> None:
+async def set_edition_size(
+    conn: asyncpg.Connection, edition_id, size_bytes: int
+) -> None:
     await conn.execute(
         "UPDATE editions SET size_bytes = $2 WHERE id = $1", edition_id, size_bytes
     )

@@ -17,7 +17,11 @@ EDITION = "11111111-2222-3333-4444-555555555555"
 def _probe(types, chapters=0, attached=()):
     return {
         "streams": [
-            {"index": i, "codec_type": t, "disposition": {"attached_pic": int(i in attached)}}
+            {
+                "index": i,
+                "codec_type": t,
+                "disposition": {"attached_pic": int(i in attached)},
+            }
             for i, t in enumerate(types)
         ],
         "chapters": [{}] * chapters,
@@ -26,10 +30,14 @@ def _probe(types, chapters=0, attached=()):
 
 def test_classify_tells_done_from_to_do_from_left_alone():
     assert repack.classify(_probe(["audio", "video"])) == repack.ALREADY
-    assert repack.classify(_probe(["video", "audio", "data"], chapters=6)) == repack.REPACK
+    assert (
+        repack.classify(_probe(["video", "audio", "data"], chapters=6)) == repack.REPACK
+    )
     assert repack.classify(_probe(["video", "audio"])) == repack.REPACK
     assert repack.classify(_probe(["audio", "video"], chapters=2)) == repack.REPACK
-    assert "cover picture" in repack.classify(_probe(["video", "audio", "video"], attached=(2,)))
+    assert "cover picture" in repack.classify(
+        _probe(["video", "audio", "video"], attached=(2,))
+    )
     assert "2 audio" in repack.classify(_probe(["video", "audio", "audio"]))
 
 
@@ -59,8 +67,14 @@ def test_edge_log_window_finds_the_start_and_the_last_fetch(tmp_path):
     ],
 )
 def test_deferral_reason(changes, expected):
-    args = dict(now=NOW, log_start=NOW - timedelta(hours=3), last_fetch=None,
-                playlist_building=False, free_bytes=3_000, size_bytes=1_000)
+    args = dict(
+        now=NOW,
+        log_start=NOW - timedelta(hours=3),
+        last_fetch=None,
+        playlist_building=False,
+        free_bytes=3_000,
+        size_bytes=1_000,
+    )
     reason = repack.deferral_reason(**{**args, **changes})
     if expected is None:
         assert reason is None
@@ -82,15 +96,42 @@ def stand(tmp_path, monkeypatch, settings):
     that last saw it three hours ago, and a catalog where it is live.
     """
     chapters = tmp_path / "chapters.txt"
-    chapters.write_text(";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=2000\ntitle=A\n")
+    chapters.write_text(
+        ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=2000\ntitle=A\n"
+    )
     bucket = tmp_path / "bucket"
     bucket.mkdir()
     stored = bucket / f"{EDITION}.mp4"
     subprocess.run(
-        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=d=2:s=64x64:r=24",
-         "-f", "lavfi", "-i", "sine=d=2", "-i", str(chapters), "-map", "0:v", "-map", "1:a",
-         "-map_chapters", "2", "-c:v", "mpeg4", "-c:a", "aac", "-movflags", "+faststart",
-         str(stored)],
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=d=2:s=64x64:r=24",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=d=2",
+            "-i",
+            str(chapters),
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-map_chapters",
+            "2",
+            "-c:v",
+            "mpeg4",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(stored),
+        ],
         check=True,
     )
     log = tmp_path / "blob_access.log"
@@ -121,17 +162,33 @@ def stand(tmp_path, monkeypatch, settings):
             state["live"] = None
 
     monkeypatch.setattr(repack, "get_s3_client", lambda: Client())
-    monkeypatch.setattr(repack, "download_object_to_file",
-                        lambda key, dest: shutil.copyfile(bucket / key, dest))
-    monkeypatch.setattr(repack, "head_object",
-                        lambda key: {"ContentLength": (bucket / key).stat().st_size})
+    monkeypatch.setattr(
+        repack,
+        "download_object_to_file",
+        lambda key, dest: shutil.copyfile(bucket / key, dest),
+    )
+    monkeypatch.setattr(
+        repack,
+        "head_object",
+        lambda key: {"ContentLength": (bucket / key).stat().st_size},
+    )
     monkeypatch.setattr(repack, "put_object_from_file", put_object_from_file)
-    monkeypatch.setattr(repack, "delete_object", lambda key: state["deleted"].append(key))
+    monkeypatch.setattr(
+        repack, "delete_object", lambda key: state["deleted"].append(key)
+    )
     monkeypatch.setattr(repack.queries, "edition_is_live", edition_is_live)
-    monkeypatch.setattr(repack.queries, "playlist_build_in_progress", playlist_build_in_progress)
+    monkeypatch.setattr(
+        repack.queries, "playlist_build_in_progress", playlist_build_in_progress
+    )
     monkeypatch.setattr(repack.queries, "set_edition_size", set_edition_size)
-    row = {"edition_id": EDITION, "object_key": f"{EDITION}.mp4", "edition_slug": None,
-           "title_name": "Test", "season_number": 1, "episode_number": 1}
+    row = {
+        "edition_id": EDITION,
+        "object_key": f"{EDITION}.mp4",
+        "edition_slug": None,
+        "title_name": "Test",
+        "season_number": 1,
+        "episode_number": 1,
+    }
     return row, work, log, stored, state
 
 
@@ -152,8 +209,10 @@ async def test_a_stored_file_is_rewritten_in_place_and_then_left_alone(stand):
 async def test_a_file_watched_within_the_hour_is_deferred_untouched(stand):
     row, work, log, stored, state = stand
     before = stored.read_bytes()
-    log.write_text(log.read_text() + f"{datetime.now(timezone.utc).isoformat()} "
-                   f"/blob/{EDITION}.mp4 bytes=0-1 HIT 206 1 0\n")
+    log.write_text(
+        log.read_text() + f"{datetime.now(timezone.utc).isoformat()} "
+        f"/blob/{EDITION}.mp4 bytes=0-1 HIT 206 1 0\n"
+    )
 
     outcome, reason = await repack._repack_one(None, row, work, log)
 
@@ -176,7 +235,9 @@ async def test_an_edition_reaped_during_the_upload_takes_its_new_object_with_it(
 
 
 @pytest.mark.integration
-async def test_the_catalog_offers_live_editions_newest_first_and_tracks_their_fate(db_conn):
+async def test_the_catalog_offers_live_editions_newest_first_and_tracks_their_fate(
+    db_conn,
+):
     import uuid
 
     from orchestrator.db import queries
@@ -185,22 +246,32 @@ async def test_the_catalog_offers_live_editions_newest_first_and_tracks_their_fa
     older_title = await queries.create_title_with_edition(
         db_conn, "Older", "older", older, f"{older}.mp4"
     )
-    await queries.create_title_with_edition(db_conn, "Newer", "newer", newer, f"{newer}.mp4")
+    await queries.create_title_with_edition(
+        db_conn, "Newer", "newer", newer, f"{newer}.mp4"
+    )
     await db_conn.execute(
         "UPDATE editions SET created_at = now() - interval '1 day' WHERE id = $1", older
     )
 
-    rows = [r for r in await queries.editions_to_repack(db_conn)
-            if r["edition_id"] in (newer, older)]
+    rows = [
+        r
+        for r in await queries.editions_to_repack(db_conn)
+        if r["edition_id"] in (newer, older)
+    ]
     assert [r["edition_id"] for r in rows] == [newer, older]
     assert rows[0]["title_name"] == "Newer" and rows[0]["episode_number"] == 1
     assert await queries.edition_is_live(db_conn, older) is True
     assert await queries.playlist_build_in_progress(db_conn) is False
 
     await queries.set_edition_size(db_conn, older, 1234)
-    assert await db_conn.fetchval("SELECT size_bytes FROM editions WHERE id = $1", older) == 1234
+    assert (
+        await db_conn.fetchval("SELECT size_bytes FROM editions WHERE id = $1", older)
+        == 1234
+    )
 
     await queries.mark_for_delete(db_conn, older_title, 3600)
-    assert older not in [r["edition_id"] for r in await queries.editions_to_repack(db_conn)]
+    assert older not in [
+        r["edition_id"] for r in await queries.editions_to_repack(db_conn)
+    ]
     assert await queries.edition_is_live(db_conn, older) is False
     assert await queries.edition_is_live(db_conn, uuid.uuid4()) is None

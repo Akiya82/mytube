@@ -54,8 +54,16 @@ SKIPPED = "skipped"
 
 def probe_layout(target: str) -> dict:
     result = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams",
-         "-show_chapters", target],
+        [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_chapters",
+            target,
+        ],
         capture_output=True,
         timeout=PROBE_TIMEOUT_SECONDS,
         check=False,
@@ -78,7 +86,9 @@ def classify(probe_json: dict) -> str:
     return REPACK
 
 
-def edge_log_window(log_path: Path, uri: str) -> tuple[datetime | None, datetime | None]:
+def edge_log_window(
+    log_path: Path, uri: str
+) -> tuple[datetime | None, datetime | None]:
     """When the edge log starts, and when `uri` was last fetched (None if
     never).
     """
@@ -97,8 +107,13 @@ def edge_log_window(log_path: Path, uri: str) -> tuple[datetime | None, datetime
 
 
 def deferral_reason(
-    *, now: datetime, log_start: datetime | None, last_fetch: datetime | None,
-    playlist_building: bool, free_bytes: int, size_bytes: int,
+    *,
+    now: datetime,
+    log_start: datetime | None,
+    last_fetch: datetime | None,
+    playlist_building: bool,
+    free_bytes: int,
+    size_bytes: int,
 ) -> str | None:
     if log_start is None or now - log_start < QUIET_FOR:
         return "the edge log is too recent to tell whether someone is watching it"
@@ -120,14 +135,18 @@ def _label(row) -> str:
 
 
 def _frame_counts(probe_json: dict) -> dict:
-    return {s["codec_type"]: s.get("nb_frames") for s in probe_json["streams"]
-            if s["codec_type"] in ("audio", "video")}
+    return {
+        s["codec_type"]: s.get("nb_frames")
+        for s in probe_json["streams"]
+        if s["codec_type"] in ("audio", "video")
+    }
 
 
 async def _repack_one(conn, row, work_dir: Path, log_path: Path) -> tuple[str, str]:
     key = row["object_key"]
     url = get_s3_client().generate_presigned_url(
-        "get_object", Params={"Bucket": get_settings().s3_bucket, "Key": key},
+        "get_object",
+        Params={"Bucket": get_settings().s3_bucket, "Key": key},
         ExpiresIn=PROBE_TIMEOUT_SECONDS * 10,
     )
     try:
@@ -140,9 +159,13 @@ async def _repack_one(conn, row, work_dir: Path, log_path: Path) -> tuple[str, s
         return SKIPPED, verdict
 
     async def blocked() -> str | None:
-        log_start, last_fetch = edge_log_window(log_path, f"/blob/{row['edition_id']}.mp4")
+        log_start, last_fetch = edge_log_window(
+            log_path, f"/blob/{row['edition_id']}.mp4"
+        )
         return deferral_reason(
-            now=datetime.now(timezone.utc), log_start=log_start, last_fetch=last_fetch,
+            now=datetime.now(timezone.utc),
+            log_start=log_start,
+            last_fetch=last_fetch,
             playlist_building=await queries.playlist_build_in_progress(conn),
             free_bytes=shutil.disk_usage(work_dir).free,
             size_bytes=head_object(key)["ContentLength"],
@@ -158,13 +181,21 @@ async def _repack_one(conn, row, work_dir: Path, log_path: Path) -> tuple[str, s
         original = probe_layout(str(source))
         audio = next(s for s in original["streams"] if s["codec_type"] == "audio")
         run_ffmpeg(
-            build_remux_command(source, output, audio_stream_index=audio["index"],
-                                reencode_audio=False, channels=audio.get("channels") or 2),
+            build_remux_command(
+                source,
+                output,
+                audio_stream_index=audio["index"],
+                reencode_audio=False,
+                channels=audio.get("channels") or 2,
+            ),
             timeout=REMUX_TIMEOUT_SECONDS,
         )
         rewritten = probe_layout(str(output))
-        if (classify(rewritten) != ALREADY or not moov_before_mdat(output)
-                or _frame_counts(rewritten) != _frame_counts(original)):
+        if (
+            classify(rewritten) != ALREADY
+            or not moov_before_mdat(output)
+            or _frame_counts(rewritten) != _frame_counts(original)
+        ):
             return SKIPPED, "the rewritten copy did not match the original"
         # Asked again: the download and the rewrite take minutes.
         if reason := await blocked():
@@ -213,7 +244,12 @@ async def repack_layout() -> int:
     for leftover in work_dir.glob(f"{TEMP_PREFIX}*"):
         leftover.unlink(missing_ok=True)
 
-    results: dict[str, list[str]] = {REPACKED: [], ALREADY: [], DEFERRED: [], SKIPPED: []}
+    results: dict[str, list[str]] = {
+        REPACKED: [],
+        ALREADY: [],
+        DEFERRED: [],
+        SKIPPED: [],
+    }
     conn = await asyncpg.connect(settings.database_url)
     try:
         rows = await queries.editions_to_repack(conn)
