@@ -131,7 +131,15 @@ def test_ten_bit_pix_fmt_alone_is_rejected_with_pixfmt_reason():
     assert verdict.reason_params == {}
 
 
-def test_level_above_41_is_not_eligible_with_no_params():
+def test_level_42_is_eligible():
+    data = _load("compatible.json")
+    for stream in data["streams"]:
+        if stream["codec_type"] == "video":
+            stream["level"] = 42
+    assert analyze(data).eligible is True
+
+
+def test_level_above_42_is_not_eligible_with_no_params():
     verdict = analyze(_load("level51.json"))
     assert verdict.eligible is False
     assert verdict.reason_key == "reason.level"

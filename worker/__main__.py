@@ -437,6 +437,7 @@ async def _process_job(
                 else verdict.audio_needs_reencode
             ),
             stereo_layout=stereo_layout,
+            fps=verdict.fps,
         )
 
         # Resolved to a scratch-local file for both text kinds -- the

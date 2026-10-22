@@ -10,7 +10,7 @@ ffmpeg as exactly one argument.
 
 Video is always `-c:v copy` in every branch this module builds -- the
 compatibility gate in `mytube_media.compat` is what guarantees the
-source is already H.264/High/<=4.1/yuv420p before this module ever runs,
+source is already H.264/High/<=4.2/yuv420p before this module ever runs,
 so there is no video-encode branch here to guard. `-movflags +faststart`
 is present in both remux branches without exception: without it the
 `moov` atom sits at the end of the file and a player downloads the whole
@@ -18,10 +18,10 @@ thing before the first frame.
 
 A note that belongs here because the next reader will otherwise "fix" it:
 this project's other ffmpeg trap -- stating `-pix_fmt yuv420p` and
-`-profile:v high -level 4.1` explicitly -- applies to the branch that
+`-profile:v high -level` explicitly -- applies to the branch that
 *encodes video*. This module never encodes video (it only ever copies the
 video stream), so those arguments are deliberately absent here; what
-guarantees an 8-bit yuv420p High-at-most-4.1 stream reaches this module at
+guarantees an 8-bit yuv420p High-at-most-4.2 stream reaches this module at
 all is the compatibility gate refusing anything else before either
 command is built.
 """

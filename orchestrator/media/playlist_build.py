@@ -316,7 +316,7 @@ def build_segment_command(source, destination) -> list[str]:
     `.mp4`. The same paragraph is the reason no explicit `-pix_fmt` or
     `-profile:v` appears here either: nothing is encoded, so there is no
     encoder branch for those flags to constrain. What guarantees an 8-bit
-    High-at-most-4.1 stream is the compatibility gate that refused
+    High-at-most-4.2 stream is the compatibility gate that refused
     anything else before the member was ever stored.
     """
     return [

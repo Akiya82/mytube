@@ -88,6 +88,20 @@ def test_the_transcode_argv_carries_the_explicit_pixel_format_profile_and_level(
     assert cmd[idx + 1] == "4.1"
 
 
+@pytest.mark.parametrize("fps, level", [(None, "4.1"), (30, "4.1"), (60, "4.2")])
+def test_a_1080p_output_gets_the_lowest_level_that_holds_its_frame_rate(fps, level):
+    """Level 4.1 holds 1080p only up to 30 fps, and NVENC refuses to open
+    at a level the stream exceeds instead of raising it.
+    """
+    from mytube_media.transcode import build_transcode_command
+
+    cmd = build_transcode_command(
+        "/share/clip.mp4", "/work/out.mp4", plan=_plan(fps=fps), subtitle=_subtitle()
+    )
+
+    assert cmd[cmd.index("-level") + 1] == level
+
+
 def test_the_transcode_argv_ends_the_output_with_faststart():
     from mytube_media.transcode import build_transcode_command
 

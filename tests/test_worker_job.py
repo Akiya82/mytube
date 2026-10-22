@@ -875,3 +875,15 @@ def test_an_unwritable_scratch_root_ends_the_process_naming_the_directory(
 
     assert exc_info.value.code != 0
     assert str(tmp_path) in caplog.text
+
+
+def test_a_60_fps_source_is_encoded_at_the_level_that_holds_it(monkeypatch, tmp_path):
+    probe_json = _probe_json()
+    for stream in probe_json["streams"]:
+        if stream["codec_type"] == "video":
+            stream["r_frame_rate"] = stream["avg_frame_rate"] = "60/1"
+
+    cmd, client = _run_one_job(monkeypatch, tmp_path, _job(), probe_json)
+
+    assert cmd[cmd.index("-level") + 1] == "4.2"
+    assert client.failed_calls == []

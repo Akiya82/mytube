@@ -120,8 +120,9 @@ COMPATIBLE_PROFILES = frozenset({"Baseline", "Constrained Baseline", "Main", "Hi
 # typo. Confirmed against the real fixture below: tests/fixtures/probe/
 # compatible.json, captured from a clip built exactly like
 # tools/make_control_clip.sh's own High-4.1 control clip, literally
-# contains "level": 41.
-MAX_H264_LEVEL = 41
+# contains "level": 41. 4.2 is the highest level the converter itself writes,
+# for 1080p60.
+MAX_H264_LEVEL = 42
 
 # The per-viewer bandwidth figure the constraint section names, as
 # a default for the keyword `analyze` takes -- passed in rather than read

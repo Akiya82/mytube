@@ -14,13 +14,14 @@ caller hand-deriving the flag and the map from the subtitle kind a second
 time is exactly where a preview and a conversion eventually disagree.
 
 Two ffmpeg traps become load-bearing here for the first time in this
-codebase: `-pix_fmt yuv420p -profile:v high -level 4.1` stated
+codebase: `-pix_fmt yuv420p -profile:v high -level` stated
 explicitly (an implicit ten-bit stream out of an anime rip shows black),
 and `-movflags +faststart` on the rewrite (a `moov` atom left at the end forces a full download before the
 first frame). Every earlier ffmpeg branch in this project only copied streams or
 pulled a single frame, so neither trap could bite until now.
 """
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,6 +61,12 @@ FULL_FRAME_LAYOUTS = frozenset({"sbs_full", "ou_full"})
 # --- scaling ---------------------------------------------------
 
 MAX_OUTPUT_WIDTH = 1920
+
+# H.264 levels by their macroblocks-per-second ceiling. 4.1 holds 1080p up to
+# 30 fps, 4.2 up to 60; NVENC refuses to open at a level the stream exceeds
+# rather than raising it. Nothing sits above 4.2 yet, so 1080p past 64 fps and
+# full-frame stereo still fail in the encoder.
+H264_LEVELS = (("4.1", 245_760), ("4.2", 522_240))
 
 # --- decode side --------------------------------------------------
 
@@ -102,6 +109,7 @@ class TranscodePlan:
     audio_channels: int
     reencode_audio: bool
     stereo_layout: str
+    fps: float | None = None
 
 
 @dataclass(frozen=True)
@@ -171,6 +179,14 @@ def output_dimensions(width: int, height: int, stereo_layout: str) -> tuple[int,
     if new_height % 2:
         new_height += 1
     return new_width, new_height
+
+
+def level_for(width: int, height: int, fps: float | None) -> str:
+    macroblocks_per_second = math.ceil(width / 16) * math.ceil(height / 16) * (fps or 0)
+    for level, ceiling in H264_LEVELS:
+        if macroblocks_per_second <= ceiling:
+            return level
+    return H264_LEVELS[-1][0]
 
 
 def bitrate_for_output(
@@ -425,7 +441,8 @@ def build_transcode_command(
 
     # Without these stated explicitly, the encoder happily carries a ten-bit
     # stream out of an anime rip and the player shows black.
-    cmd += ["-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.1"]
+    level = level_for(plan.width, plan.height, plan.fps)
+    cmd += ["-pix_fmt", "yuv420p", "-profile:v", "high", "-level", level]
     cmd += ["-g", str(plan.gop), "-keyint_min", str(plan.gop)]
 
     if external_audio or plan.reencode_audio:
