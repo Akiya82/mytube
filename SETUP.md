@@ -397,6 +397,21 @@ through your own storage client — reclaiming that space is left to the
 operator, on purpose, rather than automated on the strength of a
 comparison that could be run against the wrong storage pairing.
 
+**Videos stored by an earlier version** are laid out video first, with the
+source's chapters carried over as a separate track. On such a file at a few
+megabits per second, VRChat's player keeps reconnecting, and a viewer far
+from the server sees it stall. Rewrite them in place, streams copied and
+nothing re-encoded:
+
+```bash
+docker compose exec api python -m orchestrator.cli repack-layout
+```
+
+It goes newest addition first and leaves alone any video watched within the
+last 70 minutes, because the edge still serves pieces of the old file for an
+hour; run it again later for those. Running it twice is safe: a video
+already in the new layout is skipped.
+
 ## Prerequisites
 
 Before the first command below can run, the machine needs Docker Desktop

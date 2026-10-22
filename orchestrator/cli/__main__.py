@@ -25,6 +25,7 @@ from orchestrator.cli.backfill_technical import (
 from orchestrator.cli.cache_report import cache_report as _cache_report
 from orchestrator.cli.cache_warm import DEFAULT_BASE_URL
 from orchestrator.cli.cache_warm import cache_warm as _cache_warm
+from orchestrator.cli.repack import run_repack_layout as _repack_layout
 from orchestrator.cli.storage_audit import run_storage_audit as _storage_audit
 from orchestrator.config import get_settings
 from orchestrator.db import queries
@@ -702,6 +703,17 @@ def storage_audit_command() -> None:
 )
 def backfill_technical_command() -> None:
     raise typer.Exit(_backfill_technical())
+
+
+@app.command(
+    "repack-layout",
+    help="Rewrite stored videos audio first and without a chapter track, the "
+    "layout VRChat's player fetches over one connection. Copies streams, never "
+    "re-encodes; newest additions first. A video watched within the last 70 "
+    "minutes is left for a later run.",
+)
+def repack_layout_command() -> None:
+    raise typer.Exit(_repack_layout())
 
 
 @app.command("create-operator")

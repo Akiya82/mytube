@@ -4371,3 +4371,57 @@ async def median_realtime_factor(
     if len(values) % 2 == 1:
         return values[mid]
     return (values[mid - 1] + values[mid]) / 2
+
+
+async def editions_to_repack(conn: asyncpg.Connection) -> list[asyncpg.Record]:
+    """Every stored video a viewer can reach today, newest addition first:
+    the edition, its episode and its title all active. A reaped title
+    keeps its edition rows, which is why the title's own status is part of
+    the filter and not only the edition's.
+    """
+    return await conn.fetch(
+        """
+        SELECT e.id AS edition_id, e.object_key, e.slug AS edition_slug,
+               t.name AS title_name, s.number AS season_number,
+               ep.number AS episode_number
+        FROM editions e
+        JOIN episodes ep ON ep.id = e.episode_id
+        JOIN seasons s ON s.id = ep.season_id
+        JOIN titles t ON t.id = s.title_id
+        WHERE e.status = 'active' AND ep.status = 'active' AND t.status = 'active'
+        ORDER BY e.created_at DESC
+        """
+    )
+
+
+async def edition_is_live(conn: asyncpg.Connection, edition_id) -> bool | None:
+    """True while the edition, its episode and its title are all active,
+    False once any of them is on its way out, None when the edition row is
+    gone altogether.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT e.status = 'active' AND ep.status = 'active' AND t.status = 'active'
+               AS live
+        FROM editions e
+        JOIN episodes ep ON ep.id = e.episode_id
+        JOIN seasons s ON s.id = ep.season_id
+        JOIN titles t ON t.id = s.title_id
+        WHERE e.id = $1
+        """,
+        edition_id,
+    )
+    return None if row is None else row["live"]
+
+
+async def playlist_build_in_progress(conn: asyncpg.Connection) -> bool:
+    return await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM jobs WHERE kind = 'playlist' "
+        "AND status IN ('queued', 'running'))"
+    )
+
+
+async def set_edition_size(conn: asyncpg.Connection, edition_id, size_bytes: int) -> None:
+    await conn.execute(
+        "UPDATE editions SET size_bytes = $2 WHERE id = $1", edition_id, size_bytes
+    )
