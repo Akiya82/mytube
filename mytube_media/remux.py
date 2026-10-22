@@ -83,6 +83,20 @@ def audio_encode_args(channels: int) -> list[str]:
     return ["-c:a", "aac", "-b:a", f"{aac_bitrate_for(channels)}k"]
 
 
+def stream_layout_args(video_map: str, audio_map: str) -> list[str]:
+    """Audio first, then video, and no chapter track -- the layout of every
+    file this project stores.
+
+    Measured against VRChat's player (Media Foundation) from a viewer in
+    another country: on a ~6 Mbit/s file laid out video first with the
+    source's chapters carried over as a `text` track, it reopened its range
+    request about once a second, each reopen costing that viewer ~0.3 s, and
+    playback stalled. The same streams audio first without chapters were
+    fetched over one connection and played through.
+    """
+    return ["-map", audio_map, "-map", video_map, "-map_chapters", "-1"]
+
+
 def build_remux_command(
     source,
     destination,
@@ -139,10 +153,7 @@ def build_remux_command(
         "-i",
         str(source),
         *extra_input,
-        "-map",
-        "0:v:0",
-        "-map",
-        audio_map,
+        *stream_layout_args("0:v:0", audio_map),
         "-c:v",
         "copy",
         *audio_codec_args,

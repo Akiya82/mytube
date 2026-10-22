@@ -622,9 +622,9 @@ def test_only_the_chosen_audio_track_is_mapped(kind):
     else:
         video_map = "0:v:0"
     idx = cmd.index("-map")
-    assert cmd[idx + 1] == video_map
-    idx = cmd.index("-map", idx + 1)
     assert cmd[idx + 1] == "0:4"
+    idx = cmd.index("-map", idx + 1)
+    assert cmd[idx + 1] == video_map
 
 
 # --- refusal -------------------------------------------------------------

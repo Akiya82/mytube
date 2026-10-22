@@ -196,3 +196,48 @@ def test_collect_fonts_never_writes_outside_its_scratch_directory_for_a_hostile_
     # outside the scratch directory this call was given.
     assert sorted(p.name for p in container_dir.iterdir()) == ["movie.mkv"]
     assert not (tmp_path / "escaped.ttf").exists()
+
+
+# --- A stored file comes out audio first, without chapters ---------------
+
+
+def _layout(path):
+    probe = _run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams",
+         "-show_chapters", str(path)]
+    )
+    assert probe.returncode == 0, probe.stderr
+    probe_json = json.loads(probe.stdout)
+    types = [s["codec_type"] for s in probe_json["streams"]]
+    return types, len(probe_json["chapters"])
+
+
+def test_a_remuxed_file_is_audio_first_without_a_chapter_track(tmp_path):
+    from mytube_media.remux import build_remux_command
+
+    chapters = tmp_path / "chapters.txt"
+    chapters.write_text(
+        ";FFMETADATA1\n"
+        "[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=One\n"
+        "[CHAPTER]\nTIMEBASE=1/1000\nSTART=1000\nEND=2000\ntitle=Two\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "source.mp4"
+    mux = _run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=d=2:s=64x64:r=24",
+         "-f", "lavfi", "-i", "sine=d=2", "-i", str(chapters),
+         "-map", "0:v", "-map", "1:a", "-map_chapters", "2",
+         "-c:v", "mpeg4", "-c:a", "aac", str(source)]
+    )
+    assert mux.returncode == 0, mux.stderr
+    assert _layout(source) == (["video", "audio", "data"], 2)
+
+    destination = tmp_path / "stored.mp4"
+    remux = _run(
+        build_remux_command(
+            source, destination, audio_stream_index=1, reencode_audio=False, channels=1
+        )
+    )
+
+    assert remux.returncode == 0, remux.stderr
+    assert _layout(destination) == (["audio", "video"], 0)

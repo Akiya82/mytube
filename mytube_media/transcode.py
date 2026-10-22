@@ -25,7 +25,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from mytube_media.remux import audio_encode_args
+from mytube_media.remux import audio_encode_args, stream_layout_args
 from mytube_media.subtitles import BUNDLED_FONT_FAMILY, SRT_FORCE_STYLE
 
 # --- rate control --------------------------------------
@@ -425,7 +425,7 @@ def build_transcode_command(
         cmd += ["-i", str(external_audio)]
     cmd += [graph.flag, graph.value]
     audio_map = "1:a:0" if external_audio else f"0:{plan.audio_stream_index}"
-    cmd += ["-map", graph.video_map, "-map", audio_map]
+    cmd += stream_layout_args(graph.video_map, audio_map)
     cmd += ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr"]
 
     maxrate = round(plan.video_bitrate_bps * MAXRATE_RATIO)
