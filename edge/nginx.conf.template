@@ -90,6 +90,21 @@ map $http_range $client_range_start {
     "~^bytes=(?<range_start>\d+)-" $range_start;
 }
 
+# What a player actually fetched and how fast it arrived: one line per viewer
+# request, never per slice. nginx escapes quotes inside logged values, so the
+# quoted client-controlled headers cannot shift the columns.
+log_format blob_clients '$time_iso8601 $remote_addr "$http_x_forwarded_for" $uri "$http_range" $status $body_bytes_sent $request_time "$request_completion" "$http_user_agent"';
+
+# Only the viewer's own request has an empty $slice_range; slice subrequests
+# would repeat the same viewer once per slice. Volatile because subrequests
+# share the parent's variable cache: without it the first slice's 0 sticks and
+# the viewer's line is never written.
+map $slice_range $blob_client_request {
+    volatile;
+    ""      1;
+    default 0;
+}
+
 server {
     listen 80;
     server_name _;
@@ -165,6 +180,7 @@ server {
         include /etc/nginx/conf.d/snippets/cache.conf;
 
         access_log /var/log/nginx/blob_access.log cache_audit;
+        access_log /var/log/nginx/blob_clients.log blob_clients if=$blob_client_request;
 
         # Scheme is a variable because the storage can be either the one this
         # compose brings up (plain http inside an internal network) or an

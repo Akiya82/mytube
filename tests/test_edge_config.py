@@ -4,10 +4,11 @@ fixtures.
 `test_the_delivery_server_block_is_byte_identical_to_the_pinned_digest` and
 `test_every_delivery_location_the_edge_proxies_is_exempt_from_the_hostname_check`
 guard the delivery block of the edge template and the hostname exemption
-of every delivery location. The digest has been re-pinned twice, each time
-deliberately: once for the playlist `location /p/` block and its
-`error_page 425` mapping, and once more for the fifth `error_page 423`
-mapping, `EDITION_PREPARING_STATUS`'s own line -- see `DELIVERY_DIGEST`'s own
+of every delivery location. The digest has been re-pinned three times, each
+time deliberately: once for the playlist `location /p/` block and its
+`error_page 425` mapping, once for the fifth `error_page 423`
+mapping, `EDITION_PREPARING_STATUS`'s own line, and once for the per-viewer
+`blob_clients` log on the object-storage location -- see `DELIVERY_DIGEST`'s own
 comment for what each re-pin was taken after. Below both of the original
 tests is a third and fourth: this project adopted a pinned digest
 precisely because a comment asking a future reader to remember one line is
@@ -36,15 +37,18 @@ SENTINEL = "# ==== admin surface begins here ===="
 # Taken from the template by computing sha256 over everything before
 # SENTINEL (UTF-8 bytes) -- pasted here as a literal, never recomputed
 # from the same file at test time, which would make this test always
-# pass. Re-pinned twice, each time deliberately: once after the playlist
+# pass. Re-pinned three times, each time deliberately: once after the playlist
 # playlist edit to the delivery block (a fourth `location /p/` block
 # mirroring `/v/`, and a fourth `error_page 425 ... playlist-not-ready.mp4`
 # mapping), and once more for a one-line addition, a
 # fifth `error_page 423 ... preparing.mp4` mapping -- the only re-pin
 # that one needed, since the public prefix location needed no change
 # and every numbered/edition address reaches the application through the
-# existing `location /v/` block unmodified.
-DELIVERY_DIGEST = "325c2de89674868237b269dfd867951d44012df50cd01a11aae07be06c42cb74"
+# existing `location /v/` block unmodified. The third added a second
+# `access_log` to the object-storage location (`log_format blob_clients` and
+# the volatile map that keeps slice subrequests out of it), so what a remote
+# player actually fetched can be read after a session.
+DELIVERY_DIGEST = "abe17d7e8361599f1ec05ca58f4e07fa97691b17b73cd584f60faef647c5e2d7"
 
 # A prefix `location` block (not a regex `location ~ ...` block) whose body
 # proxies to the `orchestrator` upstream. The object-storage location is a
