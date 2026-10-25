@@ -46,7 +46,13 @@ from mytube_media.share import (
     relative_to_root,
     safe_join,
 )
-from mytube_media.subtitles import external_audio_tracks, external_tracks
+from mytube_media.subtitles import (
+    AUDIO_SIDECAR_EXTENSIONS,
+    SUBTITLE_EXTENSIONS,
+    external_audio_tracks,
+    external_tracks,
+    walk_sidecars,
+)
 from orchestrator import auth
 from orchestrator.config import get_settings
 from orchestrator.db import queries
@@ -63,10 +69,12 @@ from orchestrator.web.templates import LOCALES, render
 
 router = APIRouter()
 
-# The closed vocabulary for the sidecar picker route -- a kind
-# outside this set is refused outright rather than defaulting to one of
-# the two searches.
-_PICKER_KINDS = frozenset({"subtitle", "audio"})
+# The files the "Browse files" picker lists for each kind; any other kind
+# is refused rather than defaulting to one of the two.
+_PICKER_EXTENSIONS = {
+    "subtitle": SUBTITLE_EXTENSIONS,
+    "audio": AUDIO_SIDECAR_EXTENSIONS,
+}
 
 # What the folder button's own gate (and the folder confirmation screen
 # behind it) treats as a video file at all. This project's own library is
@@ -654,21 +662,18 @@ async def share_listing_route(request: Request, path: str = ""):
 
 @router.get("/sidecar-picker/{path:path}")
 async def sidecar_picker_route(request: Request, path: str, kind: str = ""):
-    """The candidate-list fragment for the add form's manual audio/
-    subtitle field: reuses the exact same walk the form itself
-    already ran to draw the track lists -- `external_tracks` or
-    `external_audio_tracks` -- never a second scan of its own. `kind` is a
-    closed vocabulary (`subtitle` or `audio`); anything else is refused
-    outright rather than silently defaulting to one of the two searches.
+    """The add form's "Browse files" list: every subtitle or audio file
+    under the source's folder, whatever its name, so the operator can pick
+    the one automatic pairing missed. The episode's own files come first,
+    from a walk of their own, so the walker's result cap cannot push them
+    out of a long series.
 
-    The source path resolves through `_resolve_share_path`, which is
-    `safe_join` under the same containment discipline every other share
-    route already applies, and every candidate this route lists is one
-    the walker already contained against the share root through that same
-    `safe_join` call -- this route can never disclose a folder the add
-    form could not already open.
+    Every candidate passed the walker's containment check against the
+    share root, so this route never discloses a folder the add form could
+    not already open.
     """
-    if kind not in _PICKER_KINDS:
+    extensions = _PICKER_EXTENSIONS.get(kind)
+    if extensions is None:
         return Response(status_code=400)
 
     settings = get_settings()
@@ -680,51 +685,31 @@ async def sidecar_picker_route(request: Request, path: str, kind: str = ""):
     if not is_file:
         return Response(status_code=400)
 
-    candidates: list[dict] = []
-    if kind == "subtitle":
-        try:
-            found = await asyncio.to_thread(external_tracks, target, root)
-        except (OSError, TypeError):
-            found = []
-        for track in found:
-            candidate_path = Path(track.path)
-            try:
-                rel = relative_to_root(root, candidate_path)
-            except ValueError:
-                continue
-            folder_segments = _folder_segments_relative_to(target, candidate_path)
-            candidates.append(
-                {
-                    "rel_path": rel,
-                    "name": candidate_path.name,
-                    "folder_label": "/".join(folder_segments),
-                }
-            )
-    else:
-        recognised = recognize_filename(target.name)
-        if recognised.episode is not None:
-            try:
-                found_audio = await asyncio.to_thread(
-                    external_audio_tracks,
-                    target,
-                    root,
-                    same_episode(recognised.episode),
-                )
-            except (OSError, TypeError):
-                found_audio = []
-            for candidate in found_audio:
-                try:
-                    rel = relative_to_root(root, candidate.path)
-                except ValueError:
-                    continue
-                candidates.append(
-                    {
-                        "rel_path": rel,
-                        "name": Path(candidate.path).name,
-                        "folder_label": "/".join(candidate.folder_segments),
-                    }
-                )
+    def walk(match):
+        return walk_sidecars(
+            target, root, extensions=extensions, folder_names=(), match=match
+        )
 
+    episode = recognize_filename(target.name).episode
+    try:
+        own = (
+            await asyncio.to_thread(walk, same_episode(episode))
+            if episode is not None
+            else []
+        )
+        everything = await asyncio.to_thread(walk, lambda _path: True)
+    except (OSError, TypeError):
+        own, everything = [], []
+
+    own_paths = {candidate.path for candidate in own}
+    candidates = [
+        {
+            "rel_path": relative_to_root(root, candidate.path),
+            "name": candidate.path.name,
+            "folder_label": "/".join(candidate.folder_segments),
+        }
+        for candidate in own + [c for c in everything if c.path not in own_paths]
+    ]
     return render(request, "partials/sidecar_picker.html", candidates=candidates)
 
 

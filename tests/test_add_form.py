@@ -817,6 +817,46 @@ async def test_sidecar_picker_route_lists_real_audio_candidates_for_a_real_sourc
     assert "AniStar" in resp.text
 
 
+async def test_sidecar_picker_route_lists_every_dub_with_the_episodes_own_first(
+    web_client, share_root
+):
+    (share_root / "Show - 05.mp4").write_bytes(b"stub video bytes")
+    _make_sidecar(share_root, ("RUS Sound",), "Commentary.mka")
+    _make_sidecar(share_root, ("RUS Sound",), "Show - 05.mka")
+
+    async with web_client:
+        resp = await web_client.get(
+            f"/sidecar-picker/{_encoded('Show - 05.mp4')}?kind=audio"
+        )
+
+    assert resp.status_code == 200
+    assert resp.text.index("Show - 05.mka") < resp.text.index("Commentary.mka")
+
+
+async def test_sidecar_picker_route_lists_dubs_for_a_source_with_no_episode_number(
+    web_client, share_root
+):
+    _make_sidecar(share_root, ("Audio",), "Commentary.mka")
+
+    async with web_client:
+        resp = await web_client.get("/sidecar-picker/a-video.mp4?kind=audio")
+
+    assert resp.status_code == 200
+    assert "Commentary.mka" in resp.text
+
+
+async def test_sidecar_picker_route_lists_a_subtitle_that_does_not_share_the_stem(
+    web_client, share_root
+):
+    _make_sidecar(share_root, ("Subs",), "Other Release - 01.ass")
+
+    async with web_client:
+        resp = await web_client.get("/sidecar-picker/a-video.mp4?kind=subtitle")
+
+    assert resp.status_code == 200
+    assert "Other Release - 01.ass" in resp.text
+
+
 async def test_sidecar_picker_route_refuses_a_source_path_outside_the_share(web_client):
     async with web_client:
         resp = await web_client.get("/sidecar-picker/%2E%2E/etc?kind=subtitle")
