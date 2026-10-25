@@ -36,7 +36,6 @@ from mytube_media.stereo3d import LAYOUTS as STEREO_LAYOUTS
 from mytube_media.subtitles import (
     SUBTITLE_EXTENSIONS,
     external_audio_tracks,
-    match_by_episode_number,
     walk_sidecars,
 )
 from orchestrator.config import get_settings
@@ -49,7 +48,12 @@ from orchestrator.media.add import (
     validate_edition_folder_submission,
     validate_folder_submission,
 )
-from orchestrator.recognize import Recognised, normalize_season, recognize_filename
+from orchestrator.recognize import (
+    Recognised,
+    normalize_season,
+    recognize_filename,
+    same_episode,
+)
 from orchestrator.slugs import (
     EditionSlugRefused,
     SlugError,
@@ -211,14 +215,17 @@ async def _process_file(
                     root,
                     extensions=SUBTITLE_EXTENSIONS,
                     folder_names=_SUBTITLE_FOLDER_NAMES,
-                    match=match_by_episode_number(recognised.episode),
+                    match=same_episode(recognised.episode),
                 )
             except (OSError, TypeError):
                 subtitle_candidates = []
 
             try:
                 raw_audio_candidates = await asyncio.to_thread(
-                    external_audio_tracks, abs_path, root, recognised.episode
+                    external_audio_tracks,
+                    abs_path,
+                    root,
+                    same_episode(recognised.episode),
                 )
             except (OSError, TypeError):
                 raw_audio_candidates = []

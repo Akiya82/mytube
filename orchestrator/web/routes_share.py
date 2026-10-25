@@ -57,7 +57,7 @@ from orchestrator.media.add import (
     required_free_bytes,
     suggest_edition_slug,
 )
-from orchestrator.recognize import recognize_filename
+from orchestrator.recognize import recognize_filename, same_episode
 from orchestrator.slugs import SlugError, normalize_slug
 from orchestrator.web.templates import LOCALES, render
 
@@ -325,7 +325,10 @@ async def _render_add_form(request: Request, target: Path, rel_path: str):
         if recognised.episode is not None:
             try:
                 audio_candidates = await asyncio.to_thread(
-                    external_audio_tracks, target, root, recognised.episode
+                    external_audio_tracks,
+                    target,
+                    root,
+                    same_episode(recognised.episode),
                 )
             except (OSError, TypeError):
                 audio_candidates = []
@@ -702,7 +705,10 @@ async def sidecar_picker_route(request: Request, path: str, kind: str = ""):
         if recognised.episode is not None:
             try:
                 found_audio = await asyncio.to_thread(
-                    external_audio_tracks, target, root, recognised.episode
+                    external_audio_tracks,
+                    target,
+                    root,
+                    same_episode(recognised.episode),
                 )
             except (OSError, TypeError):
                 found_audio = []

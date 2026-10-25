@@ -40,6 +40,7 @@ def _run(argv):
 
 def test_a_dub_beside_the_season_in_the_real_folder_shape_is_found(tmp_path):
     from mytube_media.subtitles import external_audio_tracks
+    from orchestrator.recognize import same_episode
 
     source = tmp_path / "Show - 05.mkv"
     source.write_bytes(b"")
@@ -48,7 +49,7 @@ def test_a_dub_beside_the_season_in_the_real_folder_shape_is_found(tmp_path):
     dub = dub_dir / "AniStar - 05.mka"
     dub.write_bytes(b"")
 
-    candidates = external_audio_tracks(source, tmp_path, episode_number=5)
+    candidates = external_audio_tracks(source, tmp_path, same_episode(5))
 
     assert len(candidates) == 1
     assert candidates[0].path == dub.resolve()
@@ -56,6 +57,7 @@ def test_a_dub_beside_the_season_in_the_real_folder_shape_is_found(tmp_path):
 
 def test_a_candidate_is_paired_by_the_episode_number_in_its_own_name(tmp_path):
     from mytube_media.subtitles import external_audio_tracks
+    from orchestrator.recognize import same_episode
 
     source = tmp_path / "Show - 05.mkv"
     source.write_bytes(b"")
@@ -65,13 +67,14 @@ def test_a_candidate_is_paired_by_the_episode_number_in_its_own_name(tmp_path):
     (dub_dir / "AniStar_05.mka").write_bytes(b"")
     (dub_dir / "AniStar_07.mka").write_bytes(b"")
 
-    candidates = external_audio_tracks(source, tmp_path, episode_number=5)
+    candidates = external_audio_tracks(source, tmp_path, same_episode(5))
 
     assert [c.path.name for c in candidates] == ["AniStar_05.mka"]
 
 
 def test_a_candidate_whose_number_matches_nothing_is_not_returned(tmp_path):
     from mytube_media.subtitles import external_audio_tracks
+    from orchestrator.recognize import same_episode
 
     source = tmp_path / "Show - 05.mkv"
     source.write_bytes(b"")
@@ -79,7 +82,7 @@ def test_a_candidate_whose_number_matches_nothing_is_not_returned(tmp_path):
     dub_dir.mkdir()
     (dub_dir / "AniStar_99.mka").write_bytes(b"")
 
-    candidates = external_audio_tracks(source, tmp_path, episode_number=5)
+    candidates = external_audio_tracks(source, tmp_path, same_episode(5))
 
     assert candidates == []
 
@@ -89,12 +92,13 @@ def test_a_resolution_or_a_year_in_the_filename_does_not_pair(tmp_path):
     conservatism the episode-recognition regexes already use.
     """
     from mytube_media.subtitles import (
-        _episode_number_from_filename,
+        episode_number_from_filename,
         external_audio_tracks,
     )
+    from orchestrator.recognize import same_episode
 
-    assert _episode_number_from_filename("AniStar - 1080p.mka") is None
-    assert _episode_number_from_filename("AniStar - 2024.mka") is None
+    assert episode_number_from_filename("AniStar - 1080p.mka") is None
+    assert episode_number_from_filename("AniStar - 2024.mka") is None
 
     source = tmp_path / "Show - 05.mkv"
     source.write_bytes(b"")
@@ -103,13 +107,14 @@ def test_a_resolution_or_a_year_in_the_filename_does_not_pair(tmp_path):
     (dub_dir / "AniStar - 1080p.mka").write_bytes(b"")
     (dub_dir / "AniStar - 2024.mka").write_bytes(b"")
 
-    candidates = external_audio_tracks(source, tmp_path, episode_number=5)
+    candidates = external_audio_tracks(source, tmp_path, same_episode(5))
 
     assert candidates == []
 
 
 def test_a_candidate_outside_the_share_root_is_refused_by_containment(tmp_path):
     from mytube_media.subtitles import external_audio_tracks
+    from orchestrator.recognize import same_episode
 
     root = tmp_path / "share"
     root.mkdir()
@@ -127,7 +132,7 @@ def test_a_candidate_outside_the_share_root_is_refused_by_containment(tmp_path):
     except OSError:
         pytest.skip("platform cannot create a symlink without elevation")
 
-    candidates = external_audio_tracks(source, root, episode_number=5)
+    candidates = external_audio_tracks(source, root, same_episode(5))
 
     for candidate in candidates:
         assert candidate.path.resolve().is_relative_to(root.resolve())
@@ -135,6 +140,7 @@ def test_a_candidate_outside_the_share_root_is_refused_by_containment(tmp_path):
 
 def test_a_candidate_carries_its_relative_path_and_its_folder_segments(tmp_path):
     from mytube_media.subtitles import external_audio_tracks
+    from orchestrator.recognize import same_episode
 
     source = tmp_path / "Show - 05.mkv"
     source.write_bytes(b"")
@@ -142,7 +148,7 @@ def test_a_candidate_carries_its_relative_path_and_its_folder_segments(tmp_path)
     dub_dir.mkdir(parents=True)
     (dub_dir / "AniStar_05.mka").write_bytes(b"")
 
-    candidates = external_audio_tracks(source, tmp_path, episode_number=5)
+    candidates = external_audio_tracks(source, tmp_path, same_episode(5))
 
     assert len(candidates) == 1
     candidate = candidates[0]
@@ -155,6 +161,7 @@ def test_an_english_folder_name_is_recognised_alongside_the_russian_one(tmp_path
     only recognise the owner's own Russian folder name.
     """
     from mytube_media.subtitles import external_audio_tracks
+    from orchestrator.recognize import same_episode
 
     source = tmp_path / "Show - 05.mkv"
     source.write_bytes(b"")
@@ -162,9 +169,26 @@ def test_an_english_folder_name_is_recognised_alongside_the_russian_one(tmp_path
     dub_dir.mkdir()
     (dub_dir / "05.mka").write_bytes(b"")
 
-    candidates = external_audio_tracks(source, tmp_path, episode_number=5)
+    candidates = external_audio_tracks(source, tmp_path, same_episode(5))
 
     assert len(candidates) == 1
+
+
+def test_release_tags_in_a_dub_name_never_pair_it_with_another_episode(tmp_path):
+    from mytube_media.subtitles import external_audio_tracks
+    from orchestrator.recognize import same_episode
+
+    name = "[ANK-Raws] Haibane Renmei - {:02d} (BDrip 1920x1080 x264 FLAC Hi10P)"
+    source = tmp_path / (name.format(7) + ".mkv")
+    source.write_bytes(b"")
+    dub_dir = tmp_path / "Russian Sound [Reanimedia]"
+    dub_dir.mkdir()
+    for episode in (1, 7, 10):
+        (dub_dir / (name.format(episode) + ".Reanimedia.mka")).write_bytes(b"")
+
+    candidates = external_audio_tracks(source, tmp_path, same_episode(7))
+
+    assert [c.path.name for c in candidates] == [name.format(7) + ".Reanimedia.mka"]
 
 
 # --- one walker, not two --------------------------------------------------

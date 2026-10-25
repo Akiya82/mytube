@@ -259,44 +259,18 @@ def _match_sidecar(path: Path, stem: str):
     return language
 
 
-# The last standalone run of one to three digits in a filename: a
-# sidecar filename such as "Crunchyroll_05.ass" or "AniStar - 05.mka" does
-# not need the full recognition machinery (`anitopy`/`guessit`), only a
-# number to pair against the episode it sits beside. Deliberately narrow,
-# the same conservatism `recognize.py`'s own trailing-digit guard uses:
-# bounded at three digits and fenced on both sides by a non-digit, so a
-# four-digit run never matches at all. Concrete strings this must not
-# match on their own digits: "1080p" (a four-digit run, no 1-3-digit
-# substring survives the fence), "2024" (same reasoning, a year), "S01"
-# (the "01" *would* match as a bare two-digit run -- callers that also see
-# a season token must not hand this function the season-qualified name
-# alone without considering that).
+# Fenced on both sides by a non-digit, so a four-digit run ("1080p",
+# "2024") never matches. Release tags such as "x264" or "Hi10P" still do,
+# which is why this is only the fallback for a name the release parser
+# finds no episode in -- that parser lives in the interface, since this
+# package is stdlib-only.
 _EPISODE_NUMBER_IN_NAME = re.compile(r"(?<!\d)(\d{1,3})(?!\d)")
 
 
-def _episode_number_from_filename(name: str) -> int | None:
-    """The last standalone 1-3 digit run in `name`, or `None` when there
-    is none -- see `_EPISODE_NUMBER_IN_NAME`'s own comment for the concrete
-    strings this must not match.
-    """
+def episode_number_from_filename(name: str) -> int | None:
+    """The last standalone 1-3 digit run in `name`, or `None`."""
     matches = _EPISODE_NUMBER_IN_NAME.findall(name)
     return int(matches[-1]) if matches else None
-
-
-def match_by_episode_number(episode_number: int):
-    """A `walk_sidecars` match predicate: a candidate belongs to
-    this episode when the last standalone 1-3 digit run in its own
-    filename equals `episode_number`. This is the match the external
-    audio search uses -- a season's dub folder almost never shares a stem
-    with the episode file it pairs with, so base-name equality
-    (`_match_sidecar`'s own rule) cannot be reused here; the episode
-    number in the name is the only thing left to pair on.
-    """
-
-    def _match(path: Path) -> bool:
-        return _episode_number_from_filename(path.name) == episode_number
-
-    return _match
 
 
 def _filename_suffix(name: str) -> str | None:
@@ -473,15 +447,14 @@ def external_tracks(source, share_root) -> list[SubtitleTrack]:
     ]
 
 
-def external_audio_tracks(
-    source, share_root, episode_number: int
-) -> list[SidecarCandidate]:
-    """External dub candidates for one episode's `source` file, searched in
-    the same order as `external_tracks` (the source's own folder, then `AUDIO_SIDECAR_FOLDER_NAMES`
-    beside it, then a bounded recursive walk), matched by the episode
-    number in the candidate's own filename rather
-    than by base-name equality, since a season's dub folder almost never
-    shares a stem with the episode file it pairs with.
+def external_audio_tracks(source, share_root, match) -> list[SidecarCandidate]:
+    """External dub candidates for `source`, searched in the same order as
+    `external_tracks` (the source's own folder, then
+    `AUDIO_SIDECAR_FOLDER_NAMES` beside it, then a bounded recursive walk).
+    `match` is the caller's: a season's dub folder almost never shares a
+    stem with the episode it pairs with, so pairing goes by the episode
+    number read from the dub's name, and reading it takes the release
+    parser this package does not carry.
 
     Returns raw candidates, never a probed track: turning one into the
     `compat.AudioTrack` shape (its codec, its channel count, its own
@@ -494,7 +467,7 @@ def external_audio_tracks(
         share_root,
         extensions=AUDIO_SIDECAR_EXTENSIONS,
         folder_names=AUDIO_SIDECAR_FOLDER_NAMES,
-        match=match_by_episode_number(episode_number),
+        match=match,
     )
 
 

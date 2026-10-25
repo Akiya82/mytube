@@ -208,3 +208,30 @@ def test_recognize_filename_never_raises_for_an_unreadable_name():
 
     result = recognize_filename("")
     assert result.raw_name == ""
+
+
+# --- the episode a dub or subtitle file's own name carries ---------------
+
+
+@pytest.mark.parametrize(
+    ("filename", "episode"),
+    [
+        (
+            "[ANK-Raws] Haibane Renmei - 07 (BDrip 1920x1080 x264 FLAC Hi10P).Reanimedia.mka",
+            7,
+        ),
+        (
+            "[ANK-Raws] Haibane Renmei - 07 (BDrip 1920x1080 x264 FLAC Hi10P).Reanimedia_full.ass",
+            7,
+        ),
+        ("[Group] Show - 05 [720p].mka", 5),
+        ("Show - 05 (AAC 2.0).mka", 5),
+        ("Show - 12v2 [1080p].ass", 12),
+        ("AniStar_05.mka", 5),
+        ("05.mka", 5),
+    ],
+)
+def test_a_sidecar_name_reads_the_episode_a_release_tag_does_not(filename, episode):
+    from orchestrator.recognize import sidecar_episode
+
+    assert sidecar_episode(filename) == episode

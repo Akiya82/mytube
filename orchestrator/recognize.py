@@ -20,9 +20,13 @@ cannot read.
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 import anitopy
 import guessit
+
+from mytube_media.subtitles import episode_number_from_filename
 
 # A trailing arabic number becomes a season only up to this bound --
 # above it, a four-digit year ("Blade Runner 2049") or a large identifier
@@ -210,3 +214,26 @@ def recognize_filename(filename: str) -> Recognised:
         episode=episode,
         raw_name=filename,
     )
+
+
+# Cached because the folder flow parses every sidecar once per episode.
+@lru_cache(maxsize=4096)
+def sidecar_episode(filename: str) -> int | None:
+    """The episode a dub or subtitle file pairs with, read by the same
+    parser as the video's own name, so a release tag (`x264`, `Hi10P`,
+    `[720p]`) is never taken for an episode number. A bare name the parser
+    finds nothing in (`05.mka`) falls back to its last standalone number.
+    """
+    episode = recognize_filename(filename).episode
+    if episode is None:
+        episode = episode_number_from_filename(filename)
+    return episode
+
+
+def same_episode(episode: int):
+    """A sidecar-walk match predicate for one episode."""
+
+    def match(path: Path) -> bool:
+        return sidecar_episode(path.name) == episode
+
+    return match
