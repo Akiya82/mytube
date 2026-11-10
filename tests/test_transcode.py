@@ -165,6 +165,22 @@ def test_gop_for_none_has_a_defined_fallback_rather_than_raising():
     assert gop_for(None) > 0
 
 
+def test_a_gop_too_short_for_b_frames_encodes_without_them():
+    # NVENC rejects any GOP at or below its default B-frame count when
+    # B-frames are on, so a 1 fps source (gop 2) must ask for -bf 0.
+    from mytube_media.transcode import build_transcode_command, gop_for
+
+    assert gop_for(1.0) == 2
+    cmd = build_transcode_command(
+        "/share/album video.mkv",
+        "/work/out.mp4",
+        plan=_plan(gop=gop_for(1.0)),
+        subtitle=_subtitle(),
+    )
+    idx = cmd.index("-bf")
+    assert cmd[idx + 1] == "0"
+
+
 # --- rate control -------------------------------------------------------
 
 

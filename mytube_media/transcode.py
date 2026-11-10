@@ -52,6 +52,12 @@ GOP_SECONDS = 2
 _GOP_FALLBACK_FPS = 25
 GOP_FALLBACK = round(_GOP_FALLBACK_FPS * GOP_SECONDS)
 
+# NVENC refuses to open the encoder when the GOP cannot hold the default
+# 2-frame B-run beside its keyframe ("Gop Length should be greater than
+# number of B frames + 1"), and a 1-2 fps source (slideshow rips) rounds
+# two seconds under that bound, so such GOPs encode without B-frames.
+NVENC_MIN_GOP_WITH_B_FRAMES = 3
+
 # A layout that genuinely packs two full pictures into one frame -- see
 # `bitrate_for_output`'s own comment for why only these two are budgeted
 # above the reference and then capped, while a half-frame layout (already
@@ -444,6 +450,8 @@ def build_transcode_command(
     level = level_for(plan.width, plan.height, plan.fps)
     cmd += ["-pix_fmt", "yuv420p", "-profile:v", "high", "-level", level]
     cmd += ["-g", str(plan.gop), "-keyint_min", str(plan.gop)]
+    if plan.gop < NVENC_MIN_GOP_WITH_B_FRAMES:
+        cmd += ["-bf", "0"]
 
     if external_audio or plan.reencode_audio:
         # The same arguments the as-is branch uses. An external track is
