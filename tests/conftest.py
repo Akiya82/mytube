@@ -255,8 +255,35 @@ def signed_in(operator_present, monkeypatch):
     yield
 
 
+def _stamp_state(state, key, value):
+    """Stamp `key` onto the shared app State, returning its undo callable.
+
+    Undoing a plain `monkeypatch.setattr(state, key, ..., raising=False)`
+    deletes the attribute, so stacked stamps of the same key (`app_pool` and
+    `operator_present`/`no_operator` both stamp `operator_exists`) would
+    delete it twice and teardown would die on the second KeyError. Undoing
+    through a captured previous value (or a tolerant pop when absent) makes
+    every stamp idempotent, in any nesting order.
+    """
+    try:
+        previous = getattr(state, key)
+        was_present = True
+    except AttributeError:
+        previous = None
+        was_present = False
+    setattr(state, key, value)
+
+    def _undo():
+        if was_present:
+            setattr(state, key, previous)
+        else:
+            state._state.pop(key, None)
+
+    return _undo
+
+
 @pytest.fixture
-def operator_present(monkeypatch):
+def operator_present():
     """Stamps `app.state.operator_exists = True`, restored afterwards.
 
     Every gated unit test that expects a redirect to the login form (rather
@@ -267,12 +294,13 @@ def operator_present(monkeypatch):
     """
     from orchestrator.main import app
 
-    monkeypatch.setattr(app.state, "operator_exists", True, raising=False)
+    undo = _stamp_state(app.state, "operator_exists", True)
     yield
+    undo()
 
 
 @pytest.fixture
-def no_operator(monkeypatch):
+def no_operator():
     """Stamps the first-run state onto `app.state`: no operator, a known
     setup token, and a fresh recheck timestamp.
 
@@ -283,16 +311,18 @@ def no_operator(monkeypatch):
     """
     from orchestrator.main import app
 
-    monkeypatch.setattr(app.state, "operator_exists", False, raising=False)
-    monkeypatch.setattr(
-        app.state, "operator_exists_checked_at", time.monotonic(), raising=False
-    )
-    monkeypatch.setattr(app.state, "setup_token", "test-setup-token", raising=False)
+    undos = [
+        _stamp_state(app.state, "operator_exists", False),
+        _stamp_state(app.state, "operator_exists_checked_at", time.monotonic()),
+        _stamp_state(app.state, "setup_token", "test-setup-token"),
+    ]
     yield
+    for undo in reversed(undos):
+        undo()
 
 
 @pytest.fixture
-async def app_pool(migrated_db_url, monkeypatch):
+async def app_pool(migrated_db_url):
     """A real asyncpg pool against `migrated_db_url`, assigned to
     `orchestrator.main.app.state.db_pool`.
 
@@ -323,12 +353,16 @@ async def app_pool(migrated_db_url, monkeypatch):
     from orchestrator.main import app
 
     pool = await asyncpg.create_pool(migrated_db_url, min_size=1, max_size=5)
-    monkeypatch.setattr(app.state, "db_pool", pool, raising=False)
-    monkeypatch.setattr(app.state, "operator_exists", False, raising=False)
-    monkeypatch.setattr(app.state, "operator_exists_checked_at", 0.0, raising=False)
+    undos = [
+        _stamp_state(app.state, "db_pool", pool),
+        _stamp_state(app.state, "operator_exists", False),
+        _stamp_state(app.state, "operator_exists_checked_at", 0.0),
+    ]
     try:
         yield pool
     finally:
+        for undo in reversed(undos):
+            undo()
         await pool.close()
 
 
